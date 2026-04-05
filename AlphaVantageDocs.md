@@ -13,12 +13,7 @@ TIME_SERIES_INTRADAY          [PREMIUM]
   Optional: adjusted (true*), extended_hours (true*), month (YYYY-MM),
             outputsize (compact*|full), datatype (json*|csv),
             entitlement (realtime|delayed)
-  Example:  ?function=TIME_SERIES_INTRADAY&symbol=IBM&interval=5min&apikey=demo
-
-TIME_SERIES_DAILY_ADJUSTED    [PREMIUM]
-  Required: function, symbol, apikey
-  Optional: outputsize, datatype, entitlement
-  Example:  ?function=TIME_SERIES_DAILY_ADJUSTED&symbol=IBM&apikey=demo
+  Example:  ?function=TIME_SERIES_INTRADAY&symbol=IBM&interval=1min&apikey=demo
 
 SYMBOL_SEARCH  (ticker lookup / autocomplete)
   Required: function, keywords, apikey
@@ -84,7 +79,7 @@ CURRENCY_EXCHANGE_RATE
 FX_INTRADAY           [PREMIUM]
   Required: function, from_symbol, to_symbol, interval, apikey
   Optional: outputsize, datatype
-  Example:  ?function=FX_INTRADAY&from_symbol=EUR&to_symbol=USD&interval=5min&apikey=demo
+  Example:  ?function=FX_INTRADAY&from_symbol=EUR&to_symbol=USD&interval=1min&apikey=demo
 
 FX_DAILY
   Required: function, from_symbol, to_symbol, apikey
@@ -106,21 +101,21 @@ DIGITAL_CURRENCY_DAILY
 --------------------------------------------------------------------------------
   All: Required: function, apikey  |  Optional: interval (monthly*|weekly|daily|quarterly|annual), datatype
 
-GOLD_SPOT             ?function=GOLD_SPOT&apikey=demo      (realtime spot)
-SILVER_SPOT           ?function=SILVER_SPOT&apikey=demo
-GOLD_HISTORY          ?function=GOLD_HISTORY&apikey=demo
-SILVER_HISTORY        ?function=SILVER_HISTORY&apikey=demo
-WTI                   ?function=WTI&interval=monthly&apikey=demo
-BRENT                 ?function=BRENT&interval=monthly&apikey=demo
-NATURAL_GAS           ?function=NATURAL_GAS&interval=monthly&apikey=demo
-COPPER                ?function=COPPER&interval=monthly&apikey=demo
-ALUMINUM              ?function=ALUMINUM&interval=monthly&apikey=demo
-WHEAT                 ?function=WHEAT&interval=monthly&apikey=demo
-CORN                  ?function=CORN&interval=monthly&apikey=demo
-COTTON                ?function=COTTON&interval=monthly&apikey=demo
-SUGAR                 ?function=SUGAR&interval=monthly&apikey=demo
-COFFEE                ?function=COFFEE&interval=monthly&apikey=demo
-ALL_COMMODITIES       ?function=ALL_COMMODITIES&interval=monthly&apikey=demo
+GOLD_SILVER_SPOT      ?function=GOLD_SILVER_SPOT&symbol=GOLD&apikey=demo
+                        Required: symbol (GOLD|XAU|SILVER|XAG)
+GOLD_SILVER_HISTORY   ?function=GOLD_SILVER_HISTORY&symbol=GOLD&interval=daily&apikey=demo
+                        Required: symbol (GOLD|XAU|SILVER|XAG), interval (daily|weekly|monthly)
+WTI                   ?function=WTI&interval=daily&apikey=demo
+BRENT                 ?function=BRENT&interval=daily&apikey=demo
+NATURAL_GAS           ?function=NATURAL_GAS&interval=daily&apikey=demo
+COPPER                ?function=COPPER&interval=daily&apikey=demo
+ALUMINUM              ?function=ALUMINUM&interval=daily&apikey=demo
+WHEAT                 ?function=WHEAT&interval=daily&apikey=demo
+CORN                  ?function=CORN&interval=daily&apikey=demo
+COTTON                ?function=COTTON&interval=daily&apikey=demo
+SUGAR                 ?function=SUGAR&interval=daily&apikey=demo
+COFFEE                ?function=COFFEE&interval=daily&apikey=demo
+ALL_COMMODITIES       ?function=ALL_COMMODITIES&interval=daily&apikey=demo
 
 --------------------------------------------------------------------------------
 8. INDEX DATA

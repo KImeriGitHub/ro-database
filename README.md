@@ -211,7 +211,11 @@ raw_data_service/             # Data download and post-download verification
 data_transformation/          # Transforms daily raw data into AssetData instances
 
 scheduled_scripts/            # Orchestration scripts for download runs and API budget tracking
-maintainance_scripts/         # common py files used through the repo
+maintainance_scripts/         # common py files used throughout the repo
+
+response_schemas/             # Infers, stores, and validates the JSON structure of AV API responses
+                              # Catches structural changes (added/removed fields, type changes)
+                              # before bad data enters the pipeline
 
 consistency_tests/            # Validates raw and transformed data against other sources
                               # e.g., checks that intraday open matches daily open

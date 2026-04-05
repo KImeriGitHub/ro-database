@@ -1,1 +1,7 @@
 secrets/
+__pycache__/
+.venv
+.env
+
+response_schemas/schemas/*
+!response_schemas/schemas/.gitkeep
