@@ -298,7 +298,7 @@ ENDPOINTS = [
     {
         # NOTE: requires higher-tier premium subscription; may fail with current key
         "function": "INDEX_DATA",
-        "params": {"symbol": "SPX", "interval": "weekly"},
+        "params": {"symbol": "SPX", "interval": "daily"},
         "alt_params": {"symbol": "DJI", "interval": "weekly"},
         "premium": True,
         "category": "index",
