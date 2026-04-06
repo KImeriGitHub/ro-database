@@ -44,13 +44,16 @@ python -m response_schemas.scripts.infer_all_schemas --delay 5
 
 ### 2. Validate schemas with different symbols
 
-Calls each endpoint with a different ticker/symbol/currency pair (defined as `alt_params` in `endpoint_definitions.py`) and validates the response against the saved schema. This confirms the schema holds across different assets.
+Calls each endpoint and validates the response against the saved schema. Use `--params` to override specific query parameters (e.g. use a different symbol). Only matching keys in each endpoint's params are overridden; endpoints without those keys use their original inference params.
 
 ```bash
 python -m response_schemas.scripts.validate_all_schemas
 
-# Same filtering options as inference
-python -m response_schemas.scripts.validate_all_schemas --category fundamental
+# Override symbol for all endpoints that use it
+python -m response_schemas.scripts.validate_all_schemas --params symbol=AAPL
+
+# Combine with category filtering
+python -m response_schemas.scripts.validate_all_schemas --category forex --params from_currency=EUR to_currency=GBP
 ```
 
 ### 3. Use in code

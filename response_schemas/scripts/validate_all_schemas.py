@@ -1,13 +1,13 @@
 """
-Validate saved schemas by calling each endpoint with a different symbol/params.
+Validate saved schemas by calling each endpoint and checking against saved schemas.
 
 Requires that infer_all_schemas.py has been run first so that
 response_schemas/schemas/*.json files exist.
 
 Usage:
-    python -m response_schemas.scripts.validate_all_schemas --tier standard
-    python -m response_schemas.scripts.validate_all_schemas --tier premium --include-premium
-    python -m response_schemas.scripts.validate_all_schemas --category fundamental
+    python -m response_schemas.scripts.validate_all_schemas
+    python -m response_schemas.scripts.validate_all_schemas --params symbol=AAPL
+    python -m response_schemas.scripts.validate_all_schemas --category forex --params from_currency=EUR to_currency=GBP
 """
 
 import sys
@@ -51,11 +51,28 @@ def _is_api_error(data) -> str | None:
     return None
 
 
+def _resolve_params(ep_params: dict, cli_overrides: dict | None) -> dict:
+    """Build validation params by merging CLI overrides into endpoint params.
+
+    If cli_overrides is provided, any keys that overlap with ep_params are
+    replaced.  Keys in cli_overrides that don't exist in ep_params are ignored
+    so that unrelated endpoints fall back to their inference params unchanged.
+    """
+    if not cli_overrides:
+        return dict(ep_params)
+    merged = dict(ep_params)
+    for key, value in cli_overrides.items():
+        if key in merged:
+            merged[key] = value
+    return merged
+
+
 def run(
     api_key: str,
     include_premium: bool,
     categories: list[str] | None,
     delay: float,
+    param_overrides: dict | None = None,
 ):
     selected = ENDPOINTS
     if categories:
@@ -85,8 +102,9 @@ def run(
             continue
 
         schema = load_schema(name)
-        params = {"function": name, "apikey": api_key, **ep["alt_params"]}
-        logger.info(f"{tag} Calling {name} with alt params ...")
+        resolved = _resolve_params(ep["params"], param_overrides)
+        params = {"function": name, "apikey": api_key, **resolved}
+        logger.info(f"{tag} Calling {name} with params {resolved} ...")
 
         try:
             resp = requests.get(BASE_URL, params=params, timeout=30)
@@ -124,9 +142,19 @@ def run(
     )
 
 
+def _parse_key_value(arg: str) -> tuple[str, str]:
+    """Parse a 'key=value' string."""
+    if "=" not in arg:
+        raise argparse.ArgumentTypeError(
+            f"Invalid format '{arg}', expected key=value"
+        )
+    key, value = arg.split("=", 1)
+    return key, value
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Validate saved schemas against live API responses with alternate symbols.",
+        description="Validate saved schemas against live API responses.",
     )
     parser.add_argument(
         "--category",
@@ -141,10 +169,21 @@ def main():
         default=2.0,
         help="Seconds between API calls (default: 2)",
     )
+    parser.add_argument(
+        "--params",
+        nargs="+",
+        metavar="KEY=VALUE",
+        help="Override validation params (e.g. --params symbol=AAPL interval=1min). "
+        "Only matching keys in each endpoint's params are overridden.",
+    )
     args = parser.parse_args()
 
+    param_overrides = None
+    if args.params:
+        param_overrides = dict(_parse_key_value(p) for p in args.params)
+
     api_key = get_alpha_vantage_key("premium")
-    run(api_key, True, args.categories, args.delay)
+    run(api_key, True, args.categories, args.delay, param_overrides)
 
 
 if __name__ == "__main__":
