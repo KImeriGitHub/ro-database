@@ -27,9 +27,9 @@ MARKET_STATUS  (global market open/close)
 Global exchange suffixes: .LON .TRT .TRV .DEX .BSE .SHH .SHZ
 
 --------------------------------------------------------------------------------
-1. ALPHA INTELLIGENCE
+2. ALPHA INTELLIGENCE
 --------------------------------------------------------------------------------
-NEWS_SENTIMENT
+NEWS_SENTIMENT                [also works with ETFs]
   Required: function, apikey
   Optional: tickers (e.g. IBM or COIN,CRYPTO:BTC,FOREX:USD),
             topics (blockchain|earnings|ipo|mergers_and_acquisitions|
@@ -41,36 +41,36 @@ NEWS_SENTIMENT
             limit (50*|1000)
   Example:  ?function=NEWS_SENTIMENT&tickers=AAPL&apikey=demo
 
-EARNINGS_CALL_TRANSCRIPT
+EARNINGS_CALL_TRANSCRIPT      [equities only, not ETFs]
   Required: function, symbol, quarter (YYYYqM e.g. 2024Q1, min=2010Q1), apikey
   Example:  ?function=EARNINGS_CALL_TRANSCRIPT&symbol=IBM&quarter=2024Q1&apikey=demo
 
-INSIDER_TRANSACTIONS
+INSIDER_TRANSACTIONS          [equities only, not ETFs]
   Required: function, symbol, apikey
   Example:  ?function=INSIDER_TRANSACTIONS&symbol=IBM&apikey=demo
 
-INSTITUTIONAL_HOLDINGS        [PREMIUM]
+INSTITUTIONAL_HOLDINGS        [PREMIUM] [equities only, not ETFs]
   Required: function, symbol, apikey
   Example:  ?function=INSTITUTIONAL_HOLDINGS&symbol=IBM&apikey=demo
 
 --------------------------------------------------------------------------------
 1. FUNDAMENTAL DATA
 --------------------------------------------------------------------------------
-OVERVIEW              ?function=OVERVIEW&symbol=IBM&apikey=demo
-ETF_PROFILE           ?function=ETF_PROFILE&symbol=QQQ&apikey=demo
-INCOME_STATEMENT      ?function=INCOME_STATEMENT&symbol=IBM&apikey=demo
-BALANCE_SHEET         ?function=BALANCE_SHEET&symbol=IBM&apikey=demo
-CASH_FLOW             ?function=CASH_FLOW&symbol=IBM&apikey=demo
-SHARES_OUTSTANDING    ?function=SHARES_OUTSTANDING&symbol=IBM&apikey=demo
-EARNINGS              ?function=EARNINGS&symbol=IBM&apikey=demo
-EARNINGS_ESTIMATES    ?function=EARNINGS_ESTIMATES&symbol=IBM&apikey=demo
+OVERVIEW              ?function=OVERVIEW&symbol=IBM&apikey=demo               [equities only, not ETFs]
+ETF_PROFILE           ?function=ETF_PROFILE&symbol=QQQ&apikey=demo            [ETFs only]
+INCOME_STATEMENT      ?function=INCOME_STATEMENT&symbol=IBM&apikey=demo       [equities only, not ETFs]
+BALANCE_SHEET         ?function=BALANCE_SHEET&symbol=IBM&apikey=demo          [equities only, not ETFs]
+CASH_FLOW             ?function=CASH_FLOW&symbol=IBM&apikey=demo              [equities only, not ETFs]
+SHARES_OUTSTANDING    ?function=SHARES_OUTSTANDING&symbol=IBM&apikey=demo     [equities only, not ETFs]
+EARNINGS              ?function=EARNINGS&symbol=IBM&apikey=demo               [equities only, not ETFs]
+EARNINGS_ESTIMATES    ?function=EARNINGS_ESTIMATES&symbol=IBM&apikey=demo     [equities only, not ETFs]
 LISTING_STATUS        ?function=LISTING_STATUS&apikey=demo
                         Optional: date (YYYY-MM-DD), state (active*|delisted)
 EARNINGS_CALENDAR     ?function=EARNINGS_CALENDAR&symbol=IBM&apikey=demo
                         Optional: horizon (3month*|6month|12month)
 
 --------------------------------------------------------------------------------
-1. FOREX (FX)
+4. FOREX (FX)
 --------------------------------------------------------------------------------
 CURRENCY_EXCHANGE_RATE
   Required: function, from_currency, to_currency, apikey
@@ -87,7 +87,7 @@ FX_DAILY
   Example:  ?function=FX_DAILY&from_symbol=EUR&to_symbol=USD&apikey=demo
 
 --------------------------------------------------------------------------------
-1. CRYPTOCURRENCIES
+5. CRYPTOCURRENCIES
 --------------------------------------------------------------------------------
 CURRENCY_EXCHANGE_RATE (crypto)
   Example:  ?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=USD&apikey=demo
@@ -97,28 +97,40 @@ DIGITAL_CURRENCY_DAILY
   Example:  ?function=DIGITAL_CURRENCY_DAILY&symbol=BTC&market=USD&apikey=demo
 
 --------------------------------------------------------------------------------
-1. COMMODITIES
+6. COMMODITIES
 --------------------------------------------------------------------------------
-  All: Required: function, apikey  |  Optional: interval (monthly*|weekly|daily|quarterly|annual), datatype
+  All: Required: function, apikey  |  Optional: interval, datatype
 
 GOLD_SILVER_SPOT      ?function=GOLD_SILVER_SPOT&symbol=GOLD&apikey=demo
                         Required: symbol (GOLD|XAU|SILVER|XAG)
+                        No interval param (live spot price)
 GOLD_SILVER_HISTORY   ?function=GOLD_SILVER_HISTORY&symbol=GOLD&interval=daily&apikey=demo
-                        Required: symbol (GOLD|XAU|SILVER|XAG), interval (daily|weekly|monthly)
+                        Required: symbol (GOLD|XAU|SILVER|XAG), interval (daily*|weekly|monthly)
 WTI                   ?function=WTI&interval=daily&apikey=demo
+                        interval: daily*|weekly|monthly
 BRENT                 ?function=BRENT&interval=daily&apikey=demo
+                        interval: daily*|weekly|monthly
 NATURAL_GAS           ?function=NATURAL_GAS&interval=daily&apikey=demo
-COPPER                ?function=COPPER&interval=daily&apikey=demo
-ALUMINUM              ?function=ALUMINUM&interval=daily&apikey=demo
-WHEAT                 ?function=WHEAT&interval=daily&apikey=demo
-CORN                  ?function=CORN&interval=daily&apikey=demo
-COTTON                ?function=COTTON&interval=daily&apikey=demo
-SUGAR                 ?function=SUGAR&interval=daily&apikey=demo
-COFFEE                ?function=COFFEE&interval=daily&apikey=demo
-ALL_COMMODITIES       ?function=ALL_COMMODITIES&interval=daily&apikey=demo
+                        interval: daily*|weekly|monthly
+COPPER                ?function=COPPER&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+ALUMINUM              ?function=ALUMINUM&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+WHEAT                 ?function=WHEAT&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+CORN                  ?function=CORN&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+COTTON                ?function=COTTON&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+SUGAR                 ?function=SUGAR&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+COFFEE                ?function=COFFEE&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
+ALL_COMMODITIES       ?function=ALL_COMMODITIES&interval=monthly&apikey=demo
+                        interval: monthly*|quarterly|annual  (NO daily)
 
 --------------------------------------------------------------------------------
-8. INDEX DATA
+7. INDEX DATA
 --------------------------------------------------------------------------------
 INDEX_CATALOG  (list all available index symbols)
   Required: function, apikey
@@ -133,10 +145,10 @@ INDEX_DATA  (historical OHLC for market indices)              [PREMIUM]
   interval: daily | weekly | monthly
   Optional: datatype (json*|csv)
   Returns:  Decades of historical open, high, low, close (OHLC) time series
-  Example:  ?function=INDEX_DATA&symbol=SPX&interval=daily&apikey=YOUR_KEY
+  Example:  ?function=INDEX_DATA&symbol=SPX&interval=daily&apikey=demo
 
 --------------------------------------------------------------------------------
-9. ECONOMIC INDICATORS
+8. ECONOMIC INDICATORS
 --------------------------------------------------------------------------------
   All: Required: function, apikey  |  Optional: interval, datatype
 

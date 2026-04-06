@@ -101,7 +101,7 @@ After several years of collection, this produces a genuine PIT dataset for the c
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Raw data structure](#raw-data-structure). All raw files (CSVs, JSON snapshots) are append-only and never modified or deleted. This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure) (both `catalog/` and `raw/`). All raw files (CSVs, JSON snapshots) are append-only and never modified or deleted. This is the permanent record.
 
 A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research.
 
@@ -128,11 +128,11 @@ GCP Cloud Container                   GCS Bucket                          Local
 │ • Alpha Vantage pull │        │  modified or deleted     │◄───►│  GCS bucket         │
 │                      │        │                          │     │                     │
 └──────────────────────┘        └──────────────────────────┘     │ Sync script pulls   │
-                                                                  │ from GCS            │
-                                                                  │                     │
-                                                                  │ Process & transform │
-                                                                  │ locally             │
-                                                                  └─────────────────────┘
+                                                                 │ from GCS            │
+                                                                 │                     │
+                                                                 │ Process & transform │
+                                                                 │ locally             │
+                                                                 └─────────────────────┘
 ```
 
 ## Setup
@@ -221,77 +221,102 @@ consistency_tests/            # Validates raw and transformed data against other
                               # e.g., checks that intraday open matches daily open
 ```
 
-## Raw data structure
+## Data storage structure
 
-Both GCS (archive + daily staging) and local storage follow the same directory layout. The `historical/` section is populated during the initial setup (from Alpha Vantage, optionally supplemented with FirstRate Data) and is independent of the `daily/` section. Each day's Alpha Vantage pull creates a dated folder under `daily/`.
+Both GCS (archive + daily staging) and local storage follow the same directory layout. The `catalog/` directory lives outside `raw/` because it is mutable metadata, not immutable market data. The `historical/` section is populated during the initial setup (from Alpha Vantage, optionally supplemented with FirstRate Data) and is independent of the `daily/` section. Each day's Alpha Vantage pull creates a dated folder under `daily/`.
 
 ```
+catalog/
+├── stocks.parquet
+├── etfs.parquet
+├── indices.parquet
+├── forex.parquet
+├── cryptocurrencies.parquet
+├── commodities.parquet
+├── economic.parquet
+└── company_status/
+    ├── yield_status.parquet
+    └── earnings_calendar.parquet
+
 raw/
-├── catalog/                              # Asset catalog data (managed by asset_catalog_service)
-│   ├── stocks.parquet                    # All stock tickers: status, start date, end date
-│   ├── etfs.parquet                      # All ETF tickers: status, start date, end date
-│   ├── indices.parquet                   # All indices tracked via INDEX_DATA (SPX, VIX, etc.)
-│   ├── commodities.parquet               # Commodity tickers: start date, end date
-│   ├── economic.parquet                  # Economic indicators: start date, end date
-│   └── company_status/                     # Per-ticker, per-endpoint API yield tracking
-│       ├── yield_status.parquet          # per-endpoint API yield tracking has data / empty / stopped returning data
-│       └── earnings_calendar.parquet     # future earnings
+├── historical/
+│   ├── stocks/
+│   │   ├── prices/
+│   │   ├── income_statement/
+│   │   ├── balance_sheet/
+│   │   ├── cash_flow/
+│   │   ├── earnings/
+│   │   ├── insider/
+│   │   └── sentiment/
+│   ├── etfs/
+│   │   ├── prices/
+│   │   └── etf_profile/
+│   ├── forex/
+│   ├── indices/
+│   ├── cryptocurrencies/
+│   ├── commodities/
+│   └── economic/
 │
-├── historical/                           # One-time historical load (never modified after ingestion)
-│   ├── stocks/                           # One compressed tabular per ticker: 
-│   │   ├── prices/                       #   Datetime (1min),Open,High,Low,Close,AdjClose,Volume,Dividends,Splits
-│   │   │   ├── AAPL.parquet              # compressed parquet file
-│   │   │   ├── ENRN.parquet
-│   │   │   └── ...
-│   │   ├── fundamentals
-│   │   │   ├── AAPL.parquet              # every row corresponds to one day. Sorted. 
-│   │   │   │                             # Best possible approximation what people would have seen on that day.
-│   │   │   ├── ENRN.parquet
-│   │   │   └── ...
-│   ├── etfs/                             # similar to stocks; structure TBD
-│   ├── indices/                          # similar to stocks; structure TBD
-│   ├── commodities/                      # similar to stocks; structure TBD
-│   └── economic/                         # similar to stocks; structure TBD
-│
-└── daily/                                # Daily pulls, organized by date
-    └── YYYY-MM-DD/                       # One folder per trading day
-        ├── prices/                       # TIME_SERIES_DAILY_ADJUSTED responses
-        │   ├── AAPL.json.gz
-        │   ├── MSFT.json.gz
-        │   └── ...
-        ├── fundamentals/                 # JSON responses, no field filtering
+└── daily/
+    └── YYYY-MM-DD/
+        ├── stocks/
+        │   ├── prices/
         │   ├── income_statement/
-        │   │   ├── AAPL.json.gz
-        │   │   └── ...
         │   ├── balance_sheet/
         │   ├── cash_flow/
-        │   └── earnings/
-        ├── insider/                      # structure TBD
-        │   ├── AAPL.json.gz
-        │   └── ...
-        ├── sentiment/                    # structure TBD
-        │   ├── AAPL.json.gz
-        │   └── ...
-        ├── indices/                      # INDEX_DATA responses (SPX, VIX, DJIA, etc.)
-        │   ├── SPX.json.gz
-        │   ├── VIX.json.gz
-        │   └── ...
-        ├── etf_profiles/                 # ETF_PROFILE responses (net assets, holdings, expense ratio)
-        │   ├── QQQ.json.gz              # Latest snapshot only — no PIT history
-        │   ├── SPY.json.gz
-        │   └── ...
-        ├── commodities/                  # WTI, BRENT, NATURAL_GAS, gold, etc.
-        └── economic/                     # GDP, CPI, unemployment, fed funds, yields
+        │   ├── earnings/
+        │   ├── insider/
+        │   └── sentiment/
+        ├── etfs/
+        │   ├── prices/
+        │   └── etf_profile/
+        ├── forex/
+        ├── indices/
+        ├── cryptocurrencies/
+        ├── commodities/
+        └── economic/
 ```
 
+### Directory details
+
+**`catalog/`** — Asset catalog data, managed by `asset_catalog_service`. Each `.parquet` file tracks tickers/symbols with status, start date, and end date for its asset class (stocks, ETFs, indices, forex, cryptocurrencies, commodities, economic indicators).
+
+- `company_status/yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
+- `company_status/earnings_calendar.parquet` — Future earnings dates.
+
+**`raw/historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`, one per ticker (e.g. `AAPL.parquet`).
+
+| Subfolder | API endpoint | Notes |
+|-----------|-------------|-------|
+| `stocks/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
+| `stocks/income_statement/` | INCOME_STATEMENT | Repeated to daily |
+| `stocks/balance_sheet/` | BALANCE_SHEET | Repeated to daily |
+| `stocks/cash_flow/` | CASH_FLOW | Repeated to daily |
+| `stocks/earnings/` | EARNINGS | Repeated to daily |
+| `stocks/insider/` | INSIDER_TRANSACTIONS | Repeated to daily |
+| `stocks/sentiment/` | NEWS_SENTIMENT | Repeated to daily |
+| `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
+| `etfs/etf_profile/` | ETF_PROFILE | Only given on last day |
+| `forex/` | FX_DAILY | Daily |
+| `indices/` | INDEX_DATA | Daily (SPX, VIX, etc.) |
+| `cryptocurrencies/` | DIGITAL_CURRENCY_DAILY | Daily |
+| `commodities/` | WTI, BRENT, NATURAL_GAS, gold, etc. | Some have only monthly data |
+| `economic/` | GDP, CPI, unemployment, fed funds, yields | Some have only monthly data |
+
+**`raw/daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure as `historical/`, but files are compressed `.json.gz` (one per ticker). What each file contains depends on the data type:
+
+- **Time series** (prices, forex, indices, cryptocurrencies, commodities, economic): cut to only that date's data.
+- **Fundamentals** (income statement, balance sheet, cash flow, earnings): keep all data up to ~4 years of history.
+- **News sentiment, insider transactions**: TODO — verify retention policy.
+
 **Key rules:**
-- Everything under `historical/` is written once during the initial historical load and never modified.
-- Everything under `daily/` is append-only — each day creates a new dated folder. Past days are never modified.
-- The `catalog/` directory is the only mutable area: yield status and ticker metadata are updated as coverage changes.
+- `daily/` is append-only — each day creates a new dated folder. Past days are never modified.
+- `historical/` is initially populated from Alpha Vantage. If FirstRate Data is added later, it may modify existing tickers — but only if the overlapping data between Alpha Vantage and FirstRate Data agrees. If the intersecting data conflicts, the ticker is flagged for review rather than silently overwritten.
+- The `catalog/` directory lives outside `raw/` and is the only mutable area: yield status and ticker metadata are updated as coverage changes.
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
 
 **Historical price data notes:**
-When built from Alpha Vantage alone, historical prices use `TIME_SERIES_DAILY_ADJUSTED` which includes unadjusted and adjusted prices, dividends, and splits. If supplemented with FirstRate Data, the FirstRate bundle provides **only split+dividend-adjusted prices** — no unadjusted variant and no separate Dividends or Splits columns. For FirstRate-sourced tickers (primarily delisted securities not in Alpha Vantage), all OHLC values are adjusted, so `Close` and `AdjClose` are identical and `Dividends`/`Splits` columns are null. The data source is recorded per ticker so the distinction is preserved.
+When built from Alpha Vantage alone, historical prices use `TIME_SERIES_INTRADAY` which includes unadjusted and adjusted prices, dividends, and splits. If supplemented with FirstRate Data, the FirstRate bundle provides **only split+dividend-adjusted prices** — no unadjusted variant and no separate Dividends or Splits columns. For FirstRate-sourced tickers (primarily delisted securities not in Alpha Vantage), all OHLC values are adjusted, so `Close` and `AdjClose` are identical and `Dividends`/`Splits` columns are null. The data source is recorded per ticker so the distinction is preserved.
 
 ## Estimated costs
 

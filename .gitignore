@@ -3,5 +3,7 @@ __pycache__/
 .venv
 .env
 
+tmp/
+
 response_schemas/schemas/*
 !response_schemas/schemas/.gitkeep
