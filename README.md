@@ -101,7 +101,7 @@ After several years of collection, this produces a genuine PIT dataset for the c
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure) (both `catalog/` and `raw/`). All raw files (CSVs, JSON snapshots) are append-only and never modified or deleted. This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). All raw files (CSVs, JSON snapshots) are append-only and never modified or deleted. This is the permanent record.
 
 A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research.
 
@@ -123,9 +123,9 @@ This applies uniformly to financial statements, insider transactions, and news s
 ```
 GCP Cloud Container                   GCS Bucket                          Local
 ┌──────────────────────┐        ┌──────────────────────────┐     ┌─────────────────────┐
-│ Ingestion scripts    │        │ raw/                     │     │ raw/                │
-│                      │──────► │  Append-only, never      │     │  Local mirror of    │
-│ • Alpha Vantage pull │        │  modified or deleted     │◄───►│  GCS bucket         │
+│ Ingestion scripts    │        │ catalog/                 │     │ catalog/            │
+│                      │──────► │ historical/              │     │ historical/         │
+│ • Alpha Vantage pull │        │ daily/                   │◄───►│ daily/              │
 │                      │        │                          │     │                     │
 └──────────────────────┘        └──────────────────────────┘     │ Sync script pulls   │
                                                                  │ from GCS            │
@@ -223,7 +223,7 @@ consistency_tests/            # Validates raw and transformed data against other
 
 ## Data storage structure
 
-Both GCS (archive + daily staging) and local storage follow the same directory layout. The `catalog/` directory lives outside `raw/` because it is mutable metadata, not immutable market data. The `historical/` section is populated during the initial setup (from Alpha Vantage, optionally supplemented with FirstRate Data) and is independent of the `daily/` section. Each day's Alpha Vantage pull creates a dated folder under `daily/`.
+Both GCS (archive + daily staging) and local storage follow the same directory layout. The `catalog/` directory contains mutable metadata, not immutable market data. The `historical/` section is populated during the initial setup (from Alpha Vantage, optionally supplemented with FirstRate Data) and is independent of the `daily/` section. Each day's Alpha Vantage pull creates a dated folder under `daily/`.
 
 ```
 catalog/
@@ -238,43 +238,42 @@ catalog/
     ├── yield_status.parquet
     └── earnings_calendar.parquet
 
-raw/
-├── historical/
-│   ├── stocks/
-│   │   ├── prices/
-│   │   ├── income_statement/
-│   │   ├── balance_sheet/
-│   │   ├── cash_flow/
-│   │   ├── earnings/
-│   │   ├── insider/
-│   │   └── sentiment/
-│   ├── etfs/
-│   │   ├── prices/
-│   │   └── etf_profile/
-│   ├── forex/
-│   ├── indices/
-│   ├── cryptocurrencies/
-│   ├── commodities/
-│   └── economic/
-│
-└── daily/
-    └── YYYY-MM-DD/
-        ├── stocks/
-        │   ├── prices/
-        │   ├── income_statement/
-        │   ├── balance_sheet/
-        │   ├── cash_flow/
-        │   ├── earnings/
-        │   ├── insider/
-        │   └── sentiment/
-        ├── etfs/
-        │   ├── prices/
-        │   └── etf_profile/
-        ├── forex/
-        ├── indices/
-        ├── cryptocurrencies/
-        ├── commodities/
-        └── economic/
+historical/
+├── stocks/
+│   ├── prices/
+│   ├── income_statement/
+│   ├── balance_sheet/
+│   ├── cash_flow/
+│   ├── earnings/
+│   ├── insider/
+│   └── sentiment/
+├── etfs/
+│   ├── prices/
+│   └── etf_profile/
+├── forex/
+├── indices/
+├── cryptocurrencies/
+├── commodities/
+└── economic/
+
+daily/
+└── YYYY-MM-DD/
+    ├── stocks/
+    │   ├── prices/
+    │   ├── income_statement/
+    │   ├── balance_sheet/
+    │   ├── cash_flow/
+    │   ├── earnings/
+    │   ├── insider/
+    │   └── sentiment/
+    ├── etfs/
+    │   ├── prices/
+    │   └── etf_profile/
+    ├── forex/
+    ├── indices/
+    ├── cryptocurrencies/
+    ├── commodities/
+    └── economic/
 ```
 
 ### Directory details
@@ -284,35 +283,35 @@ raw/
 - `company_status/yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
 - `company_status/earnings_calendar.parquet` — Future earnings dates.
 
-**`raw/historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`, one per ticker (e.g. `AAPL.parquet`).
+**`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`, one per ticker (e.g. `AAPL.parquet`).
 
 | Subfolder | API endpoint | Notes |
 |-----------|-------------|-------|
 | `stocks/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
-| `stocks/income_statement/` | INCOME_STATEMENT | Repeated to daily |
-| `stocks/balance_sheet/` | BALANCE_SHEET | Repeated to daily |
-| `stocks/cash_flow/` | CASH_FLOW | Repeated to daily |
-| `stocks/earnings/` | EARNINGS | Repeated to daily |
-| `stocks/insider/` | INSIDER_TRANSACTIONS | Repeated to daily |
-| `stocks/sentiment/` | NEWS_SENTIMENT | Repeated to daily |
+| `stocks/income_statement/` | INCOME_STATEMENT | Daily interval |
+| `stocks/balance_sheet/` | BALANCE_SHEET | Daily interval |
+| `stocks/cash_flow/` | CASH_FLOW | Daily interval |
+| `stocks/earnings/` | EARNINGS | Daily interval |
+| `stocks/insider/` | INSIDER_TRANSACTIONS | Daily interval |
+| `stocks/sentiment/` | NEWS_SENTIMENT | Daily interval |
 | `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
 | `etfs/etf_profile/` | ETF_PROFILE | Only given on last day |
-| `forex/` | FX_DAILY | Daily |
+| `forex/` | FX_DAILY | Daily interval |
 | `indices/` | INDEX_DATA | Daily (SPX, VIX, etc.) |
-| `cryptocurrencies/` | DIGITAL_CURRENCY_DAILY | Daily |
+| `cryptocurrencies/` | DIGITAL_CURRENCY_DAILY | Daily interval |
 | `commodities/` | WTI, BRENT, NATURAL_GAS, gold, etc. | Some have only monthly data |
 | `economic/` | GDP, CPI, unemployment, fed funds, yields | Some have only monthly data |
 
-**`raw/daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure as `historical/`, but files are compressed `.json.gz` (one per ticker). What each file contains depends on the data type:
+**`daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure as `historical/`, but files are compressed `.json.gz` (one per ticker). What each file contains depends on the data type:
 
 - **Time series** (prices, forex, indices, cryptocurrencies, commodities, economic): cut to only that date's data.
 - **Fundamentals** (income statement, balance sheet, cash flow, earnings): keep all data up to ~4 years of history.
-- **News sentiment, insider transactions**: TODO — verify retention policy.
+- **News sentiment, insider transactions**: cut to last retrieved date.
 
 **Key rules:**
 - `daily/` is append-only — each day creates a new dated folder. Past days are never modified.
 - `historical/` is initially populated from Alpha Vantage. If FirstRate Data is added later, it may modify existing tickers — but only if the overlapping data between Alpha Vantage and FirstRate Data agrees. If the intersecting data conflicts, the ticker is flagged for review rather than silently overwritten.
-- The `catalog/` directory lives outside `raw/` and is the only mutable area: yield status and ticker metadata are updated as coverage changes.
+- The `catalog/` directory is the only mutable area: yield status and ticker metadata are updated as coverage changes.
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
 
 **Historical price data notes:**
