@@ -53,7 +53,7 @@ python -m response_schemas.scripts.validate_all_schemas
 python -m response_schemas.scripts.validate_all_schemas --params symbol=AAPL
 
 # Combine with category filtering
-python -m response_schemas.scripts.validate_all_schemas --category forex --params from_currency=EUR to_currency=GBP
+python -m response_schemas.scripts.validate_all_schemas --category fundamental --params symbol=IBM
 ```
 
 ### 3. Use in code

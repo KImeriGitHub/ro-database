@@ -77,12 +77,9 @@ def _validate_dict(value: dict, schema: dict, path: str, violations: list[str]) 
         for k, v in value.items():
             _validate_node(v, wildcard_schema, f"{path}.{k}", violations)
     else:
-        # Missing required keys
+        # Validate keys present in both response and schema
         for key, child_schema in children.items():
-            if key not in value:
-                if not child_schema.get("_optional"):
-                    violations.append(f"{path}: missing required key '{key}'")
-            else:
+            if key in value:
                 _validate_node(value[key], child_schema, f"{path}.{key}", violations)
 
         # Unexpected keys

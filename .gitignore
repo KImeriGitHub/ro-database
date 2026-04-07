@@ -7,3 +7,6 @@ tmp/
 
 response_schemas/schemas/*
 !response_schemas/schemas/.gitkeep
+
+response_schemas/responses/*
+!response_schemas/responses/.gitkeep

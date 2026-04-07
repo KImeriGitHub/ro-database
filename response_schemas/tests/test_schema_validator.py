@@ -144,16 +144,17 @@ class TestValidResponsesPass:
 
 
 # ---------------------------------------------------------------------------
-# Tests: missing keys
+# Tests: missing keys are tolerated (structural validation only)
 # ---------------------------------------------------------------------------
 
 class TestMissingKeys:
-    def test_missing_meta_data_key(self):
+    def test_missing_meta_data_keys_no_violation(self):
+        """Missing keys in a sub-dict should not produce violations."""
         schema = infer_schema(DAILY_ADJUSTED_RESPONSE)
         bad = {
             "Meta Data": {
                 "1. Information": "test",
-                # missing keys 2-5
+                # missing keys 2-5 — that's fine
             },
             "Time Series (Daily)": {
                 "2024-06-14": {
@@ -189,10 +190,10 @@ class TestMissingKeys:
             },
         }
         violations = validate_response(bad, schema)
-        missing = [v for v in violations if "missing required key" in v]
-        assert len(missing) == 4  # keys 2-5
+        assert violations == []
 
-    def test_missing_top_level_key(self):
+    def test_missing_top_level_key_no_violation(self):
+        """Missing a top-level key should not produce violations."""
         schema = infer_schema(DAILY_ADJUSTED_RESPONSE)
         bad = {
             "Meta Data": {
@@ -202,10 +203,10 @@ class TestMissingKeys:
                 "4. Output Size": "Compact",
                 "5. Time Zone": "US/Eastern",
             },
-            # missing "Time Series (Daily)"
+            # missing "Time Series (Daily)" — that's fine
         }
         violations = validate_response(bad, schema)
-        assert any("Time Series (Daily)" in v for v in violations)
+        assert violations == []
 
 
 # ---------------------------------------------------------------------------

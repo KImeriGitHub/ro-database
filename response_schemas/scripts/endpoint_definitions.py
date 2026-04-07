@@ -18,13 +18,13 @@ ENDPOINTS = [
     # ------------------------------------------------------------------
     {
         "function": "TIME_SERIES_INTRADAY",
-        "params": {"symbol": "IBM", "interval": "1min"},
+        "params": {"symbol": "AAPL", "interval": "1min"},
         "premium": True,
         "category": "stock_time_series",
     },
     {
         "function": "TIME_SERIES_DAILY_ADJUSTED",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": True,
         "category": "stock_time_series",
     },
@@ -52,19 +52,19 @@ ENDPOINTS = [
     },
     {
         "function": "EARNINGS_CALL_TRANSCRIPT",
-        "params": {"symbol": "IBM", "quarter": "2024Q1"},
+        "params": {"symbol": "AAPL", "quarter": "2024Q1"},
         "premium": False,
         "category": "alpha_intelligence",
     },
     {
         "function": "INSIDER_TRANSACTIONS",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "alpha_intelligence",
     },
     {
         "function": "INSTITUTIONAL_HOLDINGS",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": True,
         "category": "alpha_intelligence",
     },
@@ -74,7 +74,7 @@ ENDPOINTS = [
     # ------------------------------------------------------------------
     {
         "function": "OVERVIEW",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
@@ -86,37 +86,37 @@ ENDPOINTS = [
     },
     {
         "function": "INCOME_STATEMENT",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
     {
         "function": "BALANCE_SHEET",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
     {
         "function": "CASH_FLOW",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
     {
         "function": "SHARES_OUTSTANDING",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
     {
         "function": "EARNINGS",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
     {
         "function": "EARNINGS_ESTIMATES",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "category": "fundamental",
     },
@@ -129,7 +129,7 @@ ENDPOINTS = [
     },
     {
         "function": "EARNINGS_CALENDAR",
-        "params": {"symbol": "IBM"},
+        "params": {"symbol": "AAPL"},
         "premium": False,
         "csv_only": True,
         "category": "fundamental",

@@ -7,6 +7,7 @@ Usage:
     python -m response_schemas.scripts.infer_all_schemas --category fundamental --category economic
 """
 
+import json
 import sys
 import time
 import argparse
@@ -25,6 +26,8 @@ from response_schemas.scripts.endpoint_definitions import (
     BASE_URL,
     ALL_CATEGORIES,
 )
+
+RESPONSES_DIR = Path(__file__).resolve().parent.parent / "responses"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,6 +95,12 @@ def run(
             failed += 1
             time.sleep(delay)
             continue
+
+        # Save raw response
+        RESPONSES_DIR.mkdir(parents=True, exist_ok=True)
+        resp_path = RESPONSES_DIR / f"{name}.json"
+        with open(resp_path, "w") as f:
+            json.dump(data, f, indent=2)
 
         schema = infer_schema(data)
         save_schema(schema, name)
