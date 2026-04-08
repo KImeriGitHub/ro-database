@@ -38,7 +38,7 @@ update_all()
 
 **Update logic:**
 - New symbols: appended, logged with full row details.
-- Vanished symbols (in catalog but not in fresh data): `status` set to `Corrupted`.
+- Vanished symbols (i.e. it is in catalog but not in fresh data): `status` set to `Corrupted`.
 - `ipoDate` changed for an existing symbol: `status` set to `Corrupted` (data integrity concern).
 - `delistingDate` changed: updated to the new value and logged.
 
@@ -108,7 +108,7 @@ Only rows where `to_currency == "USD"` are kept. Symbol is the `from_currency` v
 
 **Source:** Derived from `stocks.parquet` (must exist first).
 
-**Schema:** `symbol (Utf8), prices (Utf8), income_statement (Utf8), balance_sheet (Utf8), cash_flow (Utf8), earnings (Utf8), insider (Utf8), sentiment (Utf8), date (Date)`.
+**Schema:** `symbol (Utf8), prices (Utf8), prices_daily (Utf8), income_statement (Utf8), balance_sheet (Utf8), cash_flow (Utf8), earnings (Utf8), insider (Utf8), sentiment (Utf8), date (Date)`.
 
 Columns correspond to the subfolder names under `historical/stocks/`. Each column tracks whether a given stock ticker yields data for that endpoint.
 

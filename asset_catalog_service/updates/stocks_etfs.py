@@ -34,7 +34,15 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
     fresh_stocks = combined.filter(pl.col("assetType") == "Stock")
     fresh_etfs = combined.filter(pl.col("assetType") == "ETF")
 
-    if not stocks_path.exists() or not etfs_path.exists():
+    stocks_exists = stocks_path.exists()
+    etfs_exists = etfs_path.exists()
+
+    if stocks_exists != etfs_exists:
+        missing = "stocks.parquet" if not stocks_exists else "etfs.parquet"
+        present = "etfs.parquet" if not stocks_exists else "stocks.parquet"
+        logger.warning(f"{missing} missing but {present} exists - re-establishing both")
+
+    if not stocks_exists or not etfs_exists:
         fresh_stocks.write_parquet(stocks_path, compression="zstd")
         fresh_etfs.write_parquet(etfs_path, compression="zstd")
         logger.info(f"Established stocks.parquet ({fresh_stocks.height} rows)")

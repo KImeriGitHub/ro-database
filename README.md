@@ -49,6 +49,7 @@ Norgate also offers survivorship bias-free data with excellent historical index 
 
 | Category | Endpoints | Update frequency |
 |---|---|---|
+| Intraday prices | `TIME_SERIES_INTRADAY` | Daily (active universe only) |
 | Daily prices | `TIME_SERIES_DAILY_ADJUSTED` | Daily (active universe only) |
 | Fundamentals | `INCOME_STATEMENT`, `BALANCE_SHEET`, `CASH_FLOW`, `EARNINGS` | Daily snapshot (PIT pipeline) |
 | Insider transactions | `INSIDER_TRANSACTIONS` | Daily |
@@ -241,6 +242,7 @@ catalog/
 historical/
 ├── stocks/
 │   ├── prices/
+│   ├── prices_daily/
 │   ├── income_statement/
 │   ├── balance_sheet/
 │   ├── cash_flow/
@@ -249,6 +251,7 @@ historical/
 │   └── sentiment/
 ├── etfs/
 │   ├── prices/
+│   ├── prices_daily/
 │   └── etf_profile/
 ├── forex/
 ├── indices/
@@ -260,6 +263,7 @@ daily/
 └── YYYY-MM-DD/
     ├── stocks/
     │   ├── prices/
+    │   ├── prices_daily/
     │   ├── income_statement/
     │   ├── balance_sheet/
     │   ├── cash_flow/
@@ -268,6 +272,7 @@ daily/
     │   └── sentiment/
     ├── etfs/
     │   ├── prices/
+    │   ├── prices_daily/
     │   └── etf_profile/
     ├── forex/
     ├── indices/
@@ -287,14 +292,16 @@ daily/
 
 | Subfolder | API endpoint | Notes |
 |-----------|-------------|-------|
-| `stocks/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
+| `stocks/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, Volume |
+| `stocks/prices_daily/` | TIME_SERIES_DAILY_ADJUSTED | Date, Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient |
 | `stocks/income_statement/` | INCOME_STATEMENT | Daily interval |
 | `stocks/balance_sheet/` | BALANCE_SHEET | Daily interval |
 | `stocks/cash_flow/` | CASH_FLOW | Daily interval |
 | `stocks/earnings/` | EARNINGS | Daily interval |
 | `stocks/insider/` | INSIDER_TRANSACTIONS | Daily interval |
 | `stocks/sentiment/` | NEWS_SENTIMENT | Daily interval |
-| `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, AdjClose, Volume, Dividends, Splits |
+| `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, Volume |
+| `etfs/prices_daily/` | TIME_SERIES_DAILY_ADJUSTED | Date, Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient |
 | `etfs/etf_profile/` | ETF_PROFILE | Only given on last day |
 | `forex/` | FX_DAILY | Daily interval |
 | `indices/` | INDEX_DATA | Daily (SPX, VIX, etc.) |
@@ -315,7 +322,7 @@ daily/
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
 
 **Historical price data notes:**
-When built from Alpha Vantage alone, historical prices use `TIME_SERIES_INTRADAY` which includes unadjusted and adjusted prices, dividends, and splits. If supplemented with FirstRate Data, the FirstRate bundle provides **only split+dividend-adjusted prices** — no unadjusted variant and no separate Dividends or Splits columns. For FirstRate-sourced tickers (primarily delisted securities not in Alpha Vantage), all OHLC values are adjusted, so `Close` and `AdjClose` are identical and `Dividends`/`Splits` columns are null. The data source is recorded per ticker so the distinction is preserved.
+Historical prices are stored in two separate subfolders under `stocks/`: `prices/` holds intraday bars from `TIME_SERIES_INTRADAY` (Open, High, Low, Close, Volume), and `prices_daily/` holds daily bars from `TIME_SERIES_DAILY_ADJUSTED` (Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient). Adjusted close is not calculated or stored in either folder. If supplemented with FirstRate Data, the FirstRate bundle provides **only split+dividend-adjusted prices** -- no unadjusted variant and no separate dividend or split columns. For FirstRate-sourced tickers (primarily delisted securities not in Alpha Vantage), all OHLC values are adjusted. The data source is recorded per ticker so the distinction is preserved.
 
 ## Estimated costs
 

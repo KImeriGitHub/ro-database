@@ -163,8 +163,10 @@ def test_init_yield_status(mock_fetch):
     df = pl.read_parquet(MOCK_DIR / "yield_status.parquet")
     assert df.height == 3  # 3 stocks (AAPL, MSFT, OLD)
     assert "prices" in df.columns
+    assert "prices_daily" in df.columns
     assert "sentiment" in df.columns
     assert df["prices"].null_count() == 3
+    assert df["prices_daily"].null_count() == 3
     assert df["date"].to_list() == [date.today()] * 3
 
 

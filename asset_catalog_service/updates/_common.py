@@ -42,6 +42,7 @@ ECONOMIC_ENTRIES = {
 
 YIELD_ENDPOINTS = [
     "prices",
+    "prices_daily",
     "income_statement",
     "balance_sheet",
     "cash_flow",
