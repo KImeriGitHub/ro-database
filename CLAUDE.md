@@ -40,7 +40,7 @@ consistency_tests/            # Data validation against other sources
 ## Data storage layout (GCS + local mirror)
 
 - `catalog/` - Mutable ticker metadata + yield status (`.parquet`)
-- `historical/` - One-time load, append-only. Per-ticker `.parquet` files. Subfolders: `stocks/{prices,prices_daily,income_statement,balance_sheet,cash_flow,earnings,earnings_estimate,insider,sentiment}`, `etfs/{prices,prices_daily,etf_profile}`, `forex/`, `indices/`, `cryptocurrencies/`, `commodities/`, `economic/`
+- `historical/` - One-time load, append-only. Per-ticker `.parquet` files. Subfolders: `stocks/{prices,prices_daily,income_statement,balance_sheet,cash_flow,earnings,earnings_estimates,insider,sentiment}`, `etfs/{prices,prices_daily,etf_profile}`, `forex/`, `indices/`, `cryptocurrencies/`, `commodities/`, `economic/`
 - `daily/YYYY-MM-DD/` - Append-only daily pulls. Same subfolder structure as historical. Files are `.parquet`, one per ticker
 
 ## Key rules

@@ -47,7 +47,7 @@ YIELD_ENDPOINTS = [
     "balance_sheet",
     "cash_flow",
     "earnings",
-    "earnings_estimate",
+    "earnings_estimates",
     "insider",
     "sentiment",
 ]

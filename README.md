@@ -247,7 +247,7 @@ historical/
 │   ├── balance_sheet/
 │   ├── cash_flow/
 │   ├── earnings/
-│   ├── earnings_estimate/
+│   ├── earnings_estimates/
 │   ├── insider/
 │   └── sentiment/
 ├── etfs/
@@ -269,7 +269,7 @@ daily/
     │   ├── balance_sheet/
     │   ├── cash_flow/
     │   ├── earnings/
-    │   ├── earnings_estimate/
+    │   ├── earnings_estimates/
     │   ├── insider/
     │   └── sentiment/
     ├── etfs/
@@ -290,7 +290,7 @@ daily/
 - `company_status/yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
 - `company_status/earnings_calendar.parquet` — Future earnings dates.
 
-**`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`. Price endpoints (`prices`, `prices_daily`), `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimate`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`.
+**`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`. Price endpoints (`prices`, `prices_daily`), `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`.
 
 | Subfolder | API endpoint | Notes |
 |-----------|-------------|-------|
@@ -300,7 +300,7 @@ daily/
 | `stocks/balance_sheet/` | BALANCE_SHEET | Daily interval |
 | `stocks/cash_flow/` | CASH_FLOW | Daily interval |
 | `stocks/earnings/` | EARNINGS | Daily interval |
-| `stocks/earnings_estimate/` | EARNINGS_ESTIMATES | Daily interval |
+| `stocks/earnings_estimates/` | EARNINGS_ESTIMATES | Daily interval |
 | `stocks/insider/` | INSIDER_TRANSACTIONS | Daily interval |
 | `stocks/sentiment/` | NEWS_SENTIMENT | Daily interval |
 | `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, Volume |
@@ -312,7 +312,7 @@ daily/
 | `commodities/` | WTI, BRENT, NATURAL_GAS, gold, etc. | Some have only monthly data |
 | `economic/` | GDP, CPI, unemployment, fed funds, yields | Some have only monthly data |
 
-**`daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure and file format as `historical/` (compressed `.parquet`). Price endpoints, `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimate`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`. What each file contains depends on the data type:
+**`daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure and file format as `historical/` (compressed `.parquet`). Price endpoints, `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`. What each file contains depends on the data type:
 
 - **Time series** (prices, forex, indices, cryptocurrencies, commodities, economic): cut to only that date's data.
 - **Fundamentals** (income statement, balance sheet, cash flow, earnings): keep all data up to ~4 years of history.
