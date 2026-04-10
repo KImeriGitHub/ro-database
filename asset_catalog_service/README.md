@@ -108,7 +108,7 @@ Only rows where `to_currency == "USD"` are kept. Symbol is the `from_currency` v
 
 **Source:** Derived from `stocks.parquet` (must exist first).
 
-**Schema:** `symbol (Utf8), prices (Utf8), prices_daily (Utf8), income_statement (Utf8), balance_sheet (Utf8), cash_flow (Utf8), earnings (Utf8), insider (Utf8), sentiment (Utf8), date (Date)`.
+**Schema:** `symbol (Utf8), prices (Utf8), prices_daily (Utf8), income_statement (Utf8), balance_sheet (Utf8), cash_flow (Utf8), earnings (Utf8), earnings_estimate (Utf8), insider (Utf8), sentiment (Utf8), date (Date)`.
 
 Columns correspond to the subfolder names under `historical/stocks/`. Each column tracks whether a given stock ticker yields data for that endpoint.
 

@@ -51,7 +51,7 @@ Norgate also offers survivorship bias-free data with excellent historical index 
 |---|---|---|
 | Intraday prices | `TIME_SERIES_INTRADAY` | Daily (active universe only) |
 | Daily prices | `TIME_SERIES_DAILY_ADJUSTED` | Daily (active universe only) |
-| Fundamentals | `INCOME_STATEMENT`, `BALANCE_SHEET`, `CASH_FLOW`, `EARNINGS` | Daily snapshot (PIT pipeline) |
+| Fundamentals | `INCOME_STATEMENT`, `BALANCE_SHEET`, `CASH_FLOW`, `EARNINGS`, `EARNINGS_ESTIMATES` | Daily snapshot (PIT pipeline) |
 | Insider transactions | `INSIDER_TRANSACTIONS` | Daily |
 | Market News & Sentiment | `NEWS_SENTIMENT` | Daily |
 | Indices | `INDEX_DATA` — direct index prices (S&P 500, DJIA, VIX, etc.). Universe discovered via `INDEX_CATALOG`. | Daily |
@@ -102,7 +102,7 @@ After several years of collection, this produces a genuine PIT dataset for the c
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). All raw files (CSVs, JSON snapshots) are append-only and never modified or deleted. This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). All raw files are append-only and never modified or deleted. This is the permanent record.
 
 A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research.
 
@@ -111,7 +111,7 @@ A local sync script downloads data from the GCS bucket to a local mirror. This l
 
 **Rate limit:** As of now, we have approximately **75 API calls per minute** from Alpha Vantage. Some of this budget may need to be reserved for live trading hours (8:00 AM – 5:00 PM ET), so daily batch ingestion should be scheduled outside this window when possible.
 
-Full financial statements (income statement, balance sheet, cash flow) are saved as complete JSON responses — no field filtering at ingestion time. To stay within Alpha Vantage API call budgets, the asset catalog tracks per-ticker, per-endpoint yield status:
+Full financial statements (income statement, balance sheet, cash flow) are saved as complete responses — no field filtering at ingestion time. To stay within Alpha Vantage API call budgets, the asset catalog tracks per-ticker, per-endpoint yield status:
 
 - **Daily pulls** include only tickers that are known to return data for a given endpoint (e.g., `INCOME_STATEMENT`, `INSIDER_TRANSACTIONS`, `NEWS_SENTIMENT`).
 - **Tickers that return empty or no data** are skipped during daily runs and re-checked on a weekly sweep to detect newly available coverage.
@@ -119,7 +119,7 @@ Full financial statements (income statement, balance sheet, cash flow) are saved
 
 This applies uniformly to financial statements, insider transactions, and news sentiment. The yield status metadata lives in the asset catalog alongside ticker lifecycle information (active/delisted, start/end dates).
 
-**Restatement detection:** When daily data is transformed into `AssetData`, the new JSON is compared against the previous day's data using `deepdiff`. If values changed for a previously-recorded fiscal period, the change is flagged and incorporated into `AssetData`.
+**Restatement detection:** When daily data is transformed into `AssetData`, the new data is compared against the previous day's data using `deepdiff`. If values changed for a previously-recorded fiscal period, the change is flagged and incorporated into `AssetData`.
 
 ```
 GCP Cloud Container                   GCS Bucket                          Local
@@ -157,7 +157,7 @@ polars
 numpy
 pyarrow                      # Parquet read/write
 requests                     # Alpha Vantage API calls
-deepdiff                     # Restatement detection (JSON diff)
+deepdiff                     # Restatement detection (data diff)
 beautifulsoup4               # HTML scraping
 lxml                         # HTML parser for scraping
 ```
@@ -181,7 +181,7 @@ lxml                         # HTML parser for scraping
 
 8. **GCP container for fetching, local for processing.** Daily ingestion runs in a GCP Cloud container that writes to a single append-only GCS bucket. A local sync script mirrors the bucket contents for further processing and transformation. This separates the reliability of cloud-based fetching from the flexibility of local analytical workflows.
 
-9. **Raw data archived immutably in GCS.** Every FirstRate CSV and Alpha Vantage JSON response is saved as-is. We can always reprocess if the schema evolves.
+9. **Raw data archived immutably in GCS.** Every API response is processed once into parquet and never modified. Schema violations are logged before data enters the pipeline.
 
 10. **Yield-aware API call management.** The asset catalog tracks which tickers return data for each Alpha Vantage endpoint. Tickers with no data are skipped daily and re-checked weekly. This applies to financial statements, insider transactions, and news sentiment. Avoids wasting API calls on tickers where Alpha Vantage has no coverage.
 
@@ -207,7 +207,7 @@ historical_data_setup/        # Independent of the daily pipeline
 
 raw_data_service/             # Data download and post-download verification
                               # Logs execution and validation results
-                              # Compresses JSON, uploads to GCS and saves locally
+                              # Writes parquet, uploads to GCS and saves locally
 
 data_transformation/          # Transforms daily raw data into AssetData instances
 
@@ -247,6 +247,7 @@ historical/
 │   ├── balance_sheet/
 │   ├── cash_flow/
 │   ├── earnings/
+│   ├── earnings_estimate/
 │   ├── insider/
 │   └── sentiment/
 ├── etfs/
@@ -268,6 +269,7 @@ daily/
     │   ├── balance_sheet/
     │   ├── cash_flow/
     │   ├── earnings/
+    │   ├── earnings_estimate/
     │   ├── insider/
     │   └── sentiment/
     ├── etfs/
@@ -288,7 +290,7 @@ daily/
 - `company_status/yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
 - `company_status/earnings_calendar.parquet` — Future earnings dates.
 
-**`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`, one per ticker (e.g. `AAPL.parquet`).
+**`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`. Price endpoints (`prices`, `prices_daily`), `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimate`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`.
 
 | Subfolder | API endpoint | Notes |
 |-----------|-------------|-------|
@@ -298,6 +300,7 @@ daily/
 | `stocks/balance_sheet/` | BALANCE_SHEET | Daily interval |
 | `stocks/cash_flow/` | CASH_FLOW | Daily interval |
 | `stocks/earnings/` | EARNINGS | Daily interval |
+| `stocks/earnings_estimate/` | EARNINGS_ESTIMATES | Daily interval |
 | `stocks/insider/` | INSIDER_TRANSACTIONS | Daily interval |
 | `stocks/sentiment/` | NEWS_SENTIMENT | Daily interval |
 | `etfs/prices/` | TIME_SERIES_INTRADAY | Datetime (1min), Open, High, Low, Close, Volume |
@@ -309,7 +312,7 @@ daily/
 | `commodities/` | WTI, BRENT, NATURAL_GAS, gold, etc. | Some have only monthly data |
 | `economic/` | GDP, CPI, unemployment, fed funds, yields | Some have only monthly data |
 
-**`daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure as `historical/`, but files are compressed `.json.gz` (one per ticker). What each file contains depends on the data type:
+**`daily/`** — Daily pulls, organized by date. One folder per trading day (`YYYY-MM-DD/`). Same subfolder structure and file format as `historical/` (compressed `.parquet`). Price endpoints, `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimate`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`. What each file contains depends on the data type:
 
 - **Time series** (prices, forex, indices, cryptocurrencies, commodities, economic): cut to only that date's data.
 - **Fundamentals** (income statement, balance sheet, cash flow, earnings): keep all data up to ~4 years of history.
@@ -329,7 +332,7 @@ Historical prices are stored in two separate subfolders under `stocks/`: `prices
 | Item | Cost | Notes |
 |---|---|---|
 | Alpha Vantage (paid plan) | ~$600/yr | Sole required provider — historical setup + ongoing daily data. |
-| GCP Cloud Storage | ~$20/yr | Raw CSVs + JSON snapshots + Parquet |
+| GCP Cloud Storage | ~$20/yr | Parquet files (historical + daily) |
 | GCP Cloud Run | ~$5–20/yr | Daily ingestion container (low usage, mostly free tier) |
 | FirstRate Data (optional) | ~$300–400 one-time | Adds 16k+ tickers (7k+ delisted), 26 years of 1-min data. |
 | **Total year 1 (AV only)** | **~$625–640** | No FirstRate purchase needed |
