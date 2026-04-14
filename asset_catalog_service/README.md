@@ -151,7 +151,7 @@ The 4 `/query` calls count against the Alpha Vantage rate limit (~75 calls/min).
 
 ## Error handling
 
-Each catalog update runs independently. If one step fails (network error, API rate limit, malformed response), the error is logged and the remaining catalogs still update. The `_fetch_text` helper rejects responses that return JSON instead of CSV (common AV error pattern for rate-limited or invalid requests).
+Each catalog update runs independently. If one step fails (network error, API rate limit, malformed response), the error is logged and the remaining catalogs still update. The `fetch_text` helper rejects responses that return JSON instead of CSV (common AV error pattern for rate-limited or invalid requests).
 
 ## Design considerations
 
@@ -160,7 +160,7 @@ Each catalog update runs independently. If one step fails (network error, API ra
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
 - **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which symbols return data for which endpoints) is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
 - **Date columns as pl.Date for stocks/etfs:** Date strings from the LISTING_STATUS CSV are cast to `pl.Date` on ingestion. This enables the same 30-day delistingDate arithmetic used by indices/forex/crypto.
-- **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs last.
+- **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs after all asset catalogs but before `earnings_calendar`.
 
 ## Folder structure
 
