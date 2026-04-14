@@ -44,14 +44,13 @@ def _seed_simple_catalog(filename: str, symbols: list[str], names: list[str]):
 
 
 def _seed_listing(filename: str, rows: list[dict]):
-    """Write a stocks/etfs parquet with the 7-col schema (all Utf8)."""
+    """Write a stocks/etfs parquet with the 6-col schema."""
     df = pl.DataFrame(rows, schema={
         "symbol": pl.Utf8,
         "name": pl.Utf8,
         "exchange": pl.Utf8,
-        "assetType": pl.Utf8,
-        "ipoDate": pl.Utf8,
-        "delistingDate": pl.Utf8,
+        "ipoDate": pl.Date,
+        "delistingDate": pl.Date,
         "status": pl.Utf8,
     })
     df.write_parquet(MOCK_DIR / filename, compression="zstd")
@@ -71,14 +70,14 @@ def clean_mock_dir():
 
 STOCKS_SEED = [
     {"symbol": "AAPL", "name": "Apple Inc", "exchange": "NASDAQ",
-     "assetType": "Stock", "ipoDate": "1980-12-12", "delistingDate": None, "status": "Active"},
+     "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
     {"symbol": "MSFT", "name": "Microsoft Corp", "exchange": "NASDAQ",
-     "assetType": "Stock", "ipoDate": "1986-03-13", "delistingDate": None, "status": "Active"},
+     "ipoDate": date(1986, 3, 13), "delistingDate": None, "status": "Active"},
 ]
 
 ETFS_SEED = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "exchange": "NYSE",
-     "assetType": "ETF", "ipoDate": "1993-01-29", "delistingDate": None, "status": "Active"},
+     "ipoDate": date(1993, 1, 29), "delistingDate": None, "status": "Active"},
 ]
 
 # Fresh data: MSFT vanished, GOOG added, AAPL ipoDate changed
@@ -131,7 +130,7 @@ def test_daily_stocks_delisting_date_change(mock_fetch):
 
     stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
-    assert aapl["delistingDate"].to_list()[0] == "2026-04-01"
+    assert aapl["delistingDate"].to_list()[0] == date(2026, 4, 1)
 
 
 # ── indices daily ─────────────────────────────────────────────────────

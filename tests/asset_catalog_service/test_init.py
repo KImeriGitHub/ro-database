@@ -91,7 +91,7 @@ def test_init_stocks_etfs(mock_fetch):
     assert set(stocks["symbol"].to_list()) == {"AAPL", "MSFT", "OLD"}
     assert set(etfs["symbol"].to_list()) == {"SPY"}
     assert set(stocks.columns) == {
-        "symbol", "name", "exchange", "assetType",
+        "symbol", "name", "exchange",
         "ipoDate", "delistingDate", "status",
     }
 
@@ -147,7 +147,7 @@ def test_init_economic():
     update_economic(MOCK_DIR)
 
     df = pl.read_parquet(MOCK_DIR / "economic.parquet")
-    assert df.height == 10
+    assert df.height == 15
     assert "REAL_GDP" in df["symbol"].to_list()
     assert all(s == "Active" for s in df["status"].to_list())
 
@@ -161,13 +161,15 @@ def test_init_yield_status(mock_fetch):
     update_yield_status(MOCK_DIR)
 
     df = pl.read_parquet(MOCK_DIR / "yield_status.parquet")
-    assert df.height == 3  # 3 stocks (AAPL, MSFT, OLD)
+    assert df.height == 4  # 3 stocks (AAPL, MSFT, OLD) + 1 ETF (SPY)
     assert "prices" in df.columns
     assert "prices_daily" in df.columns
     assert "sentiment" in df.columns
-    assert df["prices"].null_count() == 3
-    assert df["prices_daily"].null_count() == 3
-    assert df["date"].to_list() == [date.today()] * 3
+    assert "etf_profile" in df.columns
+    assert "direct" in df.columns
+    assert df["prices"].null_count() == 4
+    assert df["prices_daily"].null_count() == 4
+    assert df["date"].to_list() == [date.today()] * 4
 
 
 def test_yield_status_skips_without_stocks():
