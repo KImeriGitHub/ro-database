@@ -30,7 +30,12 @@ COMMODITY_ENTRIES = {
 ECONOMIC_ENTRIES = {
     "REAL_GDP": "Real GDP",
     "REAL_GDP_PER_CAPITA": "Real GDP Per Capita",
-    "TREASURY_YIELD": "Treasury Yield",
+    "TREASURY_YIELD_30Y": "Treasury Yield 30 Years",
+    "TREASURY_YIELD_10Y": "Treasury Yield 10 Years",
+    "TREASURY_YIELD_7Y": "Treasury Yield 7 Years",
+    "TREASURY_YIELD_5Y": "Treasury Yield 5 Years",
+    "TREASURY_YIELD_2Y": "Treasury Yield 2 Years",
+    "TREASURY_YIELD_3M": "Treasury Yield 3 Months",
     "FEDERAL_FUNDS_RATE": "Federal Funds Rate",
     "CPI": "Consumer Price Index",
     "INFLATION": "Inflation",
