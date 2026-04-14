@@ -35,6 +35,7 @@ scheduled_scripts/            # Orchestration scripts, API budget tracking
 maintainance_scripts/         # Shared utility modules, access to api key
 response_schemas/             # AV API response structure validation
 consistency_tests/            # Data validation against other sources
+tests/                        # Unified test directory (asset_catalog_service, historical_data_setup, call_speedtests)
 ```
 
 ## Data storage layout (GCS + local mirror)

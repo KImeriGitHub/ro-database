@@ -220,6 +220,11 @@ response_schemas/             # Infers, stores, and validates the JSON structure
 
 consistency_tests/            # Validates raw and transformed data against other sources
                               # e.g., checks that intraday open matches daily open
+
+tests/                        # Unified test directory
+├── asset_catalog_service/    # Tests for asset_catalog_service
+├── historical_data_setup/    # Tests for historical_data_setup (placeholder)
+└── call_speedtests/          # Scripts that measure real API call performance
 ```
 
 ## Data storage structure
