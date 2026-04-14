@@ -1,0 +1,429 @@
+"""Shared helpers for historical data setup: rate limiter, HTTP fetch, month
+generation, issue tracking, and catalog reading."""
+
+import logging
+import re
+import time
+from datetime import date, datetime
+from pathlib import Path
+
+import polars as pl
+import requests
+
+logger = logging.getLogger(__name__)
+
+AV_BASE = "https://www.alphavantage.co"
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+class RateLimiter:
+    """Minimum-interval rate limiter for API calls."""
+
+    def __init__(self, calls_per_minute: float = 74.9):
+        self._interval = 60.0 / calls_per_minute
+        self._last_call: float = 0.0
+
+    def wait(self) -> None:
+        """Block until a call slot is available."""
+        now = time.monotonic()
+        elapsed = now - self._last_call
+        if elapsed < self._interval:
+            sleep_time = self._interval - elapsed
+            time.sleep(sleep_time)
+        self._last_call = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# HTTP fetch with rate limiting + AV throttle detection
+# ---------------------------------------------------------------------------
+
+class AVResponseError(Exception):
+    """Raised when Alpha Vantage returns an unrecoverable error."""
+
+
+def fetch_av_json(url: str, rate_limiter: RateLimiter, max_retries: int = 3) -> dict:
+    """Fetch JSON from Alpha Vantage with rate limiting and retry.
+
+    Detects AV throttle responses (keys "Note" or "Information") and retries
+    after 60 s, up to *max_retries* times.
+    """
+    for attempt in range(1, max_retries + 1):
+        rate_limiter.wait()
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # AV signals rate-limit / error via top-level "Note" or "Information"
+        throttle_msg = data.get("Note") or data.get("Information")
+        if throttle_msg:
+            if attempt < max_retries:
+                logger.warning(
+                    f"AV throttle (attempt {attempt}/{max_retries}): "
+                    f"{throttle_msg[:120]} -- retrying in 60s"
+                )
+                time.sleep(60)
+                continue
+            raise AVResponseError(
+                f"AV throttle after {max_retries} retries: {throttle_msg[:200]}"
+            )
+
+        return data
+
+    raise AVResponseError("fetch_av_json: exhausted retries without a valid response")
+
+
+# ---------------------------------------------------------------------------
+# Month range generator
+# ---------------------------------------------------------------------------
+
+_EARLIEST = date(2000, 1, 1)
+
+
+def generate_months(ipo_date: str | None, delisting_date: str | None) -> list[str]:
+    """Generate YYYY-MM strings from max(ipo_date, 2000-01) to min(delisting_date, today).
+
+    *ipo_date* and *delisting_date* are expected as ``"YYYY-MM-DD"`` strings or
+    ``None``.  ``None`` defaults to 2000-01 and today respectively.
+    """
+    if ipo_date:
+        try:
+            start = datetime.strptime(ipo_date, "%Y-%m-%d").date()
+        except ValueError:
+            start = _EARLIEST
+    else:
+        start = _EARLIEST
+
+    if delisting_date:
+        try:
+            end = datetime.strptime(delisting_date, "%Y-%m-%d").date()
+        except ValueError:
+            end = date.today()
+    else:
+        end = date.today()
+
+    start = max(start.replace(day=1), _EARLIEST)
+    end = end.replace(day=1)
+
+    months: list[str] = []
+    cursor = start
+    while cursor <= end:
+        months.append(cursor.strftime("%Y-%m"))
+        # Advance to next month
+        if cursor.month == 12:
+            cursor = cursor.replace(year=cursor.year + 1, month=1)
+        else:
+            cursor = cursor.replace(month=cursor.month + 1)
+
+    return months
+
+
+# ---------------------------------------------------------------------------
+# Catalog reader
+# ---------------------------------------------------------------------------
+
+def read_catalog_symbols(catalog_dir: Path, asset_type: str) -> pl.DataFrame:
+    """Read symbols from catalog parquet. Does not exclude any status.
+
+    Args:
+        catalog_dir: Path to the catalog directory.
+        asset_type: Asset type name (e.g. ``"stocks"``, ``"commodities"``).
+
+    Returns:
+        Full catalog DataFrame (columns vary by asset type).
+    """
+    path = catalog_dir / f"{asset_type}.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"Catalog file not found: {path}")
+
+    df = pl.read_parquet(path)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Issue tracker
+# ---------------------------------------------------------------------------
+
+class IssueTracker:
+    """Accumulates per-symbol ingestion issues and saves them as parquet."""
+
+    def __init__(self):
+        self._rows: list[dict] = []
+
+    def record(
+        self,
+        symbol: str,
+        asset_type: str,
+        endpoint: str,
+        issue_type: str,
+        detail: str,
+    ) -> None:
+        """Record a single issue.
+
+        *issue_type* should be one of: ``structure_error``, ``empty_content``,
+        ``cast_failure``, ``timezone_mismatch``, ``av_throttle``.
+        """
+        self._rows.append(
+            {
+                "symbol": symbol,
+                "asset_type": asset_type,
+                "endpoint": endpoint,
+                "issue_type": issue_type,
+                "detail": detail,
+                "timestamp": datetime.now(),
+            }
+        )
+        logger.warning(f"Issue [{issue_type}] {symbol} ({endpoint}): {detail}")
+
+    @property
+    def count(self) -> int:
+        return len(self._rows)
+
+    def save(self, path: Path) -> None:
+        """Save accumulated issues to parquet. Merges with existing file."""
+        if not self._rows:
+            logger.info("No ingestion issues to save")
+            return
+
+        schema = {
+            "symbol": pl.Utf8,
+            "asset_type": pl.Utf8,
+            "endpoint": pl.Utf8,
+            "issue_type": pl.Utf8,
+            "detail": pl.Utf8,
+            "timestamp": pl.Datetime,
+        }
+        new_df = pl.DataFrame(self._rows, schema=schema)
+
+        if path.exists():
+            existing = pl.read_parquet(path)
+            new_df = pl.concat([existing, new_df], how="vertical_relaxed")
+
+        new_df.write_parquet(path, compression="zstd")
+        logger.info(f"Saved {len(self._rows)} new issues to {path} ({new_df.height} total)")
+
+
+# ---------------------------------------------------------------------------
+# Response validation helpers
+# ---------------------------------------------------------------------------
+
+_STRING_COLUMNS = {"reportedCurrency", "reportTime"}
+_DATE_COLUMNS = {"fiscalDateEnding", "reportedDate"}
+
+# Values in AV responses that represent missing data -- treated as null
+_NULL_SENTINELS = {None, "None", "", "."}
+
+_TZ_KEY_RE = re.compile(r"^\d+\.\s*Time Zone$")
+
+
+def validate_meta_data(data: dict, symbol: str, asset_type: str, endpoint: str,
+                       issue_tracker: IssueTracker,
+                       expected_tz: str = "US/Eastern") -> bool:
+    """Check that 'Meta Data' exists and timezone matches *expected_tz*.
+
+    Returns True if the response structure is usable, False otherwise.
+    """
+    meta = data.get("Meta Data")
+    if meta is None:
+        issue_tracker.record(symbol, asset_type, endpoint,
+                             "structure_error", "missing 'Meta Data' key")
+        return False
+
+    for key, value in meta.items():
+        if _TZ_KEY_RE.match(key):
+            if value != expected_tz:
+                issue_tracker.record(symbol, asset_type, endpoint,
+                                     "timezone_mismatch", f"tz={value}")
+            break
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Fundamental endpoint helper (income_statement, balance_sheet, cash_flow, earnings)
+# ---------------------------------------------------------------------------
+
+def _build_fundamental_df(
+    records: list[dict],
+    symbol: str,
+    asset_type: str,
+    endpoint: str,
+    report_label: str,
+    issue_tracker: IssueTracker,
+) -> pl.DataFrame | None:
+    """Convert a list of report dicts into a typed polars DataFrame.
+
+    Casting rules:
+    - fiscalDateEnding -> pl.Date (required)
+    - reportedDate     -> pl.Date (cast_failure if it fails)
+    - reportedCurrency, reportTime -> pl.String
+    - everything else  -> pl.Float32 (keep as pl.String on failure, record cast_failure)
+
+    Returns None if *records* is empty.
+    """
+    if not records:
+        return None
+
+    # Replace null sentinels with actual None
+    cleaned: list[dict] = []
+    for rec in records:
+        cleaned.append({k: (None if v in _NULL_SENTINELS else v) for k, v in rec.items()})
+
+    # Build all-String DataFrame
+    df = pl.DataFrame(cleaned, infer_schema_length=0)
+
+    # Cast fiscalDateEnding (required)
+    if "fiscalDateEnding" in df.columns:
+        try:
+            df = df.with_columns(
+                pl.col("fiscalDateEnding").str.to_date("%Y-%m-%d")
+            )
+        except Exception as e:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "cast_failure",
+                f"{report_label}: fiscalDateEnding to Date failed: {e}",
+            )
+            return None
+    else:
+        issue_tracker.record(
+            symbol, asset_type, endpoint,
+            "structure_error",
+            f"{report_label}: missing fiscalDateEnding column",
+        )
+        return None
+
+    # Cast remaining columns
+    for col_name in df.columns:
+        if col_name in _DATE_COLUMNS:
+            if col_name == "fiscalDateEnding":
+                continue  # already cast
+            # reportedDate -> attempt pl.Date
+            try:
+                df = df.with_columns(
+                    pl.col(col_name).str.to_date("%Y-%m-%d")
+                )
+            except Exception as e:
+                issue_tracker.record(
+                    symbol, asset_type, endpoint,
+                    "cast_failure",
+                    f"{report_label}: {col_name} to Date failed: {e}",
+                )
+        elif col_name in _STRING_COLUMNS:
+            continue  # keep as String
+        else:
+            # Attempt Float32 -- must succeed; do not fall back to String
+            try:
+                df = df.with_columns(
+                    pl.col(col_name).cast(pl.Float32)
+                )
+            except Exception as e:
+                # Force cast: non-castable values become null
+                df = df.with_columns(
+                    pl.col(col_name).cast(pl.Float32, strict=False)
+                )
+                issue_tracker.record(
+                    symbol, asset_type, endpoint,
+                    "cast_failure",
+                    f"{report_label}: {col_name} to Float32 had non-castable "
+                    f"values (forced to null): {e}",
+                )
+
+    return df.sort("fiscalDateEnding")
+
+
+def fetch_fundamental_endpoint(
+    catalog_dir: Path,
+    historical_dir: Path,
+    api_key: str,
+    rate_limiter: RateLimiter,
+    issue_tracker: IssueTracker,
+    asset_type: str,
+    av_function: str,
+    endpoint: str,
+    annual_key: str,
+    quarterly_key: str,
+) -> None:
+    """Generic fetcher for fundamental endpoints that return annual + quarterly data."""
+    catalog = read_catalog_symbols(catalog_dir, asset_type)
+    output_dir = historical_dir / asset_type / endpoint
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    total = catalog.height
+    logger.info(f"{endpoint} ({asset_type}): {total} symbols to process")
+
+    for idx, row in enumerate(catalog.iter_rows(named=True), 1):
+        symbol = row["symbol"]
+        annual_path = output_dir / f"{symbol}_annual.parquet"
+        quarterly_path = output_dir / f"{symbol}_quarterly.parquet"
+
+        if annual_path.exists() and quarterly_path.exists():
+            continue
+
+        logger.info(f"[{idx}/{total}] {symbol}")
+
+        url = (
+            f"{AV_BASE}/query?function={av_function}"
+            f"&symbol={symbol}&apikey={api_key}"
+        )
+
+        try:
+            data = fetch_av_json(url, rate_limiter)
+        except AVResponseError as e:
+            issue_tracker.record(symbol, asset_type, endpoint, "av_throttle", str(e))
+            continue
+        except Exception as e:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "structure_error", f"fetch failed: {e}",
+            )
+            continue
+
+        # Validate top-level keys
+        expected_keys = {"symbol", annual_key, quarterly_key}
+        missing = expected_keys - data.keys()
+        if missing:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "structure_error", f"missing top-level keys: {missing}",
+            )
+            del data
+            continue
+
+        annual_records = data.get(annual_key, [])
+        quarterly_records = data.get(quarterly_key, [])
+        del data
+
+        # Check empty content
+        if not annual_records:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "empty_content", f"empty {annual_key}",
+            )
+        if not quarterly_records:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "empty_content", f"empty {quarterly_key}",
+            )
+
+        # Build and save annual
+        annual_df = _build_fundamental_df(
+            annual_records, symbol, asset_type, endpoint, "annual", issue_tracker,
+        )
+        if annual_df is not None:
+            annual_df.write_parquet(annual_path, compression="zstd")
+            logger.info(f"  {symbol}: saved {annual_df.height} annual rows")
+            del annual_df
+
+        # Build and save quarterly
+        quarterly_df = _build_fundamental_df(
+            quarterly_records, symbol, asset_type, endpoint, "quarterly", issue_tracker,
+        )
+        if quarterly_df is not None:
+            quarterly_df.write_parquet(quarterly_path, compression="zstd")
+            logger.info(f"  {symbol}: saved {quarterly_df.height} quarterly rows")
+            del quarterly_df
+
+        del annual_records, quarterly_records
