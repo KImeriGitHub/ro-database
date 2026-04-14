@@ -55,6 +55,8 @@ YIELD_ENDPOINTS = [
     "earnings_estimates",
     "insider",
     "sentiment",
+    "etf_profile",
+    "direct",
 ]
 
 

@@ -32,13 +32,15 @@ update_all()
 
 **Source:** Alpha Vantage `LISTING_STATUS` (active + delisted).
 
-**Schema:** `symbol, name, exchange, assetType, ipoDate, delistingDate, status` (all Utf8).
+**Schema:** `symbol (Utf8), name (Utf8), exchange (Utf8), ipoDate (Date), delistingDate (Date), status (Utf8)`.
 
 **Init:** Query both `state=active` and `state=delisted`, combine, split by `assetType` into stocks and ETFs.
 
 **Update logic:**
 - New symbols: appended, logged with full row details.
-- Vanished symbols (i.e. it is in catalog but not in fresh data): `status` set to `Corrupted`.
+- Vanished symbols (in catalog but not in fresh data):
+  - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
+  - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
 - `ipoDate` changed for an existing symbol: `status` set to `Corrupted` (data integrity concern).
 - `delistingDate` changed: updated to the new value and logged.
 
@@ -96,7 +98,7 @@ Only rows where `to_currency == "USD"` are kept. Symbol is the `from_currency` v
 
 ### economic.parquet
 
-**Source:** Hard-coded list of 10 economic indicator symbols (REAL_GDP, REAL_GDP_PER_CAPITA, TREASURY_YIELD, FEDERAL_FUNDS_RATE, CPI, INFLATION, RETAIL_SALES, DURABLES, UNEMPLOYMENT, NONFARM_PAYROLL).
+**Source:** Hard-coded list of 15 economic indicator symbols (REAL_GDP, REAL_GDP_PER_CAPITA, TREASURY_YIELD_30Y, TREASURY_YIELD_10Y, TREASURY_YIELD_7Y, TREASURY_YIELD_5Y, TREASURY_YIELD_2Y, TREASURY_YIELD_3M, FEDERAL_FUNDS_RATE, CPI, INFLATION, RETAIL_SALES, DURABLES, UNEMPLOYMENT, NONFARM_PAYROLL).
 
 **Schema:** `symbol, name, status`.
 
@@ -106,15 +108,15 @@ Only rows where `to_currency == "USD"` are kept. Symbol is the `from_currency` v
 
 ### yield_status.parquet
 
-**Source:** Derived from `stocks.parquet` (must exist first).
+**Source:** Derived from all asset catalog parquet files (stocks, etfs, forex, indices, cryptocurrencies, commodities, economic).
 
-**Schema:** `symbol (Utf8), prices (Utf8), prices_daily (Utf8), income_statement (Utf8), balance_sheet (Utf8), cash_flow (Utf8), earnings (Utf8), earnings_estimates (Utf8), insider (Utf8), sentiment (Utf8), date (Date)`.
+**Schema:** `symbol (Utf8), prices (Boolean), prices_daily (Boolean), income_statement (Boolean), balance_sheet (Boolean), cash_flow (Boolean), earnings (Boolean), earnings_estimates (Boolean), insider (Boolean), sentiment (Boolean), etf_profile (Boolean), direct (Boolean), date (Date)`.
 
-Columns correspond to the subfolder names under `historical/stocks/`. Each column tracks whether a given stock ticker yields data for that endpoint.
+Columns correspond to data endpoints. Stock-specific columns (`prices`, `prices_daily`, `income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`, `insider`, `sentiment`) apply to stocks. `etf_profile` applies to ETFs. `direct` applies to forex, indices, cryptocurrencies, commodities, and economic indicators. If a symbol and column do not match, the cell is left null and ignored.
 
 **Init:** All yield columns set to null, `date` set to the current date.
 
-**Update:** No-op if the file already exists. Yield status is updated by the daily data fetching pipeline, not by this script.
+**Update:** Yield status is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
 
 **API calls:** 0.
 
@@ -156,9 +158,9 @@ Each catalog update runs independently. If one step fails (network error, API ra
 - **Corrupted vs Delisted:** A missing symbol is first marked `Corrupted` (with today's date). Only after 30+ days of continuous absence does it become `Delisted`. This two-stage approach avoids prematurely marking symbols as delisted due to transient API issues.
 - **ipoDate as integrity signal:** If Alpha Vantage changes a stock's IPO date, this is a data integrity red flag. The symbol is marked `Corrupted` for manual review rather than silently accepting the change.
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
-- **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which tickers return data for which endpoints) is handled by the daily data fetching pipeline.
-- **All columns as Utf8 for stocks/etfs:** Dates from the LISTING_STATUS CSV are kept as strings to preserve the exact API response. Indices/forex/crypto use `pl.Date` for date columns because the script sets them programmatically and needs date arithmetic for the 30-day threshold.
-- **Execution order matters:** `update_yield_status` depends on `stocks.parquet` existing, so `update_stocks_etfs` runs first.
+- **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which symbols return data for which endpoints) is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
+- **Date columns as pl.Date for stocks/etfs:** Date strings from the LISTING_STATUS CSV are cast to `pl.Date` on ingestion. This enables the same 30-day delistingDate arithmetic used by indices/forex/crypto.
+- **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs last.
 
 ## Folder structure
 
@@ -167,22 +169,20 @@ asset_catalog_service/
 ├── __init__.py
 ├── update_catalog.py              # Entry point / orchestrator
 ├── README.md
-├── updates/
-│   ├── __init__.py                # Re-exports all update functions
-│   ├── _common.py                 # Shared constants, HTTP helpers, update_simple_catalog
-│   ├── stocks_etfs.py             # stocks.parquet + etfs.parquet
-│   ├── indices.py                 # indices.parquet
-│   ├── forex.py                   # forex.parquet
-│   ├── cryptocurrencies.py        # cryptocurrencies.parquet
-│   ├── commodities.py             # commodities.parquet (static)
-│   ├── economic.py                # economic.parquet (static)
-│   ├── yield_status.py            # yield_status.parquet (init only)
-│   └── earnings_calendar.py       # earnings_calendar.parquet (always overwrite)
-└── tests/
-    ├── mock_catalog/              # Temp catalog dir used by tests
-    ├── test_init.py               # Tests initial catalog creation (no parquets exist)
-    └── test_daily.py              # Tests daily update logic (parquets already exist)
+└── updates/
+    ├── __init__.py                # Re-exports all update functions
+    ├── _common.py                 # Shared constants, HTTP helpers, update_simple_catalog
+    ├── stocks_etfs.py             # stocks.parquet + etfs.parquet
+    ├── indices.py                 # indices.parquet
+    ├── forex.py                   # forex.parquet
+    ├── cryptocurrencies.py        # cryptocurrencies.parquet
+    ├── commodities.py             # commodities.parquet (static)
+    ├── economic.py                # economic.parquet (static)
+    ├── yield_status.py            # yield_status.parquet (init only)
+    └── earnings_calendar.py       # earnings_calendar.parquet (always overwrite)
 ```
+
+Tests live in `tests/asset_catalog_service/` (see [tests/README.md](../tests/README.md)).
 
 ## Dependencies
 

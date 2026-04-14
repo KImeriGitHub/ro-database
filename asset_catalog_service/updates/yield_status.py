@@ -1,4 +1,4 @@
-"""Initialise yield_status.parquet from stocks.  No-op if it exists."""
+"""Initialise yield_status.parquet from all asset catalogs.  No-op if it exists."""
 
 import logging
 from datetime import date
@@ -10,6 +10,16 @@ from asset_catalog_service.updates._common import YIELD_ENDPOINTS
 
 logger = logging.getLogger(__name__)
 
+CATALOG_FILES = [
+    "stocks.parquet",
+    "etfs.parquet",
+    "forex.parquet",
+    "indices.parquet",
+    "cryptocurrencies.parquet",
+    "commodities.parquet",
+    "economic.parquet",
+]
+
 
 def update_yield_status(catalog_dir: Path) -> None:
     path = catalog_dir / "yield_status.parquet"
@@ -17,23 +27,29 @@ def update_yield_status(catalog_dir: Path) -> None:
         logger.info("yield_status.parquet exists, no changes needed")
         return
 
-    stocks_path = catalog_dir / "stocks.parquet"
-    if not stocks_path.exists():
-        logger.warning("Cannot init yield_status: stocks.parquet not found")
+    all_symbols = []
+    for fname in CATALOG_FILES:
+        fpath = catalog_dir / fname
+        if not fpath.exists():
+            logger.warning(f"Cannot include {fname} in yield_status: file not found")
+            continue
+        cat = pl.read_parquet(fpath)
+        all_symbols.extend(cat["symbol"].to_list())
+
+    if not all_symbols:
+        logger.warning("Cannot init yield_status: no catalog files found")
         return
 
-    stocks = pl.read_parquet(stocks_path)
-    symbols = stocks["symbol"].to_list()
     today = date.today()
 
-    data: dict = {"symbol": symbols}
+    data: dict = {"symbol": all_symbols}
     for ep in YIELD_ENDPOINTS:
-        data[ep] = [None] * len(symbols)
-    data["date"] = [today] * len(symbols)
+        data[ep] = [None] * len(all_symbols)
+    data["date"] = [today] * len(all_symbols)
 
     schema: dict = {"symbol": pl.Utf8}
     for ep in YIELD_ENDPOINTS:
-        schema[ep] = pl.Utf8
+        schema[ep] = pl.Boolean
     schema["date"] = pl.Date
 
     df = pl.DataFrame(data, schema=schema)

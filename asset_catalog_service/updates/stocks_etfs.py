@@ -2,6 +2,7 @@
 
 import io
 import logging
+from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -31,8 +32,22 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
     )
     combined = pl.concat([active_df, delisted_df], how="vertical_relaxed")
 
-    fresh_stocks = combined.filter(pl.col("assetType") == "Stock")
-    fresh_etfs = combined.filter(pl.col("assetType") == "ETF")
+    fresh_stocks = (
+        combined.filter(pl.col("assetType") == "Stock")
+        .with_columns(
+            pl.col("ipoDate").cast(pl.Date, strict=False),
+            pl.col("delistingDate").cast(pl.Date, strict=False),
+        )
+        .drop("assetType")
+    )
+    fresh_etfs = (
+        combined.filter(pl.col("assetType") == "ETF")
+        .with_columns(
+            pl.col("ipoDate").cast(pl.Date, strict=False),
+            pl.col("delistingDate").cast(pl.Date, strict=False),
+        )
+        .drop("assetType")
+    )
 
     stocks_exists = stocks_path.exists()
     etfs_exists = etfs_path.exists()
@@ -55,6 +70,8 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
 def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
     """Compare existing listing catalog with fresh data and apply changes."""
     existing = pl.read_parquet(path)
+    today = date.today()
+    one_month_ago = today - timedelta(days=30)
 
     existing_syms = set(existing["symbol"].to_list())
     fresh_syms = set(fresh["symbol"].to_list())
@@ -76,17 +93,54 @@ def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
                 f"| ipo={row['ipoDate']} | status={row['status']}"
             )
 
-    # 2. Vanished symbols -> Corrupted
+    # 2. Vanished symbols
     if vanished:
-        logger.info(f"{label}: {len(vanished)} vanished, marking Corrupted:")
-        for s in vanished:
-            logger.info(f"  ! {s}")
-        result = result.with_columns(
-            pl.when(pl.col("symbol").is_in(vanished))
-            .then(pl.lit("Corrupted"))
-            .otherwise(pl.col("status"))
-            .alias("status")
-        )
+        vanished_rows = result.filter(pl.col("symbol").is_in(vanished))
+
+        # 2a. No delistingDate yet -> set today + Corrupted
+        no_delist = vanished_rows.filter(
+            pl.col("delistingDate").is_null()
+        )["symbol"].to_list()
+
+        if no_delist:
+            logger.info(
+                f"{label}: {len(no_delist)} vanished without delistingDate, "
+                f"setting delistingDate={today}, status=Corrupted:"
+            )
+            for s in sorted(no_delist):
+                logger.info(f"  ! {s}")
+            result = result.with_columns(
+                pl.when(pl.col("symbol").is_in(no_delist))
+                .then(pl.lit(today))
+                .otherwise(pl.col("delistingDate"))
+                .alias("delistingDate"),
+                pl.when(pl.col("symbol").is_in(no_delist))
+                .then(pl.lit("Corrupted"))
+                .otherwise(pl.col("status"))
+                .alias("status"),
+            )
+
+        # 2b. Has delistingDate older than 30 days -> Delisted
+        has_delist = vanished_rows.filter(pl.col("delistingDate").is_not_null())
+        if has_delist.height > 0:
+            old = has_delist.filter(pl.col("delistingDate") < one_month_ago)
+            if old.height > 0:
+                old_syms = old["symbol"].to_list()
+                logger.info(
+                    f"{label}: {len(old_syms)} vanished > 30 days, "
+                    f"marking Delisted:"
+                )
+                for row in old.iter_rows(named=True):
+                    logger.info(
+                        f"  x {row['symbol']} "
+                        f"(delisted since {row['delistingDate']})"
+                    )
+                result = result.with_columns(
+                    pl.when(pl.col("symbol").is_in(old_syms))
+                    .then(pl.lit("Delisted"))
+                    .otherwise(pl.col("status"))
+                    .alias("status")
+                )
 
     # 3. Check common symbols for ipoDate / delistingDate changes
     if common:
