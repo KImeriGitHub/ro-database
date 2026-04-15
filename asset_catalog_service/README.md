@@ -1,18 +1,27 @@
 # Asset Catalog Service
 
-Manages all catalog parquet files that track the universe of tradeable assets and their lifecycle status. The script is the single entry point for both initial setup and daily maintenance of the catalog.
+Manages all catalog parquet files that track the universe of tradeable assets and their lifecycle status. Two entry points: `init_catalog.py` for first-time setup (optionally enhanced with FirstRate Data) and `update_catalog.py` for daily maintenance.
 
 ## When to run
 
-1. **Initial setup** - before historical data download. Creates all catalog parquet files from scratch.
-2. **Daily** - before the daily data fetching pipeline. Updates existing catalogs with changes (new listings, delistings, status changes).
-
-The script detects which mode to use based on whether the parquet files already exist.
+1. **Initial setup** (`init_catalog.py`) - before historical data download. Creates all catalog parquet files from scratch. Optionally incorporates FirstRate Data catalogs for survivorship bias-free coverage.
+2. **Daily** (`update_catalog.py`) - before the daily data fetching pipeline. Updates existing catalogs with changes (new listings, delistings, status changes). Does not use FirstRate Data.
 
 ## Usage
 
 ```bash
-# Default: writes to <project_root>/catalog/
+# Initial setup (AV only, ~10k OVERVIEW queries for stock sectors, ~3 hours)
+python asset_catalog_service/init_catalog.py
+
+# Initial setup with FirstRate Data
+python asset_catalog_service/init_catalog.py \
+    --stocks-dir /path/to/firstrate/stocks \
+    --etfs-dir /path/to/firstrate/etfs
+
+# Custom output directory
+python asset_catalog_service/init_catalog.py --catalog-dir /path/to/catalog
+
+# Daily update
 python asset_catalog_service/update_catalog.py
 
 # Custom output directory
@@ -22,29 +31,64 @@ python asset_catalog_service/update_catalog.py --catalog-dir /path/to/catalog
 Or import directly:
 
 ```python
+from asset_catalog_service.init_catalog import init_all
+init_all()
+
 from asset_catalog_service.update_catalog import update_all
 update_all()
 ```
 
 ## Catalog files
 
-### stocks.parquet / etfs.parquet
+### stocks.parquet
 
-**Source:** Alpha Vantage `LISTING_STATUS` (active + delisted).
+**Schema:** `symbol (Utf8), name (Utf8), sector (Utf8), ipoDate (Date), delistingDate (Date), status (Utf8)`.
 
-**Schema:** `symbol (Utf8), name (Utf8), exchange (Utf8), ipoDate (Date), delistingDate (Date), status (Utf8)`.
+**Source:** Alpha Vantage `LISTING_STATUS` (active + delisted) + `OVERVIEW` (sector). Optionally enhanced with FirstRate Data `catalog_stocks.csv`.
 
-**Init:** Query both `state=active` and `state=delisted`, combine, split by `assetType` into stocks and ETFs.
+**Init (`init_catalog.py`):**
+1. If FirstRate stock directory provided: load `catalog_stocks.csv`. Validate that the file exists and contains all required headers (`Ticker`, `Company Name`, `Sector`, `IPO Date`, `Status`). Abort if validation fails. Normalize sector values (see Sector Normalization).
+2. Query AV `LISTING_STATUS` (active + delisted), filter to stocks by `assetType`.
+3. Merge both sources. FirstRate data takes precedence for overlapping symbols.
+   - Log symbols present in FirstRate CSV but not in AV.
+   - Log symbols present in AV but not in FirstRate CSV.
+   - Log status disagreements for symbols present in both.
+4. For stock symbols still missing a sector after the merge: query `OVERVIEW` per symbol to get the sector. Normalize the sector value.
+5. If no FirstRate data provided: query AV `LISTING_STATUS` (2 calls) + `OVERVIEW` for every stock symbol (~10k+ API calls, ~3 hours at 75 calls/min).
 
-**Update logic:**
-- New symbols: appended, logged with full row details.
-- Vanished symbols (in catalog but not in fresh data):
+**Update (`update_catalog.py`):**
+- No FirstRate Data incorporation.
+- New symbols: appended. `OVERVIEW` queried for the new symbol's sector. Logged with full row details.
+- Missing keys (in catalog but gone from API):
   - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
   - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
 - `ipoDate` changed for an existing symbol: `status` set to `Corrupted` (data integrity concern).
 - `delistingDate` changed: updated to the new value and logged.
 
-**API calls:** 2 (active + delisted listing).
+### etfs.parquet
+
+**Schema:** `symbol (Utf8), name (Utf8), ipoDate (Date), delistingDate (Date), status (Utf8)`.
+
+**Source:** Alpha Vantage `LISTING_STATUS` (active + delisted). Optionally enhanced with FirstRate Data `catalog_etfs.csv`.
+
+**Init (`init_catalog.py`):**
+1. If FirstRate ETF directory provided: load `catalog_etfs.csv`. Validate that the file exists and contains all required headers (`Ticker`, `Name`, `IPO Date`, `Status`). Abort if validation fails.
+2. Query AV `LISTING_STATUS` (active + delisted), filter to ETFs by `assetType`.
+3. Merge both sources. FirstRate data takes precedence for overlapping symbols.
+   - Log symbols present in FirstRate CSV but not in AV.
+   - Log symbols present in AV but not in FirstRate CSV.
+   - Log status disagreements for symbols present in both.
+
+**Update (`update_catalog.py`):**
+- Same update logic as stocks (new symbols, vanished symbols, date changes) but no `OVERVIEW` query needed (ETFs have no sector).
+
+**API calls (stocks + ETFs combined):**
+
+| Scenario | Calls |
+|---|---|
+| Init with FirstRate Data (sectors covered by CSV) | 2 (`LISTING_STATUS`) + OVERVIEW only for symbols without sector from CSV |
+| Init without FirstRate Data | 2 (`LISTING_STATUS`) + ~10k (`OVERVIEW`) |
+| Daily update | 2 (`LISTING_STATUS`) + 1 `OVERVIEW` per new stock symbol |
 
 ### indices.parquet
 
@@ -135,44 +179,115 @@ Columns correspond to data endpoints. Stock-specific columns (`prices`, `prices_
 
 **API calls:** 1.
 
+## FirstRate Data requirements
+
+FirstRate Data catalogs are optional CSV files that provide survivorship bias-free coverage (including delisted securities). If provided to `init_catalog.py`, both the file and its required headers are validated before any processing begins. If either validation fails, the process aborts.
+
+### Stock catalog (`catalog_stocks.csv`)
+
+Must be located in the directory passed via `--stocks-dir`.
+
+**Required headers:** `Ticker`, `Company Name`, `Sector`, `IPO Date`, `Status`
+
+**Optional headers:** `Delisting Date` (and possibly others, which are ignored).
+
+Sector values are normalized to the standard sector list (see Sector Normalization). Empty or unrecognized values are mapped to `Other`.
+
+### ETF catalog (`catalog_etfs.csv`)
+
+Must be located in the directory passed via `--etfs-dir`.
+
+**Required headers:** `Ticker`, `Name`, `IPO Date`, `Status`
+
+**Optional headers:** `Delisting Date` (and possibly others, which are ignored).
+
+### Validation rules
+
+- If `--stocks-dir` is provided, `catalog_stocks.csv` must exist in that directory and contain all required headers.
+- If `--etfs-dir` is provided, `catalog_etfs.csv` must exist in that directory and contain all required headers.
+- If both directories are provided, both CSVs are validated before any processing starts. If either fails, the entire process aborts.
+- Neither directory is required. If neither is provided, `init_catalog.py` uses AV data only.
+
+## Sector normalization
+
+Both `init_catalog.py` and `update_catalog.py` normalize sector values to a canonical set. Sectors from different sources (FirstRate CSV, AV `OVERVIEW` response) use different casing and naming conventions.
+
+**Canonical sectors:**
+
+| Canonical | FirstRate CSV values | AV OVERVIEW values |
+|---|---|---|
+| Basic Materials | `Basic Materials` | `BASIC MATERIALS` |
+| Communication Services | `Communication Services` | `COMMUNICATION SERVICES` |
+| Consumer Cyclical | `Consumer Cyclical` | `CONSUMER CYCLICAL` |
+| Consumer Defensive | `Consumer Defensive` | `CONSUMER DEFENSIVE`, `CONSUMER STAPLES` |
+| Energy | `Energy` | `ENERGY` |
+| Financial Services | `Financial Services` | `FINANCIAL SERVICES`, `FINANCIALS` |
+| Healthcare | `Healthcare` | `HEALTHCARE` |
+| Industrials | `Industrials` | `INDUSTRIALS` |
+| Real Estate | `Real Estate` | `REAL ESTATE` |
+| Technology | `Technology` | `TECHNOLOGY` |
+| Utilities | `Utilities` | `UTILITIES` |
+| Other | empty, unrecognized | `null`, `NONE`, `OTHER`, unrecognized |
+
 ## Total API calls per run
+
+### init_catalog.py
 
 | Endpoint | Calls |
 |---|---|
 | LISTING_STATUS (active) | 1 |
 | LISTING_STATUS (delisted) | 1 |
+| OVERVIEW (per stock without sector) | variable (0 if FirstRate covers all, ~10k+ if no FirstRate) |
 | INDEX_CATALOG | 1 |
 | EARNINGS_CALENDAR | 1 |
-| **Total /query calls** | **4** |
+| **Total /query calls** | **4 + OVERVIEW calls** |
 | physical_currency_list (static) | 1 |
 | cryptocurrency_list (static) | 1 |
 
-The 4 `/query` calls count against the Alpha Vantage rate limit (~75 calls/min). The two static list URLs do not.
+### update_catalog.py
+
+| Endpoint | Calls |
+|---|---|
+| LISTING_STATUS (active) | 1 |
+| LISTING_STATUS (delisted) | 1 |
+| OVERVIEW (per new stock symbol) | variable (typically 0-few) |
+| INDEX_CATALOG | 1 |
+| EARNINGS_CALENDAR | 1 |
+| **Total /query calls** | **4 + OVERVIEW calls** |
+| physical_currency_list (static) | 1 |
+| cryptocurrency_list (static) | 1 |
 
 ## Error handling
 
 Each catalog update runs independently. If one step fails (network error, API rate limit, malformed response), the error is logged and the remaining catalogs still update. The `fetch_text` helper rejects responses that return JSON instead of CSV (common AV error pattern for rate-limited or invalid requests).
 
+**FirstRate validation errors are fatal.** If a provided directory is missing its expected CSV or required headers, the entire `init_catalog.py` process aborts before any API calls or writes.
+
 ## Design considerations
 
+- **Two scripts, two modes:** `init_catalog.py` is idempotent but expensive (especially without FirstRate Data). `update_catalog.py` is cheap and incremental. Separating them makes the cost explicit and prevents accidental re-initialization.
+- **FirstRate precedence:** When both sources provide data for the same symbol, FirstRate wins. This reflects that FirstRate Data is a curated, purchased dataset with better delisting coverage. Disagreements are logged for review.
+- **Sector via OVERVIEW:** The `LISTING_STATUS` endpoint does not return sector information. Sectors require a per-symbol `OVERVIEW` query. FirstRate Data provides sectors in bulk, avoiding thousands of API calls.
 - **Corrupted vs Delisted:** A missing symbol is first marked `Corrupted` (with today's date). Only after 30+ days of continuous absence does it become `Delisted`. This two-stage approach avoids prematurely marking symbols as delisted due to transient API issues.
 - **ipoDate as integrity signal:** If Alpha Vantage changes a stock's IPO date, this is a data integrity red flag. The symbol is marked `Corrupted` for manual review rather than silently accepting the change.
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
 - **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which symbols return data for which endpoints) is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
 - **Date columns as pl.Date for stocks/etfs:** Date strings from the LISTING_STATUS CSV are cast to `pl.Date` on ingestion. This enables the same 30-day delistingDate arithmetic used by indices/forex/crypto.
 - **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs after all asset catalogs but before `earnings_calendar`.
+- **Validate before work:** When FirstRate directories are provided, both CSVs are fully validated (existence + headers) before any API calls are made or data is written. This prevents partial state from a late validation failure.
 
 ## Folder structure
 
 ```
 asset_catalog_service/
 ├── __init__.py
-├── update_catalog.py              # Entry point / orchestrator
+├── init_catalog.py                # Initial setup orchestrator (FirstRate + AV)
+├── update_catalog.py              # Daily update orchestrator
 ├── README.md
 └── updates/
     ├── __init__.py                # Re-exports all update functions
-    ├── _common.py                 # Shared constants, HTTP helpers, update_simple_catalog
-    ├── stocks_etfs.py             # stocks.parquet + etfs.parquet
+    ├── _common.py                 # Shared constants, HTTP helpers, sector normalization
+    ├── stocks_etfs.py             # stocks.parquet + etfs.parquet (init + update)
     ├── indices.py                 # indices.parquet
     ├── forex.py                   # forex.parquet
     ├── cryptocurrencies.py        # cryptocurrencies.parquet

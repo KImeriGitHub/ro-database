@@ -1,4 +1,6 @@
+from asset_catalog_service.updates.stocks_etfs import init_stocks_etfs
 from asset_catalog_service.updates.stocks_etfs import update_stocks_etfs
+from asset_catalog_service.updates.stocks_etfs import validate_firstrate_csvs
 from asset_catalog_service.updates.indices import update_indices
 from asset_catalog_service.updates.forex import update_forex
 from asset_catalog_service.updates.cryptocurrencies import update_cryptocurrencies

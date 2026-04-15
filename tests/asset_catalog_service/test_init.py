@@ -13,7 +13,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from asset_catalog_service.updates import (
-    update_stocks_etfs,
+    init_stocks_etfs,
+    validate_firstrate_csvs,
     update_indices,
     update_forex,
     update_cryptocurrencies,
@@ -22,6 +23,7 @@ from asset_catalog_service.updates import (
     update_yield_status,
     update_earnings_calendar,
 )
+from asset_catalog_service.updates._common import normalize_sector
 
 MOCK_DIR = Path(__file__).parent / "mock_catalog"
 
@@ -62,6 +64,27 @@ EARNINGS_CSV = (
     "BAD,Bad Corp,not-a-date,2026-03-31,xyz,USD,BMS\n"
 )
 
+# OVERVIEW responses keyed by symbol
+OVERVIEW_RESPONSES = {
+    "AAPL": {"Sector": "TECHNOLOGY"},
+    "MSFT": {"Sector": "TECHNOLOGY"},
+    "OLD": {"Sector": "INDUSTRIALS"},
+}
+
+# FirstRate CSV content
+FIRSTRATE_STOCKS_CSV = (
+    "Ticker,Company Name,Sector,IPO Date,Delisting Date,Status\n"
+    "AAPL,Apple Inc,Technology,1980-12-12,,Active\n"
+    "MSFT,Microsoft Corp,Technology,1986-03-13,,Active\n"
+    "DEAD,Dead Corp,Energy,1995-01-01,2018-05-01,Delisted\n"
+)
+
+FIRSTRATE_ETFS_CSV = (
+    "Ticker,Name,IPO Date,Delisting Date,Status\n"
+    "SPY,SPDR S&P 500 ETF,1993-01-29,,Active\n"
+    "GONE,Gone ETF,2005-03-01,2019-12-31,Delisted\n"
+)
+
 
 @pytest.fixture(autouse=True)
 def clean_mock_dir():
@@ -74,14 +97,86 @@ def clean_mock_dir():
     MOCK_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ── Tests ─────────────────────────────────────────────────────────────
+# ── Sector normalization ─────────────────────────────────────────────
 
 
+def test_normalize_sector_canonical():
+    assert normalize_sector("Technology") == "Technology"
+    assert normalize_sector("TECHNOLOGY") == "Technology"
+
+
+def test_normalize_sector_aliases():
+    assert normalize_sector("CONSUMER STAPLES") == "Consumer Defensive"
+    assert normalize_sector("FINANCIALS") == "Financial Services"
+
+
+def test_normalize_sector_none_empty_unknown():
+    assert normalize_sector(None) == "Other"
+    assert normalize_sector("") == "Other"
+    assert normalize_sector("  ") == "Other"
+    assert normalize_sector("NONE") == "Other"
+    assert normalize_sector("OTHER") == "Other"
+    assert normalize_sector("Basket Weaving") == "Other"
+
+
+# ── FirstRate CSV validation ─────────────────────────────────────────
+
+
+def test_validate_firstrate_no_dirs():
+    """No dirs provided -> no error."""
+    validate_firstrate_csvs(None, None)
+
+
+def test_validate_firstrate_missing_csv():
+    """Dir exists but CSV not found -> ValueError."""
+    with pytest.raises(ValueError, match="catalog_stocks.csv not found"):
+        validate_firstrate_csvs(MOCK_DIR, None)
+
+
+def test_validate_firstrate_missing_headers():
+    """CSV exists but missing required columns -> ValueError."""
+    csv_path = MOCK_DIR / "catalog_stocks.csv"
+    csv_path.write_text("Ticker,Company Name\nAAPL,Apple\n")
+    with pytest.raises(ValueError, match="missing required headers"):
+        validate_firstrate_csvs(MOCK_DIR, None)
+
+
+def test_validate_firstrate_both_fail():
+    """Both dirs invalid -> ValueError mentions both."""
+    etf_dir = MOCK_DIR / "etfs"
+    etf_dir.mkdir()
+    with pytest.raises(ValueError) as exc_info:
+        validate_firstrate_csvs(MOCK_DIR, etf_dir)
+    msg = str(exc_info.value)
+    assert "catalog_stocks.csv" in msg
+    assert "catalog_etfs.csv" in msg
+
+
+def test_validate_firstrate_valid():
+    """Valid CSVs pass validation."""
+    stocks_dir = MOCK_DIR / "stocks"
+    stocks_dir.mkdir()
+    (stocks_dir / "catalog_stocks.csv").write_text(FIRSTRATE_STOCKS_CSV)
+
+    etfs_dir = MOCK_DIR / "etfs"
+    etfs_dir.mkdir()
+    (etfs_dir / "catalog_etfs.csv").write_text(FIRSTRATE_ETFS_CSV)
+
+    validate_firstrate_csvs(stocks_dir, etfs_dir)  # should not raise
+
+
+# ── Init stocks & ETFs (AV only) ────────────────────────────────────
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_json")
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
-def test_init_stocks_etfs(mock_fetch):
-    mock_fetch.side_effect = [LISTING_ACTIVE_CSV, LISTING_DELISTED_CSV]
+def test_init_stocks_etfs_av_only(mock_fetch_text, mock_fetch_json):
+    mock_fetch_text.side_effect = [LISTING_ACTIVE_CSV, LISTING_DELISTED_CSV]
+    mock_fetch_json.side_effect = lambda url: OVERVIEW_RESPONSES.get(
+        url.split("symbol=")[1].split("&")[0], {"Sector": None}
+    )
 
-    update_stocks_etfs("fake-key", MOCK_DIR)
+    init_stocks_etfs("fake-key", MOCK_DIR)
 
     stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
     etfs = pl.read_parquet(MOCK_DIR / "etfs.parquet")
@@ -90,10 +185,121 @@ def test_init_stocks_etfs(mock_fetch):
     assert etfs.height == 1  # SPY
     assert set(stocks["symbol"].to_list()) == {"AAPL", "MSFT", "OLD"}
     assert set(etfs["symbol"].to_list()) == {"SPY"}
+
+    # Schema: stocks have sector, no exchange
     assert set(stocks.columns) == {
-        "symbol", "name", "exchange",
+        "symbol", "name", "sector",
         "ipoDate", "delistingDate", "status",
     }
+    # Schema: etfs have no exchange, no sector
+    assert set(etfs.columns) == {
+        "symbol", "name",
+        "ipoDate", "delistingDate", "status",
+    }
+
+    # Sectors populated via OVERVIEW
+    aapl = stocks.filter(pl.col("symbol") == "AAPL")
+    assert aapl["sector"].to_list()[0] == "Technology"
+
+    old = stocks.filter(pl.col("symbol") == "OLD")
+    assert old["sector"].to_list()[0] == "Industrials"
+
+
+# ── Init stocks & ETFs with FirstRate ────────────────────────────────
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_json")
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_init_stocks_with_firstrate(mock_fetch_text, mock_fetch_json):
+    # Set up FirstRate dirs
+    stocks_dir = MOCK_DIR / "fr_stocks"
+    stocks_dir.mkdir()
+    (stocks_dir / "catalog_stocks.csv").write_text(FIRSTRATE_STOCKS_CSV)
+
+    etfs_dir = MOCK_DIR / "fr_etfs"
+    etfs_dir.mkdir()
+    (etfs_dir / "catalog_etfs.csv").write_text(FIRSTRATE_ETFS_CSV)
+
+    mock_fetch_text.side_effect = [LISTING_ACTIVE_CSV, LISTING_DELISTED_CSV]
+    # OVERVIEW only called for OLD (in AV but not in FirstRate, needs sector)
+    mock_fetch_json.return_value = {"Sector": "INDUSTRIALS"}
+
+    init_stocks_etfs("fake-key", MOCK_DIR, stocks_dir, etfs_dir)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    etfs = pl.read_parquet(MOCK_DIR / "etfs.parquet")
+
+    # DEAD from FirstRate + AAPL, MSFT, OLD
+    assert "DEAD" in stocks["symbol"].to_list()
+    assert stocks.height == 4
+
+    # GONE from FirstRate + SPY
+    assert "GONE" in etfs["symbol"].to_list()
+    assert etfs.height == 2
+
+    # FirstRate sectors preserved
+    aapl = stocks.filter(pl.col("symbol") == "AAPL")
+    assert aapl["sector"].to_list()[0] == "Technology"
+
+    dead = stocks.filter(pl.col("symbol") == "DEAD")
+    assert dead["sector"].to_list()[0] == "Energy"
+
+    # OLD only in AV -> sector from OVERVIEW
+    old = stocks.filter(pl.col("symbol") == "OLD")
+    assert old["sector"].to_list()[0] == "Industrials"
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_json")
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_init_firstrate_sector_normalization(mock_fetch_text, mock_fetch_json):
+    """Verify sector mapping: CSV value and AV OVERVIEW value both normalize."""
+    csv_content = (
+        "Ticker,Company Name,Sector,IPO Date,Status\n"
+        "A,Corp A,Consumer Defensive,2000-01-01,Active\n"
+        "B,Corp B,,2000-01-01,Active\n"
+    )
+    stocks_dir = MOCK_DIR / "fr_stocks"
+    stocks_dir.mkdir()
+    (stocks_dir / "catalog_stocks.csv").write_text(csv_content)
+
+    # AV has B and C
+    av_csv_active = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "B,Corp B,NYSE,Stock,2000-01-01,null,Active\n"
+        "C,Corp C,NYSE,Stock,2000-01-01,null,Active\n"
+    )
+    av_csv_delisted = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+    )
+    mock_fetch_text.side_effect = [av_csv_active, av_csv_delisted]
+
+    # OVERVIEW: B -> CONSUMER STAPLES, C -> FINANCIALS
+    def overview_side_effect(url):
+        if "symbol=B" in url:
+            return {"Sector": "CONSUMER STAPLES"}
+        if "symbol=C" in url:
+            return {"Sector": "FINANCIALS"}
+        return {"Sector": None}
+
+    mock_fetch_json.side_effect = overview_side_effect
+
+    init_stocks_etfs("fake-key", MOCK_DIR, stocks_dir)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+
+    a = stocks.filter(pl.col("symbol") == "A")
+    assert a["sector"].to_list()[0] == "Consumer Defensive"
+
+    # B: CSV has empty sector -> OVERVIEW returns CONSUMER STAPLES -> maps to Consumer Defensive
+    b = stocks.filter(pl.col("symbol") == "B")
+    assert b["sector"].to_list()[0] == "Consumer Defensive"
+
+    # C: AV only -> OVERVIEW returns FINANCIALS -> maps to Financial Services
+    c = stocks.filter(pl.col("symbol") == "C")
+    assert c["sector"].to_list()[0] == "Financial Services"
+
+
+# ── Other catalogs (unchanged) ───────────────────────────────────────
 
 
 @patch("asset_catalog_service.updates.indices.fetch_json")
@@ -152,11 +358,15 @@ def test_init_economic():
     assert all(s == "Active" for s in df["status"].to_list())
 
 
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_json")
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
-def test_init_yield_status(mock_fetch):
+def test_init_yield_status(mock_fetch_text, mock_fetch_json):
     # yield_status needs stocks.parquet first
-    mock_fetch.side_effect = [LISTING_ACTIVE_CSV, LISTING_DELISTED_CSV]
-    update_stocks_etfs("fake-key", MOCK_DIR)
+    mock_fetch_text.side_effect = [LISTING_ACTIVE_CSV, LISTING_DELISTED_CSV]
+    mock_fetch_json.side_effect = lambda url: OVERVIEW_RESPONSES.get(
+        url.split("symbol=")[1].split("&")[0], {"Sector": None}
+    )
+    init_stocks_etfs("fake-key", MOCK_DIR)
 
     update_yield_status(MOCK_DIR)
 

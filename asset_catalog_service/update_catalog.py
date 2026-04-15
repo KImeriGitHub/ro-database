@@ -1,9 +1,8 @@
 """
 Asset Catalog Service - update_catalog.py
 
-Manages all catalog parquet files.  Designed to run:
-  1. During initial historical data setup (no parquet files exist)
-  2. Daily before fetching new data (updates existing catalogs)
+Daily maintenance for all catalog parquet files.  Assumes catalogs already
+exist (run init_catalog.py first for initial setup).
 
 Usage:
     python update_catalog.py [--catalog-dir PATH]

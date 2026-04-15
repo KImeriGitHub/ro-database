@@ -1,21 +1,93 @@
-"""Create or update stocks.parquet and etfs.parquet from LISTING_STATUS."""
+"""Create or update stocks.parquet and etfs.parquet.
+
+Init (init_stocks_etfs): builds catalogs from AV LISTING_STATUS, optionally
+merged with FirstRate Data CSVs.  Sectors come from FirstRate CSV or AV
+OVERVIEW queries.
+
+Update (update_stocks_etfs): daily incremental update.  Queries OVERVIEW for
+any newly-appeared stock symbols to populate their sector.
+"""
 
 import io
 import logging
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
 
-from asset_catalog_service.updates._common import AV_BASE, fetch_text
+from asset_catalog_service.updates._common import (
+    AV_BASE,
+    fetch_json,
+    fetch_text,
+    normalize_sector,
+)
 
 logger = logging.getLogger(__name__)
 
+_STOCKS_REQUIRED_HEADERS = {"Ticker", "Company Name", "Sector", "IPO Date", "Status"}
+_ETFS_REQUIRED_HEADERS = {"Ticker", "Name", "IPO Date", "Status"}
 
-def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
-    stocks_path = catalog_dir / "stocks.parquet"
-    etfs_path = catalog_dir / "etfs.parquet"
+_RATE_BATCH = 73  # queries per minute (2 under limit for margin)
 
+# ── Validation ───────────────────────────────────────────────────────
+
+
+def validate_firstrate_csvs(
+    stocks_dir: Path | None, etfs_dir: Path | None
+) -> None:
+    """Validate that FirstRate CSVs exist and have required headers.
+
+    Both directories (if provided) are checked before raising, so the
+    caller sees all problems at once.  Raises ``ValueError`` on failure.
+    """
+    errors: list[str] = []
+
+    if stocks_dir is not None:
+        csv_path = stocks_dir / "catalog_stocks.csv"
+        if not csv_path.exists():
+            errors.append(f"catalog_stocks.csv not found in {stocks_dir}")
+        else:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                header_line = f.readline()
+            headers = {h.strip() for h in header_line.split(",")}
+            missing = _STOCKS_REQUIRED_HEADERS - headers
+            if missing:
+                errors.append(
+                    f"catalog_stocks.csv missing required headers: "
+                    f"{sorted(missing)}"
+                )
+
+    if etfs_dir is not None:
+        csv_path = etfs_dir / "catalog_etfs.csv"
+        if not csv_path.exists():
+            errors.append(f"catalog_etfs.csv not found in {etfs_dir}")
+        else:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                header_line = f.readline()
+            headers = {h.strip() for h in header_line.split(",")}
+            missing = _ETFS_REQUIRED_HEADERS - headers
+            if missing:
+                errors.append(
+                    f"catalog_etfs.csv missing required headers: "
+                    f"{sorted(missing)}"
+                )
+
+    if errors:
+        raise ValueError(
+            "FirstRate CSV validation failed:\n  " + "\n  ".join(errors)
+        )
+
+
+# ── AV helpers ───────────────────────────────────────────────────────
+
+
+def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Fetch LISTING_STATUS (active + delisted), return (stocks, etfs).
+
+    Returned DataFrames have columns: symbol, name, ipoDate, delistingDate,
+    status.  ``exchange`` and ``assetType`` are dropped.
+    """
     logger.info("Fetching LISTING_STATUS (active + delisted)...")
     active_csv = fetch_text(
         f"{AV_BASE}/query?function=LISTING_STATUS&state=active&apikey={api_key}"
@@ -32,46 +104,344 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
     )
     combined = pl.concat([active_df, delisted_df], how="vertical_relaxed")
 
-    fresh_stocks = (
+    stocks = (
         combined.filter(pl.col("assetType") == "Stock")
         .with_columns(
             pl.col("ipoDate").cast(pl.Date, strict=False),
             pl.col("delistingDate").cast(pl.Date, strict=False),
         )
-        .drop("assetType")
+        .select("symbol", "name", "ipoDate", "delistingDate", "status")
     )
-    fresh_etfs = (
+    etfs = (
         combined.filter(pl.col("assetType") == "ETF")
         .with_columns(
             pl.col("ipoDate").cast(pl.Date, strict=False),
             pl.col("delistingDate").cast(pl.Date, strict=False),
         )
-        .drop("assetType")
+        .select("symbol", "name", "ipoDate", "delistingDate", "status")
+    )
+    return stocks, etfs
+
+
+def _fetch_sector(api_key: str, symbol: str) -> str:
+    """Query AV OVERVIEW for a single symbol's sector."""
+    url = f"{AV_BASE}/query?function=OVERVIEW&symbol={symbol}&apikey={api_key}"
+    data = fetch_json(url)
+    raw = data.get("Sector")
+    return normalize_sector(raw)
+
+
+def _fetch_sectors_batch(
+    api_key: str, symbols: list[str]
+) -> dict[str, str]:
+    """Query OVERVIEW for each symbol, rate-limited to 74 calls/min."""
+    results: dict[str, str] = {}
+    total = len(symbols)
+    batch_start = time.monotonic()
+
+    for i, symbol in enumerate(symbols):
+        if i > 0 and i % _RATE_BATCH == 0:
+            elapsed = time.monotonic() - batch_start
+            if elapsed < 60:
+                sleep_time = 60 - elapsed + 0.1 # tiny buffer
+                logger.info(
+                    f"Rate limit pause: sleeping {sleep_time:.1f}s "
+                    f"({i}/{total} complete)"
+                )
+                time.sleep(sleep_time)
+            batch_start = time.monotonic()
+
+        try:
+            results[symbol] = _fetch_sector(api_key, symbol)
+        except Exception as e:
+            logger.warning(f"Error fetching {symbol}: {e}. Defaulting to Other.")
+            results[symbol] = "Other"
+
+        if i > 0 and i % 500 == 0:
+            logger.info(f"Sector fetch progress: {i}/{total}")
+
+    logger.info(f"Sector fetch complete: {total} symbols.")
+    return results
+
+
+# ── FirstRate loaders ────────────────────────────────────────────────
+
+
+def _load_firstrate_stocks(stocks_dir: Path) -> pl.DataFrame:
+    """Load and normalise catalog_stocks.csv from a FirstRate directory."""
+    csv_path = stocks_dir / "catalog_stocks.csv"
+    df = pl.read_csv(csv_path, infer_schema_length=0, null_values=[""])
+
+    # Trim header whitespace that FirstRate CSVs sometimes include
+    df = df.rename({c: c.strip() for c in df.columns})
+
+    rename_map = {
+        "Ticker": "symbol",
+        "Company Name": "name",
+        "Sector": "sector",
+        "IPO Date": "ipoDate",
+        "Status": "status",
+    }
+    select_cols = list(rename_map.values())
+    df = df.rename(rename_map)
+
+    if "Delisting Date" in df.columns:
+        df = df.rename({"Delisting Date": "delistingDate"})
+        select_cols.append("delistingDate")
+
+    df = df.select(select_cols)
+
+    # Normalise sector values
+    df = df.with_columns(
+        pl.col("sector").map_elements(normalize_sector, return_dtype=pl.Utf8)
     )
 
-    stocks_exists = stocks_path.exists()
-    etfs_exists = etfs_path.exists()
-
-    if stocks_exists != etfs_exists:
-        missing = "stocks.parquet" if not stocks_exists else "etfs.parquet"
-        present = "etfs.parquet" if not stocks_exists else "stocks.parquet"
-        logger.warning(f"{missing} missing but {present} exists - re-establishing both")
-
-    if not stocks_exists or not etfs_exists:
-        fresh_stocks.write_parquet(stocks_path, compression="zstd")
-        fresh_etfs.write_parquet(etfs_path, compression="zstd")
-        logger.info(f"Established stocks.parquet ({fresh_stocks.height} rows)")
-        logger.info(f"Established etfs.parquet ({fresh_etfs.height} rows)")
+    # Cast dates
+    df = df.with_columns(
+        pl.col("ipoDate").cast(pl.Date, strict=False),
+    )
+    if "delistingDate" in df.columns:
+        df = df.with_columns(
+            pl.col("delistingDate").cast(pl.Date, strict=False),
+        )
     else:
-        _update_listing("stocks", stocks_path, fresh_stocks)
-        _update_listing("etfs", etfs_path, fresh_etfs)
+        df = df.with_columns(
+            pl.lit(None).cast(pl.Date).alias("delistingDate"),
+        )
+
+    return df.select("symbol", "name", "sector", "ipoDate", "delistingDate", "status")
 
 
-def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
+def _load_firstrate_etfs(etfs_dir: Path) -> pl.DataFrame:
+    """Load and normalise catalog_etfs.csv from a FirstRate directory."""
+    csv_path = etfs_dir / "catalog_etfs.csv"
+    df = pl.read_csv(csv_path, infer_schema_length=0, null_values=[""])
+
+    df = df.rename({c: c.strip() for c in df.columns})
+
+    rename_map = {
+        "Ticker": "symbol",
+        "Name": "name",
+        "IPO Date": "ipoDate",
+        "Status": "status",
+    }
+    select_cols = list(rename_map.values())
+    df = df.rename(rename_map)
+
+    if "Delisting Date" in df.columns:
+        df = df.rename({"Delisting Date": "delistingDate"})
+        select_cols.append("delistingDate")
+
+    df = df.select(select_cols)
+
+    df = df.with_columns(
+        pl.col("ipoDate").cast(pl.Date, strict=False),
+    )
+    if "delistingDate" in df.columns:
+        df = df.with_columns(
+            pl.col("delistingDate").cast(pl.Date, strict=False),
+        )
+    else:
+        df = df.with_columns(
+            pl.lit(None).cast(pl.Date).alias("delistingDate"),
+        )
+
+    return df.select("symbol", "name", "ipoDate", "delistingDate", "status")
+
+
+# ── Merge logic ──────────────────────────────────────────────────────
+
+
+def _merge_stocks(
+    av: pl.DataFrame, fr: pl.DataFrame
+) -> pl.DataFrame:
+    """Merge AV and FirstRate stock listings.  FirstRate takes precedence."""
+    av_syms = set(av["symbol"].to_list())
+    fr_syms = set(fr["symbol"].to_list())
+
+    only_fr = sorted(fr_syms - av_syms)
+    only_av = sorted(av_syms - fr_syms)
+    common = sorted(av_syms & fr_syms)
+
+    if only_fr:
+        logger.info(
+            f"stocks: {len(only_fr)} symbols in FirstRate but not AV "
+            f"(first 10: {only_fr[:10]})"
+        )
+    if only_av:
+        logger.info(
+            f"stocks: {len(only_av)} symbols in AV but not FirstRate "
+            f"(first 10: {only_av[:10]})"
+        )
+
+    # Log status disagreements for common symbols
+    if common:
+        av_common = av.filter(pl.col("symbol").is_in(common)).select(
+            "symbol", pl.col("status").alias("_av_status")
+        )
+        fr_common = fr.filter(pl.col("symbol").is_in(common)).select(
+            "symbol", pl.col("status").alias("_fr_status")
+        )
+        merged = av_common.join(fr_common, on="symbol", how="inner")
+        disagree = merged.filter(pl.col("_av_status") != pl.col("_fr_status"))
+        if disagree.height > 0:
+            logger.info(
+                f"stocks: {disagree.height} status disagreements "
+                f"(FirstRate takes precedence):"
+            )
+            for row in disagree.iter_rows(named=True):
+                logger.info(
+                    f"  {row['symbol']}: "
+                    f"AV={row['_av_status']} vs FR={row['_fr_status']}"
+                )
+
+    # Build result: FirstRate rows for common + FR-only, AV rows for AV-only
+    fr_rows = fr  # all FirstRate symbols (covers common + FR-only)
+    av_only_rows = av.filter(pl.col("symbol").is_in(only_av))
+    # AV-only rows need a sector column
+    av_only_rows = av_only_rows.with_columns(
+        pl.lit(None).cast(pl.Utf8).alias("sector"),
+    ).select("symbol", "name", "sector", "ipoDate", "delistingDate", "status")
+
+    return pl.concat([fr_rows, av_only_rows], how="vertical_relaxed")
+
+
+def _merge_etfs(
+    av: pl.DataFrame, fr: pl.DataFrame
+) -> pl.DataFrame:
+    """Merge AV and FirstRate ETF listings.  FirstRate takes precedence."""
+    av_syms = set(av["symbol"].to_list())
+    fr_syms = set(fr["symbol"].to_list())
+
+    only_fr = sorted(fr_syms - av_syms)
+    only_av = sorted(av_syms - fr_syms)
+    common = sorted(av_syms & fr_syms)
+
+    if only_fr:
+        logger.info(
+            f"etfs: {len(only_fr)} symbols in FirstRate but not AV "
+            f"(first 10: {only_fr[:10]})"
+        )
+    if only_av:
+        logger.info(
+            f"etfs: {len(only_av)} symbols in AV but not FirstRate "
+            f"(first 10: {only_av[:10]})"
+        )
+
+    if common:
+        av_common = av.filter(pl.col("symbol").is_in(common)).select(
+            "symbol", pl.col("status").alias("_av_status")
+        )
+        fr_common = fr.filter(pl.col("symbol").is_in(common)).select(
+            "symbol", pl.col("status").alias("_fr_status")
+        )
+        merged = av_common.join(fr_common, on="symbol", how="inner")
+        disagree = merged.filter(pl.col("_av_status") != pl.col("_fr_status"))
+        if disagree.height > 0:
+            logger.info(
+                f"etfs: {disagree.height} status disagreements "
+                f"(FirstRate takes precedence):"
+            )
+            for row in disagree.iter_rows(named=True):
+                logger.info(
+                    f"  {row['symbol']}: "
+                    f"AV={row['_av_status']} vs FR={row['_fr_status']}"
+                )
+
+    fr_rows = fr
+    av_only_rows = av.filter(pl.col("symbol").is_in(only_av))
+
+    return pl.concat([fr_rows, av_only_rows], how="vertical_relaxed")
+
+
+# ── Init ─────────────────────────────────────────────────────────────
+
+
+def init_stocks_etfs(
+    api_key: str,
+    catalog_dir: Path,
+    stocks_dir: Path | None = None,
+    etfs_dir: Path | None = None,
+) -> None:
+    """Initial setup for stocks.parquet and etfs.parquet."""
+    stocks_path = catalog_dir / "stocks.parquet"
+    etfs_path = catalog_dir / "etfs.parquet"
+
+    av_stocks, av_etfs = _fetch_av_listings(api_key)
+
+    # ── stocks ──
+    if stocks_dir is not None:
+        fr_stocks = _load_firstrate_stocks(stocks_dir)
+        stocks = _merge_stocks(av_stocks, fr_stocks)
+    else:
+        stocks = av_stocks.with_columns(
+            pl.lit(None).cast(pl.Utf8).alias("sector"),
+        ).select("symbol", "name", "sector", "ipoDate", "delistingDate", "status")
+
+    # Query OVERVIEW for stocks still missing a sector
+    missing_sector = stocks.filter(pl.col("sector").is_null())["symbol"].to_list()
+    if missing_sector:
+        logger.info(
+            f"stocks: {len(missing_sector)} symbols need OVERVIEW for sector"
+        )
+        sectors = _fetch_sectors_batch(api_key, missing_sector)
+        sector_df = pl.DataFrame(
+            {"symbol": list(sectors.keys()), "_sector": list(sectors.values())}
+        )
+        stocks = (
+            stocks.join(sector_df, on="symbol", how="left")
+            .with_columns(
+                pl.coalesce("sector", "_sector").alias("sector"),
+            )
+            .drop("_sector")
+        )
+
+    stocks.write_parquet(stocks_path, compression="zstd")
+    logger.info(f"Established stocks.parquet ({stocks.height} rows)")
+
+    # ── etfs ──
+    if etfs_dir is not None:
+        fr_etfs = _load_firstrate_etfs(etfs_dir)
+        etfs = _merge_etfs(av_etfs, fr_etfs)
+    else:
+        etfs = av_etfs
+
+    etfs.write_parquet(etfs_path, compression="zstd")
+    logger.info(f"Established etfs.parquet ({etfs.height} rows)")
+
+
+# ── Update ───────────────────────────────────────────────────────────
+
+
+def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
+    """Daily update for stocks.parquet and etfs.parquet."""
+    stocks_path = catalog_dir / "stocks.parquet"
+    etfs_path = catalog_dir / "etfs.parquet"
+
+    if not stocks_path.exists() or not etfs_path.exists():
+        raise FileNotFoundError(
+            "stocks.parquet and/or etfs.parquet not found. "
+            "Run init_catalog.py first."
+        )
+
+    av_stocks, av_etfs = _fetch_av_listings(api_key)
+
+    _update_listing("stocks", stocks_path, av_stocks, api_key)
+    _update_listing("etfs", etfs_path, av_etfs, None)
+
+
+def _update_listing(
+    label: str,
+    path: Path,
+    fresh: pl.DataFrame,
+    api_key: str | None,
+) -> None:
     """Compare existing listing catalog with fresh data and apply changes."""
     existing = pl.read_parquet(path)
     today = date.today()
     one_month_ago = today - timedelta(days=30)
+
+    has_sector = "sector" in existing.columns
 
     existing_syms = set(existing["symbol"].to_list())
     fresh_syms = set(fresh["symbol"].to_list())
@@ -85,11 +455,28 @@ def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
     # 1. New symbols
     if added:
         new_rows = fresh.filter(pl.col("symbol").is_in(added))
+
+        if has_sector and api_key is not None:
+            # Fetch sector for each new stock symbol
+            sectors = {sym: _fetch_sector(api_key, sym) for sym in added}
+            sector_df = pl.DataFrame(
+                {"symbol": list(sectors.keys()), "sector": list(sectors.values())}
+            )
+            new_rows = new_rows.join(sector_df, on="symbol", how="left")
+        elif has_sector:
+            new_rows = new_rows.with_columns(
+                pl.lit("Other").alias("sector"),
+            )
+
+        # Ensure column order matches existing
+        new_rows = new_rows.select(existing.columns)
         result = pl.concat([result, new_rows], how="vertical_relaxed")
+
         logger.info(f"{label}: {len(added)} new entries:")
         for row in new_rows.iter_rows(named=True):
+            sector_part = f" | sector={row['sector']}" if has_sector else ""
             logger.info(
-                f"  + {row['symbol']} | {row['name']} | {row['exchange']} "
+                f"  + {row['symbol']} | {row['name']}{sector_part} "
                 f"| ipo={row['ipoDate']} | status={row['status']}"
             )
 
@@ -154,7 +541,7 @@ def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
             .join(fresh_common, on="symbol", how="left")
         )
 
-        # 3a. ipoDate changed -> Corrupted
+        # 3a. ipoDate changed (both non-null) -> Corrupted
         ipo_changed = merged.filter(
             pl.col("ipoDate").is_not_null()
             & pl.col("_ipo_new").is_not_null()
@@ -174,6 +561,34 @@ def _update_listing(label: str, path: Path, fresh: pl.DataFrame) -> None:
                 .then(pl.lit("Corrupted"))
                 .otherwise(pl.col("status"))
                 .alias("status")
+            )
+
+        # 3a2. ipoDate was null, now has a value -> update it
+        ipo_filled = merged.filter(
+            pl.col("ipoDate").is_null()
+            & pl.col("_ipo_new").is_not_null()
+        )
+        if ipo_filled.height > 0:
+            filled_syms = ipo_filled["symbol"].to_list()
+            logger.info(
+                f"{label}: {len(filled_syms)} ipoDate filled from null:"
+            )
+            for row in ipo_filled.iter_rows(named=True):
+                logger.info(
+                    f"  ~ {row['symbol']}: null -> {row['_ipo_new']}"
+                )
+            ipo_updates = ipo_filled.select(
+                "symbol", pl.col("_ipo_new").alias("_ipo_upd")
+            )
+            result = (
+                result.join(ipo_updates, on="symbol", how="left")
+                .with_columns(
+                    pl.when(pl.col("_ipo_upd").is_not_null())
+                    .then(pl.col("_ipo_upd"))
+                    .otherwise(pl.col("ipoDate"))
+                    .alias("ipoDate")
+                )
+                .drop("_ipo_upd")
             )
 
         # 3b. delistingDate changed -> update value

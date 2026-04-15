@@ -43,17 +43,29 @@ def _seed_simple_catalog(filename: str, symbols: list[str], names: list[str]):
     df.write_parquet(MOCK_DIR / filename, compression="zstd")
 
 
-def _seed_listing(filename: str, rows: list[dict]):
-    """Write a stocks/etfs parquet with the 6-col schema."""
+def _seed_stocks(rows: list[dict]):
+    """Write a stocks parquet with the 6-col schema (includes sector)."""
     df = pl.DataFrame(rows, schema={
         "symbol": pl.Utf8,
         "name": pl.Utf8,
-        "exchange": pl.Utf8,
+        "sector": pl.Utf8,
         "ipoDate": pl.Date,
         "delistingDate": pl.Date,
         "status": pl.Utf8,
     })
-    df.write_parquet(MOCK_DIR / filename, compression="zstd")
+    df.write_parquet(MOCK_DIR / "stocks.parquet", compression="zstd")
+
+
+def _seed_etfs(rows: list[dict]):
+    """Write an etfs parquet with the 5-col schema (no exchange, no sector)."""
+    df = pl.DataFrame(rows, schema={
+        "symbol": pl.Utf8,
+        "name": pl.Utf8,
+        "ipoDate": pl.Date,
+        "delistingDate": pl.Date,
+        "status": pl.Utf8,
+    })
+    df.write_parquet(MOCK_DIR / "etfs.parquet", compression="zstd")
 
 
 @pytest.fixture(autouse=True)
@@ -69,14 +81,14 @@ def clean_mock_dir():
 # ── stocks & ETFs daily ──────────────────────────────────────────────
 
 STOCKS_SEED = [
-    {"symbol": "AAPL", "name": "Apple Inc", "exchange": "NASDAQ",
+    {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
      "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
-    {"symbol": "MSFT", "name": "Microsoft Corp", "exchange": "NASDAQ",
+    {"symbol": "MSFT", "name": "Microsoft Corp", "sector": "Technology",
      "ipoDate": date(1986, 3, 13), "delistingDate": None, "status": "Active"},
 ]
 
 ETFS_SEED = [
-    {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "exchange": "NYSE",
+    {"symbol": "SPY", "name": "SPDR S&P 500 ETF",
      "ipoDate": date(1993, 1, 29), "delistingDate": None, "status": "Active"},
 ]
 
@@ -92,31 +104,38 @@ DAILY_DELISTED_CSV = (
 )
 
 
+@patch("asset_catalog_service.updates.stocks_etfs._fetch_sector")
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
-def test_daily_stocks_new_and_vanished(mock_fetch):
-    _seed_listing("stocks.parquet", STOCKS_SEED)
-    _seed_listing("etfs.parquet", ETFS_SEED)
+def test_daily_stocks_new_and_vanished(mock_fetch_text, mock_fetch_sector):
+    _seed_stocks(STOCKS_SEED)
+    _seed_etfs(ETFS_SEED)
 
-    mock_fetch.side_effect = [DAILY_ACTIVE_CSV, DAILY_DELISTED_CSV]
+    mock_fetch_text.side_effect = [DAILY_ACTIVE_CSV, DAILY_DELISTED_CSV]
+    mock_fetch_sector.return_value = "Communication Services"
+
     update_stocks_etfs("fake-key", MOCK_DIR)
 
     stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
     symbols = set(stocks["symbol"].to_list())
 
-    # GOOG added
+    # GOOG added with sector from OVERVIEW
     assert "GOOG" in symbols
+    goog = stocks.filter(pl.col("symbol") == "GOOG")
+    assert goog["sector"].to_list()[0] == "Communication Services"
+
     # MSFT vanished -> Corrupted
     msft = stocks.filter(pl.col("symbol") == "MSFT")
     assert msft["status"].to_list()[0] == "Corrupted"
+
     # AAPL ipoDate changed -> Corrupted
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
     assert aapl["status"].to_list()[0] == "Corrupted"
 
 
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
-def test_daily_stocks_delisting_date_change(mock_fetch):
-    _seed_listing("stocks.parquet", STOCKS_SEED)
-    _seed_listing("etfs.parquet", ETFS_SEED)
+def test_daily_stocks_delisting_date_change(mock_fetch_text):
+    _seed_stocks(STOCKS_SEED)
+    _seed_etfs(ETFS_SEED)
 
     # Fresh: AAPL now has a delistingDate
     csv = (
@@ -125,12 +144,70 @@ def test_daily_stocks_delisting_date_change(mock_fetch):
         "MSFT,Microsoft Corp,NASDAQ,Stock,1986-03-13,null,Active\n"
         "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
     )
-    mock_fetch.side_effect = [csv, DAILY_DELISTED_CSV]
+    mock_fetch_text.side_effect = [csv, DAILY_DELISTED_CSV]
     update_stocks_etfs("fake-key", MOCK_DIR)
 
     stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
     assert aapl["delistingDate"].to_list()[0] == date(2026, 4, 1)
+
+
+@patch("asset_catalog_service.updates.stocks_etfs._fetch_sector")
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_new_stock_gets_sector(mock_fetch_text, mock_fetch_sector):
+    """New stock symbol during daily update gets its sector from OVERVIEW."""
+    _seed_stocks(STOCKS_SEED)
+    _seed_etfs(ETFS_SEED)
+
+    csv_active = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "MSFT,Microsoft Corp,NASDAQ,Stock,1986-03-13,null,Active\n"
+        "NVDA,NVIDIA Corp,NASDAQ,Stock,1999-01-22,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [csv_active, DAILY_DELISTED_CSV]
+    mock_fetch_sector.return_value = "Technology"
+
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    nvda = stocks.filter(pl.col("symbol") == "NVDA")
+    assert nvda.height == 1
+    assert nvda["sector"].to_list()[0] == "Technology"
+
+    # Verify OVERVIEW was called for NVDA
+    mock_fetch_sector.assert_called_once_with("fake-key", "NVDA")
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_stocks_ipo_null_to_value(mock_fetch_text):
+    """ipoDate going from null to a value should update it, not mark Corrupted."""
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": None, "delistingDate": None, "status": "Active"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    aapl = stocks.filter(pl.col("symbol") == "AAPL")
+    assert aapl["ipoDate"].to_list()[0] == date(1980, 12, 12)
+    assert aapl["status"].to_list()[0] == "Active"  # not Corrupted
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_update_missing_parquets(mock_fetch_text):
+    """update_stocks_etfs raises if parquets don't exist."""
+    with pytest.raises(FileNotFoundError, match="Run init_catalog.py first"):
+        update_stocks_etfs("fake-key", MOCK_DIR)
 
 
 # ── indices daily ─────────────────────────────────────────────────────
@@ -242,8 +319,9 @@ def test_daily_economic_noop():
 # ── yield_status is no-op on second run ───────────────────────────────
 
 
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_json")
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
-def test_daily_yield_status_noop(mock_fetch):
+def test_daily_yield_status_noop(mock_fetch_text, mock_fetch_json):
     seed_csv_active = (
         "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
         "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
@@ -251,8 +329,11 @@ def test_daily_yield_status_noop(mock_fetch):
     seed_csv_delisted = (
         "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
     )
-    mock_fetch.side_effect = [seed_csv_active, seed_csv_delisted]
-    update_stocks_etfs("fake-key", MOCK_DIR)
+    mock_fetch_text.side_effect = [seed_csv_active, seed_csv_delisted]
+    mock_fetch_json.return_value = {"Sector": "TECHNOLOGY"}
+
+    from asset_catalog_service.updates import init_stocks_etfs
+    init_stocks_etfs("fake-key", MOCK_DIR)
     update_yield_status(MOCK_DIR)
     df1 = pl.read_parquet(MOCK_DIR / "yield_status.parquet")
 

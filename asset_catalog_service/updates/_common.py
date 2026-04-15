@@ -45,6 +45,60 @@ ECONOMIC_ENTRIES = {
     "NONFARM_PAYROLL": "Nonfarm Payroll",
 }
 
+CANONICAL_SECTORS = [
+    "Basic Materials",
+    "Communication Services",
+    "Consumer Cyclical",
+    "Consumer Defensive",
+    "Energy",
+    "Financial Services",
+    "Healthcare",
+    "Industrials",
+    "Real Estate",
+    "Technology",
+    "Utilities",
+    "Other",
+]
+
+# Maps AV OVERVIEW values (uppercase) and FirstRate CSV values (title case)
+# to canonical sector names.
+_SECTOR_MAP = {
+    "BASIC MATERIALS": "Basic Materials",
+    "COMMUNICATION SERVICES": "Communication Services",
+    "CONSUMER CYCLICAL": "Consumer Cyclical",
+    "CONSUMER DEFENSIVE": "Consumer Defensive",
+    "CONSUMER STAPLES": "Consumer Defensive",
+    "ENERGY": "Energy",
+    "FINANCIAL SERVICES": "Financial Services",
+    "FINANCIALS": "Financial Services",
+    "HEALTHCARE": "Healthcare",
+    "INDUSTRIALS": "Industrials",
+    "REAL ESTATE": "Real Estate",
+    "TECHNOLOGY": "Technology",
+    "UTILITIES": "Utilities",
+    "NONE": "Other",
+    "OTHER": "Other",
+    "Basic Materials": "Basic Materials",
+    "Communication Services": "Communication Services",
+    "Consumer Cyclical": "Consumer Cyclical",
+    "Consumer Defensive": "Consumer Defensive",
+    "Energy": "Energy",
+    "Financial Services": "Financial Services",
+    "Healthcare": "Healthcare",
+    "Industrials": "Industrials",
+    "Real Estate": "Real Estate",
+    "Technology": "Technology",
+    "Utilities": "Utilities",
+}
+
+
+def normalize_sector(raw: str | None) -> str:
+    """Map a raw sector string to a canonical sector name."""
+    if raw is None or raw.strip() == "":
+        return "Other"
+    return _SECTOR_MAP.get(raw.strip(), "Other")
+
+
 YIELD_ENDPOINTS = [
     "prices",
     "prices_daily",
