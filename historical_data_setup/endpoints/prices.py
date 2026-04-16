@@ -11,6 +11,7 @@ from historical_data_setup._common import (
     IssueTracker,
     RateLimiter,
     fetch_av_json,
+    frd_csv_path,
     generate_months,
     read_catalog_symbols,
     validate_meta_data,
@@ -28,6 +29,7 @@ def fetch_intraday_prices(
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
+    frd_dir: Path | None = None,
 ) -> None:
     """Download intraday 1-min price data for all symbols of the given asset type."""
     catalog = read_catalog_symbols(catalog_dir, asset_type)
@@ -44,6 +46,60 @@ def fetch_intraday_prices(
         if out_path.exists():
             continue
 
+        # --- FirstRate Data path ---
+        frd_path = frd_csv_path(frd_dir, symbol, "1min")
+        if frd_path is not None:
+            logger.info(f"[{idx}/{total}] {symbol}: loading from FRD")
+            try:
+                raw = pl.read_csv(frd_path, infer_schema_length=0)
+                raw = raw.rename({c: c.strip() for c in raw.columns})
+                raw = raw.rename({
+                    "timestamp": "Date",
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume",
+                })
+                raw = raw.select("Date", "Open", "High", "Low", "Close", "Volume")
+
+                raw = raw.with_columns(
+                    pl.col("Date").str.to_datetime("%Y-%m-%d %H:%M:%S"),
+                )
+                df = raw.cast({
+                    "Open": pl.Float32,
+                    "High": pl.Float32,
+                    "Low": pl.Float32,
+                    "Close": pl.Float32,
+                    "Volume": pl.Float32,
+                }, strict=False).sort("Date")
+
+                # Count nulls introduced by casting (excluding Date)
+                cast_failures = 0
+                for col in ("Open", "High", "Low", "Close", "Volume"):
+                    cast_failures += df[col].null_count()
+
+                if cast_failures > 0:
+                    issue_tracker.record(
+                        symbol, asset_type, "prices",
+                        "cast_failure",
+                        f"FRD: {cast_failures} null values across OHLCV after casting",
+                    )
+
+                df.write_parquet(out_path, compression="zstd")
+                logger.info(
+                    f"  {symbol}: saved {df.height} rows from FRD"
+                    f" ({cast_failures} cast failures)"
+                )
+                del raw, df
+            except Exception as e:
+                issue_tracker.record(
+                    symbol, asset_type, "prices",
+                    "structure_error", f"FRD load failed: {e}",
+                )
+            continue
+
+        # --- Alpha Vantage path ---
         months = generate_months(row["ipoDate"], row["delistingDate"])
         if not months:
             logger.info(f"[{idx}/{total}] {symbol}: no months to fetch, skipping")

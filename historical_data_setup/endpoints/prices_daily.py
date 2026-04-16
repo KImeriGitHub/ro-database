@@ -11,6 +11,7 @@ from historical_data_setup._common import (
     IssueTracker,
     RateLimiter,
     fetch_av_json,
+    frd_csv_path,
     read_catalog_symbols,
     validate_meta_data,
 )
@@ -20,6 +21,31 @@ logger = logging.getLogger(__name__)
 _TS_KEY = "Time Series (Daily)"
 
 
+def _read_frd_daily_csv(path: Path) -> pl.DataFrame:
+    """Read a FRD daily CSV into a DataFrame with Date and Float64 OHLCV."""
+    raw = pl.read_csv(path, infer_schema_length=0)
+    raw = raw.rename({c: c.strip() for c in raw.columns})
+    return (
+        raw.rename({
+            "timestamp": "Date",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+        })
+        .select("Date", "open", "high", "low", "close", "volume")
+        .with_columns(pl.col("Date").str.to_date("%Y-%m-%d"))
+        .cast({
+            "open": pl.Float64,
+            "high": pl.Float64,
+            "low": pl.Float64,
+            "close": pl.Float64,
+            "volume": pl.Float64,
+        }, strict=False)
+    )
+
+
 def fetch_daily_prices(
     catalog_dir: Path,
     historical_dir: Path,
@@ -27,6 +53,7 @@ def fetch_daily_prices(
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
+    frd_dir: Path | None = None,
 ) -> None:
     """Download daily adjusted price data for all symbols of the given asset type."""
     catalog = read_catalog_symbols(catalog_dir, asset_type)
@@ -43,6 +70,111 @@ def fetch_daily_prices(
         if out_path.exists():
             continue
 
+        # --- FirstRate Data path ---
+        unadj_path = frd_csv_path(frd_dir, symbol, "1day_unadjusted")
+        sa_path = frd_csv_path(frd_dir, symbol, "1day_splitadjusted")
+        sda_path = frd_csv_path(frd_dir, symbol, "1day_splitdivadjusted")
+
+        if unadj_path and sa_path and sda_path:
+            logger.info(f"[{idx}/{total}] {symbol}: loading from FRD")
+            try:
+                unadj = _read_frd_daily_csv(unadj_path)
+                sa = _read_frd_daily_csv(sa_path)
+                sda = _read_frd_daily_csv(sda_path)
+
+                # Join on Date (inner) -- only keep rows present in all 3
+                combined = (
+                    unadj.select("Date", "open", "high", "low", "close", "volume")
+                    .rename({
+                        "open": "Open", "high": "High", "low": "Low",
+                        "close": "Close", "volume": "Volume",
+                    })
+                    .join(
+                        sa.select("Date", pl.col("close").alias("sa_close")),
+                        on="Date", how="inner",
+                    )
+                    .join(
+                        sda.select("Date", pl.col("close").alias("sda_close")),
+                        on="Date", how="inner",
+                    )
+                    .sort("Date")
+                )
+                del unadj, sa, sda
+
+                # Derive SplitCoefficient:
+                #   cumul_split(t) = Close(t) / sa_close(t)
+                #   split_coeff(t) = cumul_split(t-1) / cumul_split(t)
+                combined = combined.with_columns(
+                    (pl.col("Close") / pl.col("sa_close")).alias("_cumul_split"),
+                )
+                combined = combined.with_columns(
+                    (pl.col("_cumul_split").shift(1) / pl.col("_cumul_split"))
+                    .fill_null(1.0)
+                    .alias("SplitCoefficient"),
+                )
+
+                # Derive DividendAmount (actual cash, matching AV):
+                #   ratio(t) = sda_close(t) / sa_close(t)
+                #   div_factor_change(t) = ratio(t-1) / ratio(t)
+                #   derived_div(t) = sa_close(t-1) * (1 - div_factor_change(t))
+                #   DividendAmount(t) = derived_div(t) * cumul_split(t-1)
+                combined = combined.with_columns(
+                    (pl.col("sda_close") / pl.col("sa_close")).alias("_ratio"),
+                )
+                combined = combined.with_columns(
+                    (pl.col("_ratio").shift(1) / pl.col("_ratio")).alias("_div_factor"),
+                )
+                combined = combined.with_columns(
+                    (
+                        pl.col("sa_close").shift(1)
+                        * (1.0 - pl.col("_div_factor"))
+                        * pl.col("_cumul_split").shift(1)
+                    )
+                    .fill_null(0.0)
+                    .alias("DividendAmount"),
+                )
+
+                # Count cast failures (nulls in source OHLCV columns)
+                cast_failures = 0
+                for col in ("Open", "High", "Low", "Close", "Volume"):
+                    cast_failures += combined[col].null_count()
+
+                if cast_failures > 0:
+                    issue_tracker.record(
+                        symbol, asset_type, "prices_daily",
+                        "cast_failure",
+                        f"FRD: {cast_failures} null values across OHLCV after casting",
+                    )
+
+                df = (
+                    combined.select(
+                        "Date", "Open", "High", "Low", "Close", "Volume",
+                        "DividendAmount", "SplitCoefficient",
+                    )
+                    .cast({
+                        "Open": pl.Float32,
+                        "High": pl.Float32,
+                        "Low": pl.Float32,
+                        "Close": pl.Float32,
+                        "Volume": pl.Float32,
+                        "DividendAmount": pl.Float32,
+                        "SplitCoefficient": pl.Float32,
+                    }, strict=False)
+                )
+                df.write_parquet(out_path, compression="zstd")
+                logger.info(
+                    f"  {symbol}: saved {df.height} rows from FRD"
+                    f" ({cast_failures} cast failures)"
+                )
+                del combined, df
+            except Exception as e:
+                issue_tracker.record(
+                    symbol, asset_type, "prices_daily",
+                    "structure_error", f"FRD load failed: {e}",
+                )
+            continue
+
+        # --- Alpha Vantage path ---
         logger.info(f"[{idx}/{total}] {symbol}")
 
         url = (
