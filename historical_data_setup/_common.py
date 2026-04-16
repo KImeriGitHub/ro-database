@@ -206,6 +206,25 @@ class IssueTracker:
 
 
 # ---------------------------------------------------------------------------
+# FirstRate Data CSV helpers
+# ---------------------------------------------------------------------------
+
+
+def frd_csv_path(frd_dir: Path | None, symbol: str, suffix: str) -> Path | None:
+    """Return ``frd_dir/{symbol}_{suffix}.csv`` if it exists, else ``None``.
+
+    Lightweight per-symbol check -- no upfront directory scan.
+    *suffix* is e.g. ``"1min"``, ``"1day_unadjusted"``.
+    """
+    if frd_dir is None:
+        return None
+    path = frd_dir / f"{symbol}_{suffix}.csv"
+    if path.exists():
+        return path
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Response validation helpers
 # ---------------------------------------------------------------------------
 

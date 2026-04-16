@@ -80,6 +80,8 @@ def run_historical_setup(
     asset_types: list[str] | None = None,
     endpoints: list[str] | None = None,
     api_tier: str = "premium",
+    stocks_dir: Path | None = None,
+    etfs_dir: Path | None = None,
 ) -> None:
     """Orchestrate the historical data download."""
     project_root = Path(__file__).resolve().parent.parent
@@ -112,6 +114,15 @@ def run_historical_setup(
 
             label = f"{ep_name} ({asset_type})"
             logger.info(f"--- Starting {label} ---")
+
+            # Pass FRD directory to price endpoints
+            extra_kwargs: dict = {}
+            if ep_name in ("prices", "prices_daily"):
+                if asset_type == "stocks":
+                    extra_kwargs["frd_dir"] = stocks_dir
+                elif asset_type == "etfs":
+                    extra_kwargs["frd_dir"] = etfs_dir
+
             try:
                 func(
                     catalog_dir=catalog_dir,
@@ -120,6 +131,7 @@ def run_historical_setup(
                     rate_limiter=rate_limiter,
                     issue_tracker=issue_tracker,
                     asset_type=asset_type,
+                    **extra_kwargs,
                 )
             except Exception:
                 logger.exception(f"Failed: {label}")
@@ -158,6 +170,14 @@ if __name__ == "__main__":
         choices=("standard", "premium"),
         help="API key tier (default: premium)",
     )
+    parser.add_argument(
+        "--stocks-dir", type=Path, default=None,
+        help="FirstRate Data stocks directory (flat folder with per-symbol CSVs)",
+    )
+    parser.add_argument(
+        "--etfs-dir", type=Path, default=None,
+        help="FirstRate Data ETFs directory (flat folder with per-symbol CSVs)",
+    )
     args = parser.parse_args()
 
     run_historical_setup(
@@ -166,4 +186,6 @@ if __name__ == "__main__":
         asset_types=args.asset_types,
         endpoints=args.endpoints,
         api_tier=args.api_tier,
+        stocks_dir=args.stocks_dir,
+        etfs_dir=args.etfs_dir,
     )

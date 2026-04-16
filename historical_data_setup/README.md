@@ -65,6 +65,60 @@ python historical_data_setup/setup_historical.py --api-tier standard
 python historical_data_setup/setup_historical.py --catalog-dir /path/to/catalog --historical-dir /path/to/historical
 ```
 
+## FirstRate Data integration
+
+When `--stocks-dir` and/or `--etfs-dir` are provided, the pipeline loads `prices/` and `prices_daily/` data from FirstRate Data CSVs instead of Alpha Vantage. Symbols not covered by FirstRate Data fall back to AV automatically. The two endpoints are independent -- a symbol can use FRD for one and AV for the other.
+
+### Expected directory structure
+
+Each FRD directory (stocks or ETFs) is a **flat folder** containing per-symbol CSV files. No subdirectories.
+
+### File naming
+
+For each symbol, up to four CSV files may be present:
+
+| File | Used by | Description |
+|------|---------|-------------|
+| `{SYMBOL}_1min.csv` | `prices/` | 1-minute intraday bars (unadjusted) |
+| `{SYMBOL}_1day_unadjusted.csv` | `prices_daily/` | Daily bars, no adjustments |
+| `{SYMBOL}_1day_splitadjusted.csv` | `prices_daily/` | Daily bars, split-adjusted |
+| `{SYMBOL}_1day_splitdivadjusted.csv` | `prices_daily/` | Daily bars, split- and dividend-adjusted |
+
+For `prices/`, only `{SYMBOL}_1min.csv` is required. For `prices_daily/`, all three daily files (`_1day_unadjusted`, `_1day_splitadjusted`, `_1day_splitdivadjusted`) must be present; if any is missing the symbol falls back to AV.
+
+### CSV header
+
+All files must have the header:
+
+```
+timestamp,open,high,low,close,volume
+```
+
+### Timestamp formats
+
+- **1-min files:** `YYYY-MM-DD HH:MM:SS` (e.g. `2026-03-16 04:03:00`)
+- **Daily files:** `YYYY-MM-DD` (e.g. `2026-03-16`)
+
+### SplitCoefficient and DividendAmount derivation
+
+`SplitCoefficient` and `DividendAmount` are not present in FRD CSVs and are derived from the three daily files:
+
+- **SplitCoefficient**: computed as the ratio of consecutive cumulative split factors (`unadjusted_close / splitadjusted_close`). Equals 1.0 on non-split days and the split ratio (e.g. 4.0 for a 4:1 split) on split days.
+- **DividendAmount**: derived from the change in the cumulative dividend factor (`splitdivadjusted_close / splitadjusted_close`) between consecutive days, then un-adjusted by the cumulative split factor to give the actual cash dividend per share (matching AV convention). Equals 0.0 on non-ex-dividend days.
+
+### Usage with FirstRate Data
+
+```bash
+# Stocks + ETFs with FRD
+python historical_data_setup/setup_historical.py --stocks-dir /path/to/frd/stocks --etfs-dir /path/to/frd/etfs
+
+# Stocks only, prices only, with FRD
+python historical_data_setup/setup_historical.py --asset-types stocks --endpoints prices --stocks-dir /path/to/frd/stocks
+
+# FRD for stocks, AV-only for ETFs
+python historical_data_setup/setup_historical.py --stocks-dir /path/to/frd/stocks
+```
+
 ## Stocks & ETFs
 
 ### Stocks
