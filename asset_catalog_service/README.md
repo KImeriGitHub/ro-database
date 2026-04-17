@@ -160,7 +160,19 @@ Columns correspond to data endpoints. Stock-specific columns (`prices`, `prices_
 
 **Init:** All yield columns set to null, `date` set to the current date.
 
-**Update:** Yield status is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
+**Finalize (end of full historical setup run):** `yield_status.parquet` is completely overwritten. Applicable (symbol, column) pairs default to True and are flipped to False per the ingestion report:
+
+- `structure_error` or `av_throttle` -> False (no usable data).
+- `empty_content` -> False, except for fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) where True is preserved if at least one of the annual/quarterly files was saved (partial save is acceptable).
+- `cast_failure` / `timezone_mismatch` -> True (data was saved; only malformed entries became null).
+
+Ingestion-report endpoints `forex`, `indices`, `cryptocurrencies`, `commodities`, `economic` map to the single `direct` yield column. Non-applicable (symbol, column) pairs stay null.
+
+All rows share the same `date`, set to the last fully-traded ET date at the start of the run (weekend -> start date; weekday before 20:00 ET -> start date minus one day; otherwise start date). The start time is recovered from the mtime of `historical/.setup_started_at`, which is preserved across resumes and deleted after a successful finalize.
+
+Finalize runs only when no `--asset-types` / `--endpoints` subset flags were passed to `setup_historical.py`; those flags target non-daily backfills and intentionally skip finalize.
+
+**Update:** Yield status is also updated through `ingestion_report.parquet` at the end of the daily data pipeline.
 
 **API calls:** 0.
 
