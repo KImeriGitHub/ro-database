@@ -8,6 +8,7 @@ import logging
 from datetime import date
 from pathlib import Path
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -169,10 +170,11 @@ def _build_schema() -> dict:
 # Main fetch function
 # ---------------------------------------------------------------------------
 
-def fetch_etf_profile(
+async def fetch_etf_profile(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "etfs",
@@ -207,7 +209,7 @@ def fetch_etf_profile(
 
         # -- Fetch --
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(
                 symbol, asset_type, "etf_profile", "av_throttle", str(e),

@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -36,10 +37,11 @@ _GOLD_SILVER_MAP = {
 }
 
 
-def _fetch_standard(
+async def _fetch_standard(
     symbol: str,
     interval: str,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     out_path: Path,
@@ -51,7 +53,7 @@ def _fetch_standard(
     )
 
     try:
-        data = fetch_av_json(url, rate_limiter)
+        data = await fetch_av_json(url, session, rate_limiter)
     except AVResponseError as e:
         issue_tracker.record(symbol, _ASSET_TYPE, _ENDPOINT, "av_throttle", str(e))
         return
@@ -113,10 +115,11 @@ def _fetch_standard(
     del rows
 
 
-def _fetch_gold_silver(
+async def _fetch_gold_silver(
     symbol: str,
     av_symbol: str,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     out_path: Path,
@@ -128,7 +131,7 @@ def _fetch_gold_silver(
     )
 
     try:
-        data = fetch_av_json(url, rate_limiter)
+        data = await fetch_av_json(url, session, rate_limiter)
     except AVResponseError as e:
         issue_tracker.record(symbol, _ASSET_TYPE, _ENDPOINT, "av_throttle", str(e))
         return
@@ -189,10 +192,11 @@ def _fetch_gold_silver(
     del rows
 
 
-def fetch_commodities(
+async def fetch_commodities(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "commodities",
@@ -215,19 +219,19 @@ def fetch_commodities(
         logger.info(f"[{idx}/{total}] {symbol}")
 
         if symbol in _GOLD_SILVER_MAP:
-            _fetch_gold_silver(
+            await _fetch_gold_silver(
                 symbol, _GOLD_SILVER_MAP[symbol],
-                api_key, rate_limiter, issue_tracker, out_path,
+                api_key, session, rate_limiter, issue_tracker, out_path,
             )
         elif symbol in _DAILY_SYMBOLS:
-            _fetch_standard(
+            await _fetch_standard(
                 symbol, "daily",
-                api_key, rate_limiter, issue_tracker, out_path,
+                api_key, session, rate_limiter, issue_tracker, out_path,
             )
         elif symbol in _MONTHLY_SYMBOLS:
-            _fetch_standard(
+            await _fetch_standard(
                 symbol, "monthly",
-                api_key, rate_limiter, issue_tracker, out_path,
+                api_key, session, rate_limiter, issue_tracker, out_path,
             )
         else:
             issue_tracker.record(

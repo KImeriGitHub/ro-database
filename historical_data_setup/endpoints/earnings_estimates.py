@@ -8,6 +8,8 @@ the ``horizon`` field (``"fiscal year"`` vs ``"fiscal quarter"``).
 import logging
 from pathlib import Path
 
+import aiohttp
+
 from historical_data_setup._common import (
     AV_BASE,
     AVResponseError,
@@ -21,10 +23,11 @@ from historical_data_setup._common import (
 logger = logging.getLogger(__name__)
 
 
-def fetch_earnings_estimates(
+async def fetch_earnings_estimates(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
@@ -53,7 +56,7 @@ def fetch_earnings_estimates(
         )
 
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(
                 symbol, asset_type, "earnings_estimates", "av_throttle", str(e),

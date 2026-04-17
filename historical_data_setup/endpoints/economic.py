@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlencode
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -43,10 +44,11 @@ _INDICATOR_CONFIG: dict[str, dict] = {
 _EXPECTED_KEYS = {"name", "interval", "unit", "data"}
 
 
-def fetch_economic(
+async def fetch_economic(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "economic",
@@ -81,7 +83,7 @@ def fetch_economic(
         url = f"{AV_BASE}/query?{urlencode(query)}"
 
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(symbol, _ASSET_TYPE, _ENDPOINT, "av_throttle", str(e))
             continue

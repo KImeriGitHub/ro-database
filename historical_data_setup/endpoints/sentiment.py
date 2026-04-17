@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -163,10 +164,11 @@ def _parse_feed(feed: list[dict], issue_tracker: IssueTracker) -> list[dict]:
     return rows
 
 
-def fetch_sentiment(
+async def fetch_sentiment(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
@@ -207,7 +209,7 @@ def fetch_sentiment(
             )
 
             try:
-                data = fetch_av_json(url, rate_limiter)
+                data = await fetch_av_json(url, session, rate_limiter)
             except AVResponseError as e:
                 issue_tracker.record(
                     "GLOBAL", asset_type, "sentiment", "av_throttle", str(e),

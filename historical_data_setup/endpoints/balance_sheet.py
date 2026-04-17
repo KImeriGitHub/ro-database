@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import aiohttp
+
 from historical_data_setup._common import (
     IssueTracker,
     RateLimiter,
@@ -9,19 +11,21 @@ from historical_data_setup._common import (
 )
 
 
-def fetch_balance_sheet(
+async def fetch_balance_sheet(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
 ) -> None:
     """Download balance sheet data for all symbols of the given asset type."""
-    fetch_fundamental_endpoint(
+    await fetch_fundamental_endpoint(
         catalog_dir=catalog_dir,
         historical_dir=historical_dir,
         api_key=api_key,
+        session=session,
         rate_limiter=rate_limiter,
         issue_tracker=issue_tracker,
         asset_type=asset_type,

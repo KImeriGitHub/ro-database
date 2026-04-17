@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -21,10 +22,11 @@ _ASSET_TYPE = "indices"
 _ENDPOINT = "indices"
 
 
-def fetch_indices(
+async def fetch_indices(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "indices",
@@ -52,7 +54,7 @@ def fetch_indices(
         )
 
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(
                 symbol, _ASSET_TYPE, _ENDPOINT,

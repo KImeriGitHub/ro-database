@@ -3,6 +3,7 @@
 import logging
 from pathlib import Path
 
+import aiohttp
 import polars as pl
 
 from historical_data_setup._common import (
@@ -46,10 +47,11 @@ def _read_frd_daily_csv(path: Path) -> pl.DataFrame:
     )
 
 
-def fetch_daily_prices(
+async def fetch_daily_prices(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
@@ -183,7 +185,7 @@ def fetch_daily_prices(
         )
 
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(
                 symbol, asset_type, "prices_daily",
