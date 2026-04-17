@@ -50,7 +50,7 @@ tests/                        # Unified test directory (asset_catalog_service, h
 - `catalog/` is the only mutable storage area
 - Raw data in GCS is processed once, then never modified
 - Historical data from FirstRate only overwrites Alpha Vantage data if overlapping data agrees; conflicts are flagged for review
-- Only tickers with positive yield status are pulled daily
+- The yield status can tell what tickers are pulled daily
 - No em dashes in log messages
 
 ## Alpha Vantage endpoints
