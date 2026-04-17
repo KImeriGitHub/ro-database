@@ -1,14 +1,16 @@
 """Shared helpers for historical data setup: rate limiter, HTTP fetch, month
 generation, issue tracking, and catalog reading."""
 
+import asyncio
 import logging
 import re
 import time
+from collections import deque
 from datetime import date, datetime
 from pathlib import Path
 
+import aiohttp
 import polars as pl
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +22,54 @@ AV_BASE = "https://www.alphavantage.co"
 # ---------------------------------------------------------------------------
 
 class RateLimiter:
-    """Minimum-interval rate limiter for API calls."""
+    """Sliding-window rate limiter for API calls.
 
-    def __init__(self, calls_per_minute: float = 74.9):
-        self._interval = 60.0 / calls_per_minute
-        self._last_call: float = 0.0
+    Tracks timestamps of the last *calls_per_minute* calls. A caller awaits
+    ``wait()`` which returns immediately if there are fewer than
+    *calls_per_minute* calls within the trailing *window* seconds, otherwise
+    sleeps until the oldest call falls out of the window.
 
-    def wait(self) -> None:
-        """Block until a call slot is available."""
-        now = time.monotonic()
-        elapsed = now - self._last_call
-        if elapsed < self._interval:
-            sleep_time = self._interval - elapsed
-            time.sleep(sleep_time)
-        self._last_call = time.monotonic()
+    Shared safely across all endpoint coroutines running in a single event
+    loop: an ``asyncio.Lock`` serialises registration so the budget is
+    enforced globally.
+    """
+
+    def __init__(
+        self,
+        calls_per_minute: float = 74.0,
+        window: float = 60.0,
+        min_gap: float = 0.05,
+    ):
+        self._max_calls = int(calls_per_minute)
+        self._window = window
+        self._min_gap = min_gap
+        self._timestamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        """Block until a call slot is available in the sliding window."""
+        async with self._lock:
+            while True:
+                now = time.monotonic()
+                cutoff = now - self._window
+                # evicting all timestamps that have slid out
+                while self._timestamps and self._timestamps[0] <= cutoff:
+                    self._timestamps.popleft()
+
+                if len(self._timestamps) < self._max_calls:
+                    # Enforce minimum inter-call spacing to avoid micro-bursts
+                    if self._timestamps:
+                        gap = now - self._timestamps[-1]
+                        if gap < self._min_gap:
+                            await asyncio.sleep(self._min_gap - gap)
+                            continue
+                    self._timestamps.append(now)
+                    return
+
+                # Too many timestamps in the window
+                sleep_for = self._timestamps[0] + self._window - now
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
 
 
 # ---------------------------------------------------------------------------
@@ -44,17 +80,22 @@ class AVResponseError(Exception):
     """Raised when Alpha Vantage returns an unrecoverable error."""
 
 
-def fetch_av_json(url: str, rate_limiter: RateLimiter, max_retries: int = 3) -> dict:
+async def fetch_av_json(
+    url: str,
+    session: aiohttp.ClientSession,
+    rate_limiter: RateLimiter,
+    max_retries: int = 3,
+) -> dict:
     """Fetch JSON from Alpha Vantage with rate limiting and retry.
 
     Detects AV throttle responses (keys "Note" or "Information") and retries
     after 60 s, up to *max_retries* times.
     """
     for attempt in range(1, max_retries + 1):
-        rate_limiter.wait()
-        resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
+        await rate_limiter.wait()
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
 
         # AV signals rate-limit / error via top-level "Note" or "Information"
         throttle_msg = data.get("Note") or data.get("Information")
@@ -64,7 +105,7 @@ def fetch_av_json(url: str, rate_limiter: RateLimiter, max_retries: int = 3) -> 
                     f"AV throttle (attempt {attempt}/{max_retries}): "
                     f"{throttle_msg[:120]} -- retrying in 60s"
                 )
-                time.sleep(60)
+                await asyncio.sleep(60)
                 continue
             raise AVResponseError(
                 f"AV throttle after {max_retries} retries: {throttle_msg[:200]}"
@@ -353,10 +394,11 @@ def _build_fundamental_df(
     return df.sort("fiscalDateEnding")
 
 
-def fetch_fundamental_endpoint(
+async def fetch_fundamental_endpoint(
     catalog_dir: Path,
     historical_dir: Path,
     api_key: str,
+    session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
     issue_tracker: IssueTracker,
     asset_type: str,
@@ -389,7 +431,7 @@ def fetch_fundamental_endpoint(
         )
 
         try:
-            data = fetch_av_json(url, rate_limiter)
+            data = await fetch_av_json(url, session, rate_limiter)
         except AVResponseError as e:
             issue_tracker.record(symbol, asset_type, endpoint, "av_throttle", str(e))
             continue

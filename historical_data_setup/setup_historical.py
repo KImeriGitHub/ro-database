@@ -4,6 +4,11 @@ Historical Data Setup - setup_historical.py
 Orchestrates the one-time historical data download from Alpha Vantage.
 Designed to be resumable: already-downloaded symbols are skipped.
 
+Endpoint tasks (one per asset_type x endpoint pair) are executed concurrently
+with ``asyncio.gather`` and share a single sliding-window rate limiter, so
+slow endpoints (prices, sentiment) can run alongside fast ones without
+exceeding the global API budget.
+
 Usage:
     python setup_historical.py [--catalog-dir PATH] [--historical-dir PATH]
                                [--asset-types stocks etfs]
@@ -11,13 +16,19 @@ Usage:
                                [--api-tier premium]
 """
 
+import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 import logging
+
+import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
 
+from asset_catalog_service.updates import finalize_yield_status
 from historical_data_setup.ensure_folders import ensure_historical_folders
 from historical_data_setup._common import RateLimiter, IssueTracker
 from historical_data_setup.endpoints.prices import fetch_intraday_prices
@@ -74,7 +85,22 @@ ASSET_ENDPOINTS = {
     "indices": ["indices"],
 }
 
-def run_historical_setup(
+async def _run_endpoint_task(
+    label: str,
+    coro_factory,
+) -> None:
+    """Await an endpoint coroutine, logging any top-level exception instead
+    of tearing down the whole gather."""
+    logger.info(f"--- Starting {label} ---")
+    try:
+        await coro_factory()
+    except Exception:
+        logger.exception(f"Failed: {label}")
+    else:
+        logger.info(f"--- Finished {label} ---")
+
+
+async def run_historical_setup(
     catalog_dir: Path | None = None,
     historical_dir: Path | None = None,
     asset_types: list[str] | None = None,
@@ -83,13 +109,22 @@ def run_historical_setup(
     stocks_dir: Path | None = None,
     etfs_dir: Path | None = None,
 ) -> None:
-    """Orchestrate the historical data download."""
+    """Orchestrate the historical data download with cross-endpoint concurrency.
+
+    Every applicable (asset_type, endpoint) pair becomes an asyncio task.
+    All tasks share one ``aiohttp.ClientSession``, one ``RateLimiter``
+    (sliding window, 74/min), and one ``IssueTracker``. The rate limiter
+    enforces the global AV budget across all concurrent tasks.
+    """
     project_root = Path(__file__).resolve().parent.parent
 
     if catalog_dir is None:
         catalog_dir = project_root / "catalog"
     if historical_dir is None:
         historical_dir = project_root / "historical"
+    # "Full run" means no subsetting flags were passed. Only full runs
+    # finalize yield_status at the end.
+    full_run = asset_types is None and endpoints is None
     if asset_types is None:
         asset_types = list(ASSET_ENDPOINTS.keys())
     if endpoints is None:
@@ -97,10 +132,22 @@ def run_historical_setup(
 
     ensure_historical_folders(historical_dir)
 
+    # mtime-based recovery of the original start time. Touch the marker on
+    # the first run; resumed runs reuse the existing mtime so the data-
+    # complete date is stable across crashes/resumes.
+    start_marker = historical_dir / ".setup_started_at"
+    if not start_marker.exists():
+        start_marker.touch()
+    started_at = datetime.fromtimestamp(
+        start_marker.stat().st_mtime, tz=ZoneInfo("America/New_York"),
+    )
+
     api_key = get_alpha_vantage_key(api_tier)
-    rate_limiter = RateLimiter(74.9)
+    rate_limiter = RateLimiter(74.0)
     issue_tracker = IssueTracker()
 
+    # Build the list of (label, coroutine-factory) pairs.
+    plan: list[tuple[str, object]] = []
     for asset_type in asset_types:
         applicable = ASSET_ENDPOINTS.get(asset_type, [])
         for ep_name in endpoints:
@@ -113,9 +160,7 @@ def run_historical_setup(
                 continue
 
             label = f"{ep_name} ({asset_type})"
-            logger.info(f"--- Starting {label} ---")
 
-            # Pass FRD directory to price endpoints
             extra_kwargs: dict = {}
             if ep_name in ("prices", "prices_daily"):
                 if asset_type == "stocks":
@@ -123,24 +168,52 @@ def run_historical_setup(
                 elif asset_type == "etfs":
                     extra_kwargs["frd_dir"] = etfs_dir
 
-            try:
-                func(
-                    catalog_dir=catalog_dir,
-                    historical_dir=historical_dir,
-                    api_key=api_key,
-                    rate_limiter=rate_limiter,
-                    issue_tracker=issue_tracker,
-                    asset_type=asset_type,
-                    **extra_kwargs,
-                )
-            except Exception:
-                logger.exception(f"Failed: {label}")
+            plan.append((label, func, asset_type, extra_kwargs))
+
+    if not plan:
+        logger.info("No endpoint tasks to run.")
+        return
+
+    logger.info(
+        f"Scheduling {len(plan)} endpoint task(s) concurrently: "
+        f"{', '.join(label for label, *_ in plan)}"
+    )
+
+    connector = aiohttp.TCPConnector(limit=len(plan))
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = []
+        for label, func, asset_type, extra_kwargs in plan:
+            def make_factory(f=func, at=asset_type, ek=extra_kwargs):
+                async def _call():
+                    await f(
+                        catalog_dir=catalog_dir,
+                        historical_dir=historical_dir,
+                        api_key=api_key,
+                        session=session,
+                        rate_limiter=rate_limiter,
+                        issue_tracker=issue_tracker,
+                        asset_type=at,
+                        **ek,
+                    )
+                return _call
+
+            tasks.append(_run_endpoint_task(label, make_factory()))
+
+        await asyncio.gather(*tasks, return_exceptions=False)
 
     report_path = historical_dir / "ingestion_report.parquet"
     issue_tracker.save(report_path)
     logger.info(
         f"Historical setup complete. {issue_tracker.count} issues recorded."
     )
+
+    if full_run:
+        finalize_yield_status(catalog_dir, historical_dir, started_at)
+        start_marker.unlink(missing_ok=True)
+    else:
+        logger.info(
+            "Skipping yield_status finalize (partial run via --asset-types/--endpoints)"
+        )
 
 
 if __name__ == "__main__":
@@ -180,7 +253,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    run_historical_setup(
+    asyncio.run(run_historical_setup(
         catalog_dir=args.catalog_dir,
         historical_dir=args.historical_dir,
         asset_types=args.asset_types,
@@ -188,4 +261,4 @@ if __name__ == "__main__":
         api_tier=args.api_tier,
         stocks_dir=args.stocks_dir,
         etfs_dir=args.etfs_dir,
-    )
+    ))

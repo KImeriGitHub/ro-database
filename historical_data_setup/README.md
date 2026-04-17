@@ -371,7 +371,7 @@ Each row corresponds to one ticker mentioned in one article. If an article menti
 
 These are upper-bound estimates -- older years have fewer articles per day, so calls cover more time and produce fewer rows. Actual totals will likely be lower.
 
-Sentiment is the heaviest endpoint in the historical setup -- both in RAM (~53 GB in-memory DataFrame) and in per-call wall-clock time (~2.5s/call due to multi-MB JSON payloads with nested text). Other endpoints return compact numeric data, so the 0.8s rate-limit sleep is the bottleneck rather than the request itself. Run sentiment on a machine with at least 128 GB RAM. Consider running other endpoints in parallel on the same machine since sentiment leaves most of the 75 calls/min API budget unused.
+Sentiment is the heaviest endpoint in the historical setup -- both in RAM (~53 GB in-memory DataFrame) and in per-call wall-clock time (~2.5s/call due to multi-MB JSON payloads with nested text). Other endpoints return compact numeric data and are budget-bound rather than request-bound. Run sentiment on a machine with at least 128 GB RAM. Because sentiment alone consumes only ~24 of the 74 calls/min budget, co-schedule it with fast endpoints in the same `setup_historical.py` run (e.g. `--endpoints sentiment prices_daily income_statement`); the shared sliding-window rate limiter keeps the combined rate within budget.
 
 ### etf_profile (ETF_PROFILE)
 
@@ -594,9 +594,53 @@ Issues encountered during fetching are tracked in `historical/ingestion_report.p
 | detail | Utf8 | Specifics (e.g., month, error message) |
 | timestamp | Datetime | When the issue was recorded |
 
-## Rate limiting
+## Finalizing yield_status
 
-Uses a minimum-interval rate limiter at 74.9 calls/minute (0.1 call margin) shared across all endpoints in a single run. AV throttle responses (`"Note"` / `"Information"` keys) trigger a 60s retry, up to 3 attempts. Persistent throttle failures are recorded as `av_throttle` issues in the ingestion report.
+At the end of a **full run** (no `--asset-types` and no `--endpoints` passed), `catalog/yield_status.parquet` is completely overwritten. Per (symbol, applicable endpoint column):
+
+| Ingestion-report issue for (symbol, endpoint) | Resulting cell |
+|---|---|
+| none | True |
+| `structure_error` | False |
+| `av_throttle` | False |
+| `empty_content` (non-fundamental endpoint) | False |
+| `empty_content` (fundamental endpoint) | True if `{symbol}_annual.parquet` or `{symbol}_quarterly.parquet` exists, else False |
+| `cast_failure` | True (most rows still saved; only malformed entries forced to null) |
+| `timezone_mismatch` | True (data still saved) |
+
+Cells for non-applicable (symbol, column) pairs remain null. Ingestion-report endpoints `forex`, `indices`, `cryptocurrencies`, `commodities`, `economic` map to the single `direct` yield column.
+
+The `--asset-types` and `--endpoints` flags are reserved for non-daily activities (targeted backfills, reruns of a single endpoint); using them intentionally skips finalize to avoid flipping columns for asset types that were not part of the run.
+
+### data_complete_date
+
+All rows share the same `date`, chosen as the last fully-traded ET date at the start of the run:
+
+- Weekend -> start date.
+- Weekday, time >= 20:00 ET -> start date.
+- Weekday, time <  20:00 ET -> start date minus one day.
+
+The start time is recovered via the mtime of `historical/.setup_started_at`. The marker is created on the first run and preserved across resumes, so a crashed-and-restarted setup keeps its original start timestamp. It is deleted after a successful finalize.
+
+## Rate limiting and cross-endpoint execution
+
+### Sliding-window rate limiter
+
+A single `RateLimiter` is shared across every endpoint task in a run. It tracks timestamps of the last N calls in a trailing 60-second window (default `N = 74`, for a 1-call margin against AV's 75/min cap). `wait()` is async: it returns immediately if the window has room, otherwise it sleeps until the oldest timestamp falls out. An `asyncio.Lock` inside `wait()` serializes concurrent registrations so the budget is enforced globally, even when many coroutines hit it simultaneously.
+
+AV throttle responses (`"Note"` / `"Information"` keys) trigger a 60s retry, up to 3 attempts. Persistent throttle failures are recorded as `av_throttle` issues in the ingestion report.
+
+### Cross-endpoint concurrency
+
+`setup_historical.py` builds one asyncio task per applicable `(asset_type, endpoint)` pair and runs them concurrently with `asyncio.gather` against a single `aiohttp.ClientSession`. Each endpoint function is `async` and processes its symbols sequentially **within the task**, but multiple tasks make HTTP calls in parallel under the shared rate limiter.
+
+This matters for slow endpoints. Intraday `prices` (~1.6 s/call) and `sentiment` (~2.5 s/call) cannot saturate the 75/min budget on their own. Running them alongside fast endpoints (`prices_daily`, `insider`, fundamentals, `forex`, `commodities`) keeps the API budget full without breaching the limit.
+
+Good pairings for a single run:
+- `--endpoints sentiment prices_daily income_statement balance_sheet cash_flow` (sentiment is slow + writes `ALL_MESSAGES.parquet` first; fast fundamentals fill idle budget)
+- `--endpoints prices forex` (both slow-ish; each drives partial budget, together approach the limit)
+
+The concurrency design is asyncio-only: no threads, no multiprocessing. All coroutines share a single event loop on a single CPU.
 
 ## Round-trip times per endpoint (measured 2026-04-11)
 
@@ -633,7 +677,7 @@ Per-endpoint round-trip averages from catalog-sample speedtests, with full-catal
 | EARNINGS | 0.34s |
 | EARNINGS_ESTIMATES | 0.52s |
 
-Fundamentals and similar lightweight endpoints are rate-limit-bound: the 0.8s minimum interval between calls dominates. Intraday prices and sentiment return large payloads where the HTTP request itself takes longer than the rate-limit sleep. Forex sits in between -- round-trip exceeds the rate limit due to medium-sized payloads. The full historical setup (all endpoints, no FRD) is dominated by intraday prices (~556 h); substituting FRD for `prices` drops the critical path to fundamentals (~18.4 h) plus sentiment (~29 h).
+Fundamentals and similar lightweight endpoints are rate-limit-bound: the ~0.8s/call budget ceiling dominates their own round-trip. Intraday prices and sentiment return large payloads where the HTTP request itself takes longer than one budget slot, so run alone they leave most of the 74/min budget unused. With cross-endpoint execution (see "Rate limiting and cross-endpoint execution" above), a slow endpoint can run alongside fast ones in the same run, sharing one rate limiter and one `aiohttp` session, so the combined call rate approaches 74/min without any single endpoint exceeding it. The full historical setup (all endpoints, no FRD) is dominated by intraday prices (~556 h); substituting FRD for `prices` drops the critical path to fundamentals (~18.4 h) plus sentiment (~29 h), which can now overlap in a single concurrent run.
 
 ## Null handling
 
@@ -653,8 +697,8 @@ Alpha Vantage encodes missing values in several ways: the JSON literal `null` (P
 historical_data_setup/
 ├── __init__.py
 ├── ensure_folders.py          # directory tree creation
-├── _common.py                 # RateLimiter, fetch_av_json, generate_months, IssueTracker, read_catalog_symbols
-├── setup_historical.py        # CLI orchestrator
+├── _common.py                 # sliding-window RateLimiter, async fetch_av_json (aiohttp), generate_months, IssueTracker, read_catalog_symbols
+├── setup_historical.py        # async CLI orchestrator (asyncio.gather across endpoints)
 └── endpoints/
     ├── __init__.py
     ├── prices.py              
