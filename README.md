@@ -136,6 +136,17 @@ GCP Cloud Container                   GCS Bucket                          Local
                                                                  └─────────────────────┘
 ```
 
+### Recovery and resume
+
+The historical setup is a long-running job (tens of hours for a full Alpha Vantage pull) and is designed to be crash-tolerant. If the process dies for any reason -- OOM, network blip, unhandled exception, manual kill -- just rerun the same command.
+
+- **File-level resume.** Each endpoint skips symbols that already have a parquet file on disk, so a restart only re-fetches what is missing. No task ledger or manual cleanup is required.
+- **Stable start date across resumes.** The original run's start timestamp is preserved in `historical/.setup_started_at`, so the `data_complete_date` written to `yield_status` reflects when the setup actually began, not when it was last restarted.
+- **Per-task isolation.** A failure in one `(asset_type, endpoint)` task does not abort the rest; other tasks keep running under the shared rate limiter and the failed one retries on the next run.
+- **Finalize only on clean full runs.** `yield_status` is only finalized when the full setup completes with no subsetting flags, so a partial or failed run never corrupts the catalog.
+
+See [historical_data_setup/README.md](historical_data_setup/README.md) for the full recovery behavior, including how to force a clean restart.
+
 ## Setup
 
 ### Prerequisites
@@ -205,9 +216,9 @@ historical_data_setup/        # Independent of the daily pipeline
                               # Optionally ingests FirstRate Data to supplement Alpha Vantage history
                               # Transforms and moves data to raw data storages
 
-raw_data_service/             # Data download and post-download verification
-                              # Logs execution and validation results
-                              # Writes parquet, uploads to GCS and saves locally
+daily_data_service/           # Daily incremental AV pull (mirrors historical_data_setup
+                              # at a truncated recent window, no FirstRate Data).
+                              # Writes parquet under daily/YYYY-MM-DD/, finalizes yield_status.
 
 data_transformation/          # Transforms daily raw data into AssetData instances
 
@@ -240,9 +251,8 @@ catalog/
 ├── cryptocurrencies.parquet
 ├── commodities.parquet
 ├── economic.parquet
-└── company_status/
-    ├── yield_status.parquet
-    └── earnings_calendar.parquet
+├── yield_status.parquet
+└── earnings_calendar.parquet
 
 historical/
 ├── stocks/
@@ -292,8 +302,8 @@ daily/
 
 **`catalog/`** — Asset catalog data, managed by `asset_catalog_service`. Each `.parquet` file tracks tickers/symbols with status, start date, and end date for its asset class (stocks, ETFs, indices, forex, cryptocurrencies, commodities, economic indicators).
 
-- `company_status/yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
-- `company_status/earnings_calendar.parquet` — Future earnings dates.
+- `yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
+- `earnings_calendar.parquet` — Future earnings dates.
 
 **`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`. Price endpoints (`prices`, `prices_daily`), `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`.
 

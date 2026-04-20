@@ -29,7 +29,7 @@ secrets/                      # NOT IN GIT - API keys, GCS credentials
 config/                       # settings.py (paths, constants), gcp.py (GCP config)
 asset_catalog_service/        # Ticker/asset catalogs and API yield tracking code
 historical_data_setup/        # One-time historical data download (AV + optional FirstRate)
-raw_data_service/             # Daily data download, verification, compression, upload
+daily_data_service/           # Daily incremental AV pull, truncated to recent window, writes daily/YYYY-MM-DD/
 data_transformation/          # Transforms raw data into AssetData instances
 scheduled_scripts/            # Orchestration scripts, API budget tracking
 maintainance_scripts/         # Shared utility modules, access to api key
