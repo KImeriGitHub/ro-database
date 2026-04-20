@@ -23,7 +23,7 @@ import polars as pl
 import requests
 
 AV_BASE = "https://www.alphavantage.co"
-MIN_INTERVAL = 60.0 / 74.9
+MIN_INTERVAL = 60.0 / 74.0
 
 ENDPOINTS = [
     ("INCOME_STATEMENT", "annualReports", "quarterlyReports"),

@@ -21,7 +21,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 import requests
 
 AV_BASE = "https://www.alphavantage.co"
-MIN_INTERVAL = 60.0 / 74.9
+MIN_INTERVAL = 60.0 / 74.0
 
 INDICATOR_CONFIG: dict[str, dict] = {
     "REAL_GDP":            {"function": "REAL_GDP",            "params": {"interval": "quarterly"}},

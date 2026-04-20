@@ -24,7 +24,7 @@ import requests
 AV_BASE = "https://www.alphavantage.co"
 TIME_FROM = "20100101T0000"
 TIME_FROM_DT = datetime(2010, 1, 1, 0, 0, tzinfo=timezone.utc)
-MIN_INTERVAL = 60.0 / 74.9  # ~0.8s between calls
+MIN_INTERVAL = 60.0 / 74.0  # ~0.8s between calls
 
 # Rough per-row memory estimate for the final polars DataFrame.
 # 19 Float32 cols (4B each) = 76B, 1 Datetime (8B), ~9 String cols averaging
