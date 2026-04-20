@@ -28,7 +28,7 @@ The historical setup and the daily raw data pipeline are independent concerns. Y
 - Covers all current and former S&P 500, NASDAQ 100, DJIA, and Russell 3000 members
 - 1-minute, 5-minute, 30-minute, 1-hour, and daily bars
 - Tick data available (10 years)
-- Split+dividend-adjusted prices (bundle does not include unadjusted prices)
+- Daily bars in three variants (unadjusted, split-adjusted, split+dividend-adjusted); 1-minute bars are unadjusted
 - Out-of-hours (pre/post market) trades included
 - Data sourced directly from major exchanges and 4 dark pools
 - 5,150+ ETFs, 130 futures, 115 US indices, 110 international indices, 70 FX crosses, 50 crypto
@@ -109,7 +109,7 @@ A local sync script downloads data from the GCS bucket to a local mirror. This l
 
 ### API call management
 
-**Rate limit:** As of now, we have approximately **75 API calls per minute** from Alpha Vantage. Some of this budget may need to be reserved for live trading hours (8:00 AM – 5:00 PM ET), so daily batch ingestion should be scheduled outside this window when possible.
+**Rate limit:** Alpha Vantage allows **75 API calls per minute**. The pipeline's sliding-window limiter is configured to **74 calls per minute**, leaving 1 call as a safety margin. Some of this budget may need to be reserved for live trading hours (8:00 AM – 5:00 PM ET), so daily batch ingestion should be scheduled outside this window when possible.
 
 Full financial statements (income statement, balance sheet, cash flow) are saved as complete responses — no field filtering at ingestion time. To stay within Alpha Vantage API call budgets, the asset catalog tracks per-ticker, per-endpoint yield status:
 
@@ -255,6 +255,8 @@ catalog/
 └── earnings_calendar.parquet
 
 historical/
+├── .setup_started_at            # mtime = original start time; preserved across resumes
+├── ingestion_report.parquet     # per-run issue log (overwritten each run)
 ├── stocks/
 │   ├── prices/
 │   ├── prices_daily/
@@ -276,7 +278,9 @@ historical/
 └── economic/
 
 daily/
+├── .setup_started_at            # mtime = folder-date anchor; preserved across resumes
 └── YYYY-MM-DD/
+    ├── ingestion_report.parquet # per-run issue log for this date
     ├── stocks/
     │   ├── prices/
     │   ├── prices_daily/
@@ -340,7 +344,7 @@ daily/
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
 
 **Historical price data notes:**
-Historical prices are stored in two separate subfolders under `stocks/`: `prices/` holds intraday bars from `TIME_SERIES_INTRADAY` (Open, High, Low, Close, Volume), and `prices_daily/` holds daily bars from `TIME_SERIES_DAILY_ADJUSTED` (Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient). Adjusted close is not calculated or stored in either folder. If supplemented with FirstRate Data, the FirstRate bundle provides **only split+dividend-adjusted prices** -- no unadjusted variant and no separate dividend or split columns. For FirstRate-sourced tickers (primarily delisted securities not in Alpha Vantage), all OHLC values are adjusted. The data source is recorded per ticker so the distinction is preserved.
+Historical prices are stored in two separate subfolders under `stocks/`: `prices/` holds intraday bars from `TIME_SERIES_INTRADAY` (Open, High, Low, Close, Volume), and `prices_daily/` holds daily bars from `TIME_SERIES_DAILY_ADJUSTED` (Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient). Adjusted close is not calculated or stored in either folder. If supplemented with FirstRate Data, the FirstRate bundle ships three daily variants per symbol (unadjusted, split-adjusted, split+dividend-adjusted) plus unadjusted 1-min bars. `DividendAmount` and `SplitCoefficient` are derived from the three daily variants to match the AV schema. The data source is recorded per ticker so the origin is preserved.
 
 ## Estimated costs
 

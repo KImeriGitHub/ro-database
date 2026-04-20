@@ -161,7 +161,7 @@ Same schema as historical's `ingestion_report.parquet`. Saved at `daily/YYYY-MM-
 
 ## Finalizing yield_status
 
-At the end of a **full run**, `catalog/yield_status.parquet` is overwritten with the same logic as historical (see [historical README: Finalizing yield_status](../historical_data_setup/README.md#finalizing-yield_status)). The only difference is `data_complete_date = folder-date`.
+At the end of a **full run**, `catalog/yield_status.parquet` is overwritten with the same logic as historical (see [historical README: Finalizing yield_status](../historical_data_setup/README.md#finalizing-yield_status)). The only difference is `data_complete_date = folder-date` (where "data_complete_date" is the semantic name for the parquet schema's `date` column).
 
 Cells resolved per the same rules:
 

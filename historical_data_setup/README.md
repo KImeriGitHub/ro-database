@@ -163,7 +163,7 @@ Per symbol, fetches 1-min bars for every month from `max(ipoDate, 2000-01)` to `
 | Close  | pl.Float32 |
 | Volume | pl.Float32 |
 
-Avg round-trip per call is ~3.5s (large JSON payloads), making this the slowest per-call endpoint. For historical intraday prices, FirstRate Data is used instead, so this endpoint is primarily needed for daily updates of the most recent month.
+Avg round-trip per call is ~1.6s (large JSON payloads). For historical intraday prices, FirstRate Data is used instead, so this endpoint is primarily needed for daily updates of the most recent month.
 
 **Ingestion report issues:**
 - `structure_error` -- response missing `"Meta Data"` or `"Time Series (1min)"` key, or fetch failure
@@ -633,7 +633,7 @@ The `--asset-types` and `--endpoints` flags are reserved for non-daily activitie
 
 ### data_complete_date
 
-All rows share the same `date`, chosen as the last fully-traded ET date at the start of the run:
+The `yield_status.parquet` schema column is named `date`; "data_complete_date" is the semantic name used throughout this README to describe what that column represents. All rows share the same `date`, chosen as the last fully-traded ET date at the start of the run:
 
 - Weekend -> start date.
 - Weekday, time >= 20:00 ET -> start date.
@@ -663,7 +663,7 @@ The concurrency design is asyncio-only: no threads, no multiprocessing. All coro
 
 ## Round-trip times per endpoint (measured 2026-04-11)
 
-Per-endpoint round-trip averages from catalog-sample speedtests, with full-catalog extrapolations at the 74.9 calls/min rate limit.
+Per-endpoint round-trip averages from catalog-sample speedtests, with full-catalog extrapolations at the 74 calls/min rate limit (1-call margin under AV's 75/min cap).
 
 | Endpoint | Avg round-trip | Sample size | Full-catalog calls | Est. total time | Notes |
 |----------|---------------|-------------|-------------------|-----------------|-------|
@@ -677,6 +677,8 @@ Per-endpoint round-trip averages from catalog-sample speedtests, with full-catal
 | Fundamentals (5 endpoints) | 0.5s | 30 | 80,480 | ~12.4 h | 16,096 stocks x 5 endpoints |
 | sentiment | ~2.5s | 500 | ~40,000 | ~29 h | Global paginated fetch to 2010; multi-MB payloads |
 | prices (intraday) | ~1.6s | 20 | 2,223,345 | ~600 h | One call per symbol-month. Historical intraday uses FRD instead |
+
+> `indices` is not included in this table: the `INDEX_DATA` endpoint is not accessible with our current API tier, so no timing data has been gathered yet.
 
 **Commodities per-group breakdown (13-call sample):**
 
