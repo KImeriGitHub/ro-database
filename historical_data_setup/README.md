@@ -65,6 +65,25 @@ python historical_data_setup/setup_historical.py --api-tier standard
 python historical_data_setup/setup_historical.py --catalog-dir /path/to/catalog --historical-dir /path/to/historical
 ```
 
+## Recovery and resume
+
+The setup is resumable by design -- if the process crashes, is killed, or hits an unhandled exception mid-run, just rerun the same command. No ledger, task IDs, or manual cleanup are needed.
+
+### How it works
+
+- **Per-symbol file-level resume.** Each endpoint's fetch function checks whether the destination parquet already exists for a symbol and skips it if so. On restart, only symbols that were never written (or whose writes didn't complete) are re-fetched. This applies uniformly across `prices`, `prices_daily`, fundamentals, `insider`, `etf_profile`, `forex`, `indices`, `cryptocurrencies`, `commodities`, and `economic`.
+- **Stable data_complete_date across resumes.** The start time is captured once in the mtime of `historical/.setup_started_at`, created on the first run and preserved through every resume. All rows finalized in `yield_status` therefore share a single `data_complete_date` anchored to the original start, not the last restart.
+- **Top-level exception isolation.** Each `(asset_type, endpoint)` task is wrapped so a failure in one endpoint (e.g. a sentiment crash) does not tear down the `asyncio.gather`; other tasks keep running and the failed one is retried on the next run.
+- **Append-only writes.** Parquet files are written atomically per symbol, so a crash mid-write leaves either the complete previous file or no file; it never leaves a corrupted partial file that would be treated as "already done".
+
+### Operational notes
+
+- A full rerun of the same command is always the right recovery action.
+- `ingestion_report.parquet` is overwritten each run (issues seen during this run, not a cumulative log). To audit what's still missing after a partial run, inspect the parquet tree directly or rerun with the same flags -- only gaps will be touched.
+- `historical/.setup_started_at` is only deleted on a successful full-run finalize. Its presence means a setup is in progress or never cleanly finished; leave it alone.
+- To force a clean restart (new start date, re-fetch everything), delete the per-symbol parquet trees under `historical/` AND `historical/.setup_started_at`.
+- Partial runs with `--asset-types` / `--endpoints` intentionally skip the finalize step, so they never delete the start marker.
+
 ## FirstRate Data integration
 
 When `--stocks-dir` and/or `--etfs-dir` are provided, the pipeline loads `prices/` and `prices_daily/` data from FirstRate Data CSVs instead of Alpha Vantage. Symbols not covered by FirstRate Data fall back to AV automatically. The two endpoints are independent -- a symbol can use FRD for one and AV for the other.
