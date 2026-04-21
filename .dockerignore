@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+secrets/
+tmp/
+tests/
+consistency_tests/
+data_transformation/
+historical_data_setup/
+catalog/
+historical/
+daily/
+*.md
+.vscode
+.idea

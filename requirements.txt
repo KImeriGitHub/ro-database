@@ -1,0 +1,10 @@
+google-cloud-storage>=3.10.1
+google-cloud-secret-manager>=2.20.0
+pandas>=2.2.2
+polars>=1.9.0
+numpy>=1.25.0
+pyarrow>=15.0.0
+requests>=2.32.3
+deepdiff>=7.0.0
+beautifulsoup4>=4.12.3
+lxml>=5.1.0

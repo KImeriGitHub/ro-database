@@ -104,6 +104,8 @@ After several years of collection, this produces a genuine PIT dataset for the c
 
 Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). All raw files are append-only and never modified or deleted. This is the permanent record.
 
+The one-time historical setup runs **locally** (it is a multi-hour job that benefits from local disk and easy restarts), and the resulting `historical/` and `catalog/` trees are pushed to the same GCS bucket once the setup finishes. After that initial upload, the container takes over for all ongoing daily work.
+
 A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research.
 
 
@@ -158,20 +160,13 @@ See [historical_data_setup/README.md](historical_data_setup/README.md) for the f
 - **GCP services:** Cloud Storage, Cloud Run (or equivalent container runtime), Secret Manager
 - `gcloud` CLI installed and authenticated
 
-### Key Python dependencies
+### Python dependencies
 
-```
-# requirements.txt (core)
-google-cloud-storage         # GCS client library
-pandas>=2.0
-polars
-numpy
-pyarrow                      # Parquet read/write
-requests                     # Alpha Vantage API calls
-deepdiff                     # Restatement detection (data diff)
-beautifulsoup4               # HTML scraping
-lxml                         # HTML parser for scraping
-```
+All runtime dependencies (GCP client libraries, dataframe stack, HTML/parquet tooling) are pinned as minimums in [`requirements.txt`](requirements.txt). Install with `pip install -r requirements.txt`.
+
+### API key resolution
+
+`maintainance_scripts.get_api_key.get_alpha_vantage_key(tier)` tries the local `secrets/alpha_vantage_keys` file first. If the file is missing, the tier entry is absent, or the value is still a placeholder, it falls back to GCP Secret Manager **only when** the flag `USE_SECRET_MANAGER_FOR_AV_KEYS=true` is set (defined in `config/gcp.py`). The secret names it reads are also configurable from that module: `SECRET_AV_KEY_STANDARD` and `SECRET_AV_KEY_PREMIUM` (defaults: `alpha-vantage-key-standard`, `alpha-vantage-key-premium`). The container runs with this flag on; local dev keeps the default of off so runs fail loudly when the local file is misconfigured.
 
 
 ## Key design decisions
@@ -199,9 +194,9 @@ lxml                         # HTML parser for scraping
 ## Folder structure
 
 ```
-secrets/                      # NOT IN GIT
-├── alpha_vantage_keys        # Alpha Vantage API keys
-└── gcs_credentials           # GCS service account key (if not using IAP)
+secrets/                      # NOT IN GIT - optional locally; container pulls from Secret Manager
+├── alpha_vantage_keys        # Alpha Vantage API keys (standard= / premium=)
+└── gcs_credentials.json      # GCP service-account key (local dev only; Cloud Run uses ADC)
 
 config/
 ├── settings.py               # Local paths, constants (PIT_COLLECTION_START_DATE)
@@ -224,10 +219,6 @@ data_transformation/          # Transforms daily raw data into AssetData instanc
 
 scheduled_scripts/            # Orchestration scripts for download runs and API budget tracking
 maintainance_scripts/         # common py files used throughout the repo
-
-response_schemas/             # Infers, stores, and validates the JSON structure of AV API responses
-                              # Catches structural changes (added/removed fields, type changes)
-                              # before bad data enters the pipeline
 
 consistency_tests/            # Validates raw and transformed data against other sources
                               # e.g., checks that intraday open matches daily open
