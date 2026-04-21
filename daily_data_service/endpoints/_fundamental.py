@@ -33,15 +33,17 @@ def _write_truncated(
     report_label: str,
     cutoff: date,
 ) -> None:
-    """Filter to ``fiscalDateEnding >= cutoff`` and write (if non-empty)."""
+    """Filter to ``fiscalDateEnding >= cutoff`` and write. Schema is
+    preserved by polars' filter even when the result is zero rows, so an
+    empty frame is written with its columns and dtypes intact."""
     truncated = df.filter(since_expr("fiscalDateEnding", cutoff))
+    truncated.write_parquet(out_path, compression="zstd")
     if truncated.height == 0:
         logger.info(
-            f"  {symbol}: no {report_label} rows >= {cutoff}, skipping write"
+            f"  {symbol}: saved empty {report_label} frame (no rows >= {cutoff})"
         )
-        return
-    truncated.write_parquet(out_path, compression="zstd")
-    logger.info(f"  {symbol}: saved {truncated.height} {report_label} rows")
+    else:
+        logger.info(f"  {symbol}: saved {truncated.height} {report_label} rows")
 
 
 async def fetch_fundamental_endpoint_daily(

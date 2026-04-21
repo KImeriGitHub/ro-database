@@ -100,6 +100,21 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly / non-daily rows get a 1-year window because `(previous-date, folder-date]` would usually be empty.
 
+### Empty-after-truncation outcomes
+
+If a symbol's data is fetched and parsed successfully but the truncation filter yields zero rows, the service still writes an empty parquet file to disk with the schema (column names and dtypes) fully preserved. Polars' `.filter(...)` carries the frame's schema through a zero-row result, so the written file is indistinguishable (schema-wise) from a populated one.
+
+This path is normal, not an error:
+
+- The most common trigger is a market holiday, where `(previous-date, folder-date]` spans only non-trading days for a price/index/forex/crypto/commodity/economic-daily endpoint.
+- It can also fire on narrow 1-year or 5-year windows (`insider`, fundamentals, `earnings_estimates`, monthly commodities, non-daily economic indicators) if a symbol has no qualifying rows in that window.
+
+Because saving an empty-but-valid frame is treated as success:
+
+- **No `empty_content` entry is written to `ingestion_report.parquet`** for this case. `empty_content` remains reserved for API responses that came back with no time-series / no data list at all, or for per-bar structural emptiness.
+- **`yield_status` stays True** for the `(symbol, endpoint)` cell on the next full-run finalize, since the cell resolves from "no issue recorded" -> True.
+- **Downstream readers** can read the parquet unconditionally and use `df.height == 0` (or pandas `len(df) == 0`) as a legitimate "no data in window" signal, without having to disambiguate a missing file from a silent failure.
+
 ## Output schemas
 
 Every parquet file is schema-identical to its historical counterpart (same column names and dtypes, just fewer rows). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#stocks--etfs) for per-endpoint schemas.

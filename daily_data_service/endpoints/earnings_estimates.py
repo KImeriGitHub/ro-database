@@ -130,8 +130,12 @@ async def fetch_earnings_estimates(
         )
         if annual_df is not None:
             truncated = annual_df.filter(since_expr("fiscalDateEnding", cutoff))
-            if truncated.height > 0:
-                truncated.write_parquet(annual_path, compression="zstd")
+            truncated.write_parquet(annual_path, compression="zstd")
+            if truncated.height == 0:
+                logger.info(
+                    f"  {symbol}: saved empty annual frame (no rows >= {cutoff})"
+                )
+            else:
                 logger.info(f"  {symbol}: saved {truncated.height} annual rows")
             del annual_df, truncated
 
@@ -141,8 +145,12 @@ async def fetch_earnings_estimates(
         )
         if quarterly_df is not None:
             truncated = quarterly_df.filter(since_expr("fiscalDateEnding", cutoff))
-            if truncated.height > 0:
-                truncated.write_parquet(quarterly_path, compression="zstd")
+            truncated.write_parquet(quarterly_path, compression="zstd")
+            if truncated.height == 0:
+                logger.info(
+                    f"  {symbol}: saved empty quarterly frame (no rows >= {cutoff})"
+                )
+            else:
                 logger.info(f"  {symbol}: saved {truncated.height} quarterly rows")
             del quarterly_df, truncated
 

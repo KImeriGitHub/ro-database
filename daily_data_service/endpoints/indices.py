@@ -133,15 +133,12 @@ async def fetch_indices(
         )
         del rows
 
-        if df.height == 0:
-            issue_tracker.record(
-                symbol, _ASSET_TYPE, _ENDPOINT,
-                "empty_content",
-                f"no bars in ({previous_date}, {folder_date}] after truncation",
-            )
-            del df
-            continue
-
         df.write_parquet(out_path, compression="zstd")
-        logger.info(f"  {symbol}: saved {df.height} rows")
+        if df.height == 0:
+            logger.info(
+                f"  {symbol}: saved empty frame "
+                f"(no bars in ({previous_date}, {folder_date}])"
+            )
+        else:
+            logger.info(f"  {symbol}: saved {df.height} rows")
         del df

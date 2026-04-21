@@ -165,14 +165,9 @@ async def fetch_economic(
         )
         del rows
 
-        if df.height == 0:
-            issue_tracker.record(
-                symbol, _ASSET_TYPE, _ENDPOINT,
-                "empty_content", f"no rows {label} after truncation",
-            )
-            del df
-            continue
-
         df.write_parquet(out_path, compression="zstd")
-        logger.info(f"  {symbol}: saved {df.height} rows")
+        if df.height == 0:
+            logger.info(f"  {symbol}: saved empty frame (no rows {label})")
+        else:
+            logger.info(f"  {symbol}: saved {df.height} rows")
         del df

@@ -140,15 +140,12 @@ async def fetch_daily_prices(
         )
         del rows
 
-        if df.height == 0:
-            issue_tracker.record(
-                symbol, asset_type, "prices_daily",
-                "empty_content",
-                f"no bars in ({previous_date}, {folder_date}] after truncation",
-            )
-            del df
-            continue
-
         df.write_parquet(out_path, compression="zstd")
-        logger.info(f"  {symbol}: saved {df.height} rows")
+        if df.height == 0:
+            logger.info(
+                f"  {symbol}: saved empty frame "
+                f"(no bars in ({previous_date}, {folder_date}])"
+            )
+        else:
+            logger.info(f"  {symbol}: saved {df.height} rows")
         del df
