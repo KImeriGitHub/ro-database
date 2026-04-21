@@ -2,6 +2,8 @@
 
 Daily incremental pull from Alpha Vantage. Same endpoint coverage as [`historical_data_setup/`](../historical_data_setup/README.md), but every endpoint is truncated to a narrow recent window and written to a new date-stamped folder. FirstRate Data is **not** used. Resumable on crash via a top-level start marker.
 
+Weekday runs can skip fundamental queries for symbols known to return empty data via the `--skip-empty-yield` flag; weekend runs omit the flag to re-validate those cells.
+
 ## Relationship to historical_data_setup
 
 The daily service mirrors historical's orchestration (async, cross-endpoint concurrency, shared sliding-window rate limiter, issue tracker, resume-by-file-existence) and reuses its primitives directly from [`historical_data_setup/_common.py`](../historical_data_setup/_common.py):
@@ -137,7 +139,43 @@ python daily_data_service/setup_daily.py --catalog-dir /path/to/catalog --daily-
 
 # Standard-tier API key (default is premium)
 python daily_data_service/setup_daily.py --api-tier standard
+
+# Weekday run: skip fundamentals for symbols with False yield_status cells
+python daily_data_service/setup_daily.py --skip-empty-yield
 ```
+
+## Skipping empty-yield fundamentals (`--skip-empty-yield`)
+
+By default every fundamental endpoint queries every stock in the catalog, which is wasteful for tickers that have consistently returned empty content on prior runs (common for recent IPOs, micro-caps, and some foreign listings). The `--skip-empty-yield` flag opts into a yield-aware skip for the five fundamental endpoints:
+
+- `income_statement`
+- `balance_sheet`
+- `cash_flow`
+- `earnings`
+- `earnings_estimates`
+
+### Behaviour
+
+For each of the above endpoints, before the per-symbol loop starts the fetcher loads `catalog/yield_status.parquet` and builds a skip set: the symbols whose cell for that endpoint column is **explicitly `False`**. Null cells (new symbols not yet scored, or inapplicable pairs) stay in the query set.
+
+When a symbol in the skip set is reached:
+
+- No API call is made.
+- No parquet file is written.
+- An `empty_content` issue is recorded in the ingestion report with detail `"skipped: yield_status False, revalidate on weekend"`.
+
+Because the existing finalize rule for fundamental endpoints resolves `empty_content` + no parquet file to **False**, a skipped cell stays False on the next full-run finalize. There is no change to [Finalizing yield_status](#finalizing-yield_status) -- the skip piggybacks on the existing `empty_content` path.
+
+### When to enable
+
+- **Weekday daily runs (`scheduled_scripts/run_daily.py`)**: flag is enabled. Most fundamentals don't move day-to-day, so re-querying chronically-empty tickers burns calls for nothing.
+- **Weekend runs** (future `scheduled_scripts/run_weekend_adjustments.py`): flag is **not** set. The weekend sweep re-queries every symbol so cells that have started returning data flip back to True after finalize.
+
+### Caveats
+
+- A ticker that starts returning fundamentals mid-week will not be picked up until the next weekend run flips its yield_status back to True.
+- `structure_error` and `av_throttle` cells are also False but are not special-cased here -- they get skipped too. If one of those False values was transient (throttle) the weekend run re-queries it.
+- Non-fundamental endpoints (`prices`, `prices_daily`, `insider`, `sentiment`, `etf_profile`, `forex`, `cryptocurrencies`, `commodities`, `economic`, `indices`) ignore the flag.
 
 ## Recovery and resume
 

@@ -19,6 +19,7 @@ async def fetch_earnings(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    skip_empty_yield: bool = False,
 ) -> None:
     await fetch_fundamental_endpoint_daily(
         catalog_dir=catalog_dir,
@@ -33,4 +34,5 @@ async def fetch_earnings(
         annual_key="annualEarnings",
         quarterly_key="quarterlyEarnings",
         folder_date=folder_date,
+        skip_empty_yield=skip_empty_yield,
     )

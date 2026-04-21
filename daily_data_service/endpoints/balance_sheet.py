@@ -19,6 +19,7 @@ async def fetch_balance_sheet(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    skip_empty_yield: bool = False,
 ) -> None:
     await fetch_fundamental_endpoint_daily(
         catalog_dir=catalog_dir,
@@ -33,4 +34,5 @@ async def fetch_balance_sheet(
         annual_key="annualReports",
         quarterly_key="quarterlyReports",
         folder_date=folder_date,
+        skip_empty_yield=skip_empty_yield,
     )

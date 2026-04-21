@@ -65,6 +65,24 @@ def read_previous_date(catalog_dir: Path) -> date:
     return df["date"][0]
 
 
+def read_yield_skip_set(catalog_dir: Path, endpoint: str) -> set[str]:
+    """Return the set of symbols whose ``yield_status[endpoint]`` is False.
+
+    Null cells (new symbols not yet scored, or inapplicable asset-type /
+    endpoint pairs) are NOT included -- they stay in the query set.
+    Only explicit False values, meaning the last full-run finalize resolved
+    the cell to False, qualify for skipping.
+    """
+    path = catalog_dir / "yield_status.parquet"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"yield_status.parquet not found at {path}; run historical setup first"
+        )
+    df = pl.read_parquet(path, columns=["symbol", endpoint])
+    skip = df.filter(pl.col(endpoint) == False)["symbol"].to_list()
+    return set(skip)
+
+
 def window_expr(col: str, previous_date: date, folder_date: date) -> pl.Expr:
     """Polars expression for ``previous_date < col <= folder_date``.
 

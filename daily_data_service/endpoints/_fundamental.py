@@ -21,7 +21,7 @@ from historical_data_setup._common import (
     fetch_av_json,
     read_catalog_symbols,
 )
-from daily_data_service._common import since_expr, years_before
+from daily_data_service._common import read_yield_skip_set, since_expr, years_before
 
 logger = logging.getLogger(__name__)
 
@@ -59,17 +59,29 @@ async def fetch_fundamental_endpoint_daily(
     annual_key: str,
     quarterly_key: str,
     folder_date: date,
+    skip_empty_yield: bool = False,
 ) -> None:
-    """Generic daily fetcher for fundamental endpoints with 5-year truncation."""
+    """Generic daily fetcher for fundamental endpoints with 5-year truncation.
+
+    When ``skip_empty_yield`` is True, symbols whose ``yield_status[endpoint]``
+    is False are not queried; an ``empty_content`` issue is recorded so the
+    next full-run finalize resolves the cell back to False (finalize treats
+    ``empty_content`` + no parquet file as False for fundamentals).
+    """
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     output_dir = daily_dir / asset_type / endpoint
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    skip_symbols: set[str] = (
+        read_yield_skip_set(catalog_dir, endpoint) if skip_empty_yield else set()
+    )
 
     cutoff = years_before(folder_date, 5)
     total = catalog.height
     logger.info(
         f"{endpoint} ({asset_type}): {total} symbols to process "
-        f"(cutoff fiscalDateEnding >= {cutoff})"
+        f"(cutoff fiscalDateEnding >= {cutoff}; "
+        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)})"
     )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
@@ -78,6 +90,14 @@ async def fetch_fundamental_endpoint_daily(
         quarterly_path = output_dir / f"{symbol}_quarterly.parquet"
 
         if annual_path.exists() and quarterly_path.exists():
+            continue
+
+        if symbol in skip_symbols:
+            issue_tracker.record(
+                symbol, asset_type, endpoint,
+                "empty_content",
+                "skipped: yield_status False, revalidate on weekend",
+            )
             continue
 
         logger.info(f"[{idx}/{total}] {symbol}")

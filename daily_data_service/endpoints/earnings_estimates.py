@@ -20,7 +20,7 @@ from historical_data_setup._common import (
     fetch_av_json,
     read_catalog_symbols,
 )
-from daily_data_service._common import since_expr, years_before
+from daily_data_service._common import read_yield_skip_set, since_expr, years_before
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,23 @@ async def fetch_earnings_estimates(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    skip_empty_yield: bool = False,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     output_dir = daily_dir / asset_type / "earnings_estimates"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    skip_symbols: set[str] = (
+        read_yield_skip_set(catalog_dir, "earnings_estimates")
+        if skip_empty_yield else set()
+    )
+
     cutoff = years_before(folder_date, 5)
     total = catalog.height
     logger.info(
         f"earnings_estimates ({asset_type}): {total} symbols to process "
-        f"(cutoff fiscalDateEnding >= {cutoff})"
+        f"(cutoff fiscalDateEnding >= {cutoff}; "
+        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)})"
     )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
@@ -53,6 +60,14 @@ async def fetch_earnings_estimates(
         quarterly_path = output_dir / f"{symbol}_quarterly.parquet"
 
         if annual_path.exists() and quarterly_path.exists():
+            continue
+
+        if symbol in skip_symbols:
+            issue_tracker.record(
+                symbol, asset_type, "earnings_estimates",
+                "empty_content",
+                "skipped: yield_status False, revalidate on weekend",
+            )
             continue
 
         logger.info(f"[{idx}/{total}] {symbol}")
