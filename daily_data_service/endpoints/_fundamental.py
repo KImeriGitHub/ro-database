@@ -60,6 +60,7 @@ async def fetch_fundamental_endpoint_daily(
     quarterly_key: str,
     folder_date: date,
     skip_empty_yield: bool = False,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     """Generic daily fetcher for fundamental endpoints with 5-year truncation.
 
@@ -67,8 +68,14 @@ async def fetch_fundamental_endpoint_daily(
     is False are not queried; an ``empty_content`` issue is recorded so the
     next full-run finalize resolves the cell back to False (finalize treats
     ``empty_content`` + no parquet file as False for fundamentals).
+
+    When ``symbols_filter`` is set, the catalog is restricted to those symbols
+    before iteration -- used by the weekend adjustment to retry only the
+    ``(symbol, endpoint)`` pairs flagged in the ingestion report.
     """
     catalog = read_catalog_symbols(catalog_dir, asset_type)
+    if symbols_filter is not None:
+        catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / endpoint
     output_dir.mkdir(parents=True, exist_ok=True)
 

@@ -36,9 +36,12 @@ async def fetch_insider(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     catalog = catalog.filter(pl.col("status") == "Active")
+    if symbols_filter is not None:
+        catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "insider"
     output_dir.mkdir(parents=True, exist_ok=True)
 

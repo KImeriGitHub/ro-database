@@ -169,7 +169,7 @@ Because the existing finalize rule for fundamental endpoints resolves `empty_con
 ### When to enable
 
 - **Weekday daily runs (`scheduled_scripts/run_daily.py`)**: flag is enabled. Most fundamentals don't move day-to-day, so re-querying chronically-empty tickers burns calls for nothing.
-- **Weekend runs** (future `scheduled_scripts/run_weekend_adjustments.py`): flag is **not** set. The weekend sweep re-queries every symbol so cells that have started returning data flip back to True after finalize.
+- **Weekend runs (`scheduled_scripts/run_weekend.py`)**: flag is **not** set. The weekend sweep re-queries every symbol that had an issue so cells that have started returning data flip back to True after finalize. See [Weekend adjustment](#weekend-adjustment) below.
 
 ### Caveats
 
@@ -230,6 +230,68 @@ Cells resolved per the same rules:
 
 Partial runs (`--asset-types` / `--endpoints`) skip finalize to avoid flipping columns for endpoints that were not part of the run.
 
+## Weekend adjustment
+
+A second pass over the latest daily folder, intended for Saturday evening. It re-queries only the `(symbol, asset_type, endpoint)` cells flagged in that folder's `ingestion_report.parquet`, writes the results back into the same folder, merges the report in place, and rewrites `yield_status.parquet`. Lives in [`adjust_weekly.py`](adjust_weekly.py) and is invoked by [`scheduled_scripts/run_weekend.py`](../scheduled_scripts/run_weekend.py).
+
+### Date resolution
+
+- `folder_date` = max `YYYY-MM-DD` subdirectory under `daily/` (the most recent daily folder).
+- `previous_date` = max folder-date strictly earlier than `folder_date - look_back_days`. If no such folder exists, falls back to `folder_date - (look_back_days + 1)`.
+- Default `look_back_days = 6`. Running on Saturday evening this resolves to a wider `(previous_date, folder_date]` window spanning the whole trading week, which every price-like endpoint uses for truncation.
+
+### What gets re-queried
+
+Only `(symbol, asset_type, endpoint)` triples present in `daily/<folder_date>/ingestion_report.parquet` are retried. **Pairs that worked fine on `folder_date` are not touched** -- their existing parquet files stay intact.
+
+For each retried triple, the endpoint's built-in `out_path.exists(): continue` guard does the right thing:
+
+- **Non-fundamental endpoints**: skip when `SYMBOL.parquet` already exists in the folder-date output dir.
+- **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
+- **Sentiment**: handled specially (see below).
+
+The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call.
+
+### `symbols_filter` on endpoint functions
+
+Every `fetch_*` in [`endpoints/`](endpoints/) accepts a `symbols_filter: set[str] | None = None` kwarg. When provided, the endpoint restricts its catalog iteration to that set before the per-symbol loop; default `None` preserves the full-catalog behaviour used by `setup_daily.py`. `adjust_weekly` passes the retried symbol set from the ingestion report.
+
+### Sentiment is all-or-nothing
+
+Sentiment is one global paginated fetch, not per-symbol. Any sentiment issue in the ingestion report -- including the sentinel `GLOBAL` symbol used for global-fetch failures -- triggers a full sentiment rerun. Before `fetch_sentiment` is called, every file under `stocks/sentiment/` (the `ALL_MESSAGES.parquet` and each `SYMBOL.parquet`) is renamed to `*.pre_weekly` so the endpoint's existence guards don't short-circuit the rerun. Previous `.pre_weekly` siblings from an earlier weekend pass are overwritten.
+
+`fetch_sentiment` then paginates from the wider `previous_date 00:00 UTC` back up to now, writes a fresh `ALL_MESSAGES.parquet`, and splits per-symbol files for every active stock.
+
+### Merge-in-place ingestion report
+
+After the retry tasks finish:
+
+1. Every row in `daily/<folder_date>/ingestion_report.parquet` whose `(symbol, asset_type, endpoint)` triple was retried is dropped. For sentiment, **all** `endpoint=sentiment` rows for `asset_type=stocks` are dropped regardless of symbol (since the rerun replaces the whole set).
+2. Fresh issues recorded during this pass are appended.
+3. The merged frame is written back to the same path.
+4. `finalize_yield_status(catalog_dir, day_root, datetime.now(tz=ET))` rewrites `catalog/yield_status.parquet` from the merged report, so cells that had a structure/throttle/empty issue on the weekday run flip back to True if the weekend retry succeeded.
+
+The ingestion report only concerns the ALL_MESSAGES.parquet and thus the associated symbol is 'GLOBAL'.
+
+
+### What the orchestrator does not do
+
+- **No `update_catalog_all` call.** The catalog is assumed fresh from the most recent weekday run; `run_weekend.py` only pulls, mutates `daily/<folder_date>/` and `yield_status.parquet`, and pushes back.
+- **No `.setup_started_at` marker.** The weekend sweep never creates or consumes the daily resume marker.
+- **No upload of older folders.** Only `catalog/` and `daily/<folder_date>/` are re-uploaded; older date folders are listed from GCS but not downloaded or touched.
+
+### Usage
+
+```bash
+# Local invocation (equivalent to what run_weekend.py does remotely)
+python daily_data_service/adjust_weekly.py
+python daily_data_service/adjust_weekly.py --look-back-days 10
+python daily_data_service/adjust_weekly.py --catalog-dir /path/to/catalog --daily-dir /path/to/daily
+
+# Container entrypoint
+python scheduled_scripts/run_weekend.py --look-back-days 6
+```
+
 ## Module structure
 
 ```
@@ -239,6 +301,7 @@ daily_data_service/
 ├── ensure_folders.py       # create daily/YYYY-MM-DD/ subtree for a given folder-date
 ├── _common.py              # compute_folder_date, read_previous_date, date-window helpers
 ├── setup_daily.py          # async CLI orchestrator (analogous to setup_historical.py)
+├── adjust_weekly.py        # weekend retry pass over the latest folder-date
 └── endpoints/
     ├── __init__.py
     ├── prices.py

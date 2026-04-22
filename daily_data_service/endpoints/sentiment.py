@@ -41,6 +41,7 @@ async def fetch_sentiment(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     output_dir = daily_dir / asset_type / "sentiment"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -51,6 +52,8 @@ async def fetch_sentiment(
     active_symbols: set[str] = set(
         catalog.filter(pl.col("status") == "Active")["symbol"].to_list()
     )
+    if symbols_filter is not None:
+        active_symbols &= symbols_filter
 
     time_from = datetime.combine(
         previous_date, datetime.min.time(), tzinfo=timezone.utc,

@@ -20,6 +20,7 @@ async def fetch_cash_flow(
     folder_date: date,
     previous_date: date,
     skip_empty_yield: bool = False,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     await fetch_fundamental_endpoint_daily(
         catalog_dir=catalog_dir,
@@ -35,4 +36,5 @@ async def fetch_cash_flow(
         quarterly_key="quarterlyReports",
         folder_date=folder_date,
         skip_empty_yield=skip_empty_yield,
+        symbols_filter=symbols_filter,
     )

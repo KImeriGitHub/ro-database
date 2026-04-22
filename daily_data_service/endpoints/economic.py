@@ -65,8 +65,11 @@ async def fetch_economic(
     asset_type: str,
     folder_date: date,
     previous_date: date,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, _ASSET_TYPE)
+    if symbols_filter is not None:
+        catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / _ASSET_TYPE
     output_dir.mkdir(parents=True, exist_ok=True)
 

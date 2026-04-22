@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import aiohttp
+import polars as pl
 
 from historical_data_setup._common import (
     AV_BASE,
@@ -36,8 +37,11 @@ async def fetch_earnings_estimates(
     folder_date: date,
     previous_date: date,
     skip_empty_yield: bool = False,
+    symbols_filter: set[str] | None = None,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
+    if symbols_filter is not None:
+        catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "earnings_estimates"
     output_dir.mkdir(parents=True, exist_ok=True)
 
