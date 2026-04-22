@@ -20,6 +20,7 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
+from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import (
     init_stocks_etfs,
@@ -33,11 +34,6 @@ from asset_catalog_service.updates import (
     update_earnings_calendar,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 
@@ -109,6 +105,7 @@ def init_all(
 if __name__ == "__main__":
     import argparse
 
+    configure_logging()
     parser = argparse.ArgumentParser(description="Initial catalog setup")
     parser.add_argument(
         "--catalog-dir",

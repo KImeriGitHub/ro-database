@@ -27,6 +27,7 @@ import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
+from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
 from historical_data_setup.ensure_folders import ensure_historical_folders
@@ -47,11 +48,6 @@ from historical_data_setup.endpoints.commodities import fetch_commodities
 from historical_data_setup.endpoints.economic import fetch_economic
 from historical_data_setup.endpoints.indices import fetch_indices
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 ENDPOINT_MAP = {
@@ -219,6 +215,7 @@ async def run_historical_setup(
 if __name__ == "__main__":
     import argparse
 
+    configure_logging()
     parser = argparse.ArgumentParser(description="Download historical data from Alpha Vantage")
     parser.add_argument(
         "--catalog-dir", type=Path, default=None,

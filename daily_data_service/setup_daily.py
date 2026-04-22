@@ -28,6 +28,7 @@ import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
+from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
 from daily_data_service._common import (
@@ -52,11 +53,6 @@ from daily_data_service.endpoints.commodities import fetch_commodities
 from daily_data_service.endpoints.economic import fetch_economic
 from daily_data_service.endpoints.indices import fetch_indices
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%H:%M:%S",
-)
 logger = logging.getLogger(__name__)
 
 ENDPOINT_MAP = {
@@ -240,6 +236,7 @@ async def run_daily_pull(
 if __name__ == "__main__":
     import argparse
 
+    configure_logging()
     parser = argparse.ArgumentParser(description="Daily incremental pull from Alpha Vantage")
     parser.add_argument(
         "--catalog-dir", type=Path, default=None,

@@ -48,6 +48,7 @@ import polars as pl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
+from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
 from daily_data_service._common import ET
@@ -326,11 +327,7 @@ async def adjust_weekly(
 if __name__ == "__main__":
     import argparse
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    configure_logging()
 
     parser = argparse.ArgumentParser(
         description="Weekend retry pass over the latest daily folder"
