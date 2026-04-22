@@ -87,8 +87,6 @@ async def fetch_economic(
         if out_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         config = _INDICATOR_CONFIG.get(symbol)
         if config is None:
             issue_tracker.record(
@@ -170,7 +168,7 @@ async def fetch_economic(
 
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
-            logger.info(f"  {symbol}: saved empty frame (no rows {label})")
+            logger.info(f"  {_ENDPOINT}: {symbol} saved empty frame (no rows {label})")
         else:
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")
         del df

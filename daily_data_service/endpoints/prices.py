@@ -56,8 +56,6 @@ async def fetch_intraday_prices(
         if out_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=TIME_SERIES_INTRADAY"
             f"&symbol={symbol}&interval=1min"
@@ -146,9 +144,9 @@ async def fetch_intraday_prices(
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
             logger.info(
-                f"  {symbol}: saved empty frame "
+                f"  prices ({asset_type}): {symbol} saved empty frame "
                 f"(no bars in ({previous_date}, {folder_date}])"
             )
         else:
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  prices ({asset_type}): {symbol} saved {df.height} rows")
         del df

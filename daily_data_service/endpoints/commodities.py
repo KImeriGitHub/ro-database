@@ -61,9 +61,9 @@ def _finalize(
     )
     df.write_parquet(out_path, compression="zstd")
     if df.height == 0:
-        logger.info(f"  {symbol}: saved empty frame (no rows {label})")
+        logger.info(f"  {_ENDPOINT}: {symbol} saved empty frame (no rows {label})")
     else:
-        logger.info(f"  {symbol}: saved {df.height} rows")
+        logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")
     del df
 
 
@@ -230,8 +230,6 @@ async def fetch_commodities(
 
         if out_path.exists():
             continue
-
-        logger.info(f"[{idx}/{total}] {symbol}")
 
         if symbol in _GOLD_SILVER_MAP:
             await _fetch_gold_silver(

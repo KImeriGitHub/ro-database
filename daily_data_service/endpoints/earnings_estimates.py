@@ -74,8 +74,6 @@ async def fetch_earnings_estimates(
             )
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=EARNINGS_ESTIMATES"
             f"&symbol={symbol}&apikey={api_key}"
@@ -152,10 +150,10 @@ async def fetch_earnings_estimates(
             truncated.write_parquet(annual_path, compression="zstd")
             if truncated.height == 0:
                 logger.info(
-                    f"  {symbol}: saved empty annual frame (no rows >= {cutoff})"
+                    f"  earnings_estimates ({asset_type}): {symbol} saved empty annual frame (no rows >= {cutoff})"
                 )
             else:
-                logger.info(f"  {symbol}: saved {truncated.height} annual rows")
+                logger.info(f"  earnings_estimates ({asset_type}): {symbol} saved {truncated.height} annual rows")
             del annual_df, truncated
 
         quarterly_df = _build_fundamental_df(
@@ -167,10 +165,10 @@ async def fetch_earnings_estimates(
             truncated.write_parquet(quarterly_path, compression="zstd")
             if truncated.height == 0:
                 logger.info(
-                    f"  {symbol}: saved empty quarterly frame (no rows >= {cutoff})"
+                    f"  earnings_estimates ({asset_type}): {symbol} saved empty quarterly frame (no rows >= {cutoff})"
                 )
             else:
-                logger.info(f"  {symbol}: saved {truncated.height} quarterly rows")
+                logger.info(f"  earnings_estimates ({asset_type}): {symbol} saved {truncated.height} quarterly rows")
             del quarterly_df, truncated
 
         del annual_records, quarterly_records

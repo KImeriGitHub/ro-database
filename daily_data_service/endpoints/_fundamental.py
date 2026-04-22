@@ -32,6 +32,8 @@ def _write_truncated(
     symbol: str,
     report_label: str,
     cutoff: date,
+    endpoint: str,
+    asset_type: str,
 ) -> None:
     """Filter to ``fiscalDateEnding >= cutoff`` and write. Schema is
     preserved by polars' filter even when the result is zero rows, so an
@@ -40,10 +42,10 @@ def _write_truncated(
     truncated.write_parquet(out_path, compression="zstd")
     if truncated.height == 0:
         logger.info(
-            f"  {symbol}: saved empty {report_label} frame (no rows >= {cutoff})"
+            f"  {endpoint} ({asset_type}): {symbol} saved empty {report_label} frame (no rows >= {cutoff})"
         )
     else:
-        logger.info(f"  {symbol}: saved {truncated.height} {report_label} rows")
+        logger.info(f"  {endpoint} ({asset_type}): {symbol} saved {truncated.height} {report_label} rows")
 
 
 async def fetch_fundamental_endpoint_daily(
@@ -107,8 +109,6 @@ async def fetch_fundamental_endpoint_daily(
             )
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function={av_function}"
             f"&symbol={symbol}&apikey={api_key}"
@@ -155,14 +155,14 @@ async def fetch_fundamental_endpoint_daily(
             annual_records, symbol, asset_type, endpoint, "annual", issue_tracker,
         )
         if annual_df is not None:
-            _write_truncated(annual_df, annual_path, symbol, "annual", cutoff)
+            _write_truncated(annual_df, annual_path, symbol, "annual", cutoff, endpoint, asset_type)
             del annual_df
 
         quarterly_df = _build_fundamental_df(
             quarterly_records, symbol, asset_type, endpoint, "quarterly", issue_tracker,
         )
         if quarterly_df is not None:
-            _write_truncated(quarterly_df, quarterly_path, symbol, "quarterly", cutoff)
+            _write_truncated(quarterly_df, quarterly_path, symbol, "quarterly", cutoff, endpoint, asset_type)
             del quarterly_df
 
         del annual_records, quarterly_records

@@ -59,8 +59,6 @@ async def fetch_insider(
         if out_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=INSIDER_TRANSACTIONS"
             f"&symbol={symbol}&apikey={api_key}"
@@ -150,9 +148,9 @@ async def fetch_insider(
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
             logger.info(
-                f"  {symbol}: saved empty frame "
+                f"  insider ({asset_type}): {symbol} saved empty frame "
                 f"(no transactions since {cutoff})"
             )
         else:
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  insider ({asset_type}): {symbol} saved {df.height} rows")
         del df
