@@ -46,8 +46,6 @@ async def fetch_indices(
         if out_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=INDEX_DATA"
             f"&symbol={symbol}&interval=daily&apikey={api_key}"
@@ -123,7 +121,7 @@ async def fetch_indices(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")
             del df
 
         del rows

@@ -51,7 +51,6 @@ async def fetch_intraday_prices(
         # --- FirstRate Data path ---
         frd_path = frd_csv_path(frd_dir, symbol, "1min")
         if frd_path is not None:
-            logger.info(f"[{idx}/{total}] {symbol}: loading from FRD")
             try:
                 raw = pl.read_csv(frd_path, infer_schema_length=0)
                 raw = raw.rename({c: c.strip() for c in raw.columns})
@@ -90,7 +89,7 @@ async def fetch_intraday_prices(
 
                 df.write_parquet(out_path, compression="zstd")
                 logger.info(
-                    f"  {symbol}: saved {df.height} rows from FRD"
+                    f"  prices ({asset_type}): {symbol} saved {df.height} rows from FRD"
                     f" ({cast_failures} cast failures)"
                 )
                 del raw, df
@@ -107,7 +106,7 @@ async def fetch_intraday_prices(
             logger.info(f"[{idx}/{total}] {symbol}: no months to fetch, skipping")
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}: fetching {len(months)} months")
+        logger.info(f"  prices ({asset_type}): [{idx}/{total}] {symbol} fetching {len(months)} months")
 
         all_rows: list[dict] = []
 
@@ -192,7 +191,7 @@ async def fetch_intraday_prices(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  prices ({asset_type}): {symbol} saved {df.height} rows")
             del df
 
         del all_rows

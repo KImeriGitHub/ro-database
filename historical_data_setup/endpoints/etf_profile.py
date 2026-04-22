@@ -189,7 +189,7 @@ async def fetch_etf_profile(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = catalog.height
-    logger.info(f"etf_profile ({asset_type}): {total} symbols to process")
+    logger.info(f"etf_profile (etfs): {total} symbols to process")
 
     today = date.today()
 
@@ -199,8 +199,6 @@ async def fetch_etf_profile(
 
         if out_path.exists():
             continue
-
-        logger.info(f"[{idx}/{total}] {symbol}")
 
         url = (
             f"{AV_BASE}/query?function=ETF_PROFILE"
@@ -291,5 +289,5 @@ async def fetch_etf_profile(
         schema = _build_schema()
         df = pl.DataFrame([row_data], schema=schema)
         df.write_parquet(out_path, compression="zstd")
-        logger.info(f"  {symbol}: saved etf_profile")
+        logger.info(f"  etf_profile: {symbol} saved etf_profile")
         del df, row_data

@@ -55,8 +55,6 @@ async def fetch_forex(
         from_symbol = symbol[:3]
         to_symbol = symbol[3:]
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=FX_DAILY"
             f"&from_symbol={from_symbol}&to_symbol={to_symbol}"
@@ -139,7 +137,7 @@ async def fetch_forex(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")
             del df
 
         del rows

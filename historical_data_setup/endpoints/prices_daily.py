@@ -78,7 +78,6 @@ async def fetch_daily_prices(
         sda_path = frd_csv_path(frd_dir, symbol, "1day_splitdivadjusted")
 
         if unadj_path and sa_path and sda_path:
-            logger.info(f"[{idx}/{total}] {symbol}: loading from FRD")
             try:
                 unadj = _read_frd_daily_csv(unadj_path)
                 sa = _read_frd_daily_csv(sa_path)
@@ -165,7 +164,7 @@ async def fetch_daily_prices(
                 )
                 df.write_parquet(out_path, compression="zstd")
                 logger.info(
-                    f"  {symbol}: saved {df.height} rows from FRD"
+                    f"  prices_daily ({asset_type}): {symbol} saved {df.height} rows from FRD"
                     f" ({cast_failures} cast failures)"
                 )
                 del combined, df
@@ -177,8 +176,6 @@ async def fetch_daily_prices(
             continue
 
         # --- Alpha Vantage path ---
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=TIME_SERIES_DAILY_ADJUSTED"
             f"&symbol={symbol}&outputsize=full&apikey={api_key}"
@@ -264,7 +261,7 @@ async def fetch_daily_prices(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  prices_daily ({asset_type}): {symbol} saved {df.height} rows")
             del df
 
         del rows

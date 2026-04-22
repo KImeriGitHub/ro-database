@@ -41,7 +41,7 @@ async def fetch_insider(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = catalog.height
-    logger.info(f"insider ({asset_type}): {total} active symbols to process")
+    logger.info(f"insider (stocks): {total} active symbols to process")
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
@@ -49,8 +49,6 @@ async def fetch_insider(
 
         if out_path.exists():
             continue
-
-        logger.info(f"[{idx}/{total}] {symbol}")
 
         url = (
             f"{AV_BASE}/query?function=INSIDER_TRANSACTIONS"
@@ -154,5 +152,5 @@ async def fetch_insider(
 
         df = df.sort("transactionDate")
         df.write_parquet(out_path, compression="zstd")
-        logger.info(f"  {symbol}: saved {df.height} rows")
+        logger.info(f"  insider: {symbol} saved {df.height} rows")
         del df

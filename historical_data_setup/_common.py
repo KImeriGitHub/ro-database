@@ -216,7 +216,7 @@ class IssueTracker:
                 "timestamp": datetime.now(),
             }
         )
-        logger.warning(f"Issue [{issue_type}] {symbol} ({endpoint}): {detail}")
+        logger.info(f"Issue [{issue_type}] {symbol} ({endpoint}): {detail}")
 
     @property
     def count(self) -> int:
@@ -423,8 +423,6 @@ async def fetch_fundamental_endpoint(
         if annual_path.exists() and quarterly_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function={av_function}"
             f"&symbol={symbol}&apikey={api_key}"
@@ -475,7 +473,7 @@ async def fetch_fundamental_endpoint(
         )
         if annual_df is not None:
             annual_df.write_parquet(annual_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {annual_df.height} annual rows")
+            logger.info(f"  {endpoint} ({asset_type}): {symbol} saved {annual_df.height} annual rows")
             del annual_df
 
         # Build and save quarterly
@@ -484,7 +482,7 @@ async def fetch_fundamental_endpoint(
         )
         if quarterly_df is not None:
             quarterly_df.write_parquet(quarterly_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {quarterly_df.height} quarterly rows")
+            logger.info(f"  {endpoint} ({asset_type}): {symbol} saved {quarterly_df.height} quarterly rows")
             del quarterly_df
 
         del annual_records, quarterly_records

@@ -139,7 +139,7 @@ async def fetch_economic(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")
             del df
 
         del rows

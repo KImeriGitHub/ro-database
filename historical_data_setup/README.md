@@ -375,6 +375,8 @@ Each row corresponds to one ticker mentioned in one article. If an article menti
 - `cast_failure` -- `time_published` parse failure
 - `av_throttle` -- persistent rate-limit after retries
 
+The ingestion report only concerns the ALL_MESSAGES.parquet and thus the associated symbol is 'GLOBAL'.
+
 **Resource estimate (based on 500-call sample, 2026-04-10):**
 
 | Metric | Observed (500 calls) | Extrapolated (full 2010--now) |

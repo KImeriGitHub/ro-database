@@ -47,8 +47,6 @@ async def fetch_cryptocurrencies(
         if out_path.exists():
             continue
 
-        logger.info(f"[{idx}/{total}] {symbol}")
-
         url = (
             f"{AV_BASE}/query?function=DIGITAL_CURRENCY_DAILY"
             f"&symbol={symbol}&market=USD&apikey={api_key}"
@@ -132,7 +130,7 @@ async def fetch_cryptocurrencies(
                 .sort("Date")
             )
             df.write_parquet(out_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {df.height} rows")
+            logger.info(f"  {_ENDPOINT}: {symbol}: saved {df.height} rows")
             del df
 
         del rows

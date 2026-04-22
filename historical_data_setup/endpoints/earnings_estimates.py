@@ -38,7 +38,7 @@ async def fetch_earnings_estimates(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = catalog.height
-    logger.info(f"earnings_estimates ({asset_type}): {total} symbols to process")
+    logger.info(f"earnings_estimates: {total} symbols to process")
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
@@ -47,8 +47,6 @@ async def fetch_earnings_estimates(
 
         if annual_path.exists() and quarterly_path.exists():
             continue
-
-        logger.info(f"[{idx}/{total}] {symbol}")
 
         url = (
             f"{AV_BASE}/query?function=EARNINGS_ESTIMATES"
@@ -127,7 +125,7 @@ async def fetch_earnings_estimates(
         )
         if annual_df is not None:
             annual_df.write_parquet(annual_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {annual_df.height} annual rows")
+            logger.info(f"  earnings_estimates: {symbol} saved {annual_df.height} annual rows")
             del annual_df
 
         # Build and save quarterly
@@ -137,7 +135,7 @@ async def fetch_earnings_estimates(
         )
         if quarterly_df is not None:
             quarterly_df.write_parquet(quarterly_path, compression="zstd")
-            logger.info(f"  {symbol}: saved {quarterly_df.height} quarterly rows")
+            logger.info(f" earnings_estimates: {symbol} saved {quarterly_df.height} quarterly rows")
             del quarterly_df
 
         del annual_records, quarterly_records
