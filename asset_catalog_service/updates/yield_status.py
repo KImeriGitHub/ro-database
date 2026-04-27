@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 
 from asset_catalog_service.updates._common import YIELD_ENDPOINTS
+from historical_data_setup._common import symbol_parquet_name
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +141,8 @@ def _fundamental_files_exist(
 ) -> bool:
     ep_dir = historical_dir / "stocks" / endpoint
     return (
-        (ep_dir / f"{symbol}_annual.parquet").exists()
-        or (ep_dir / f"{symbol}_quarterly.parquet").exists()
+        (ep_dir / symbol_parquet_name("stocks", symbol, "_annual")).exists()
+        or (ep_dir / symbol_parquet_name("stocks", symbol, "_quarterly")).exists()
     )
 
 

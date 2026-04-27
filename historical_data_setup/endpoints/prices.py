@@ -15,6 +15,7 @@ from historical_data_setup._common import (
     frd_csv_path,
     generate_months,
     read_catalog_symbols,
+    symbol_parquet_name,
     validate_meta_data,
 )
 
@@ -43,7 +44,7 @@ async def fetch_intraday_prices(
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
-        out_path = output_dir / f"{symbol}.parquet"
+        out_path = output_dir / symbol_parquet_name(asset_type, symbol)
 
         if out_path.exists():
             continue

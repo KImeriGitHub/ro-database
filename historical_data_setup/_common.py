@@ -247,6 +247,36 @@ class IssueTracker:
 
 
 # ---------------------------------------------------------------------------
+# Per-symbol parquet filename
+# ---------------------------------------------------------------------------
+
+# Asset-type filename prefix. Windows reserves names like CON, PRN, AUX, NUL,
+# COM0-9, LPT0-9 regardless of extension, so a ticker that collides with one
+# (e.g. PRN) would be unwritable as ``PRN.parquet``. Always prepending an
+# asset-type prefix yields ``etf_PRN.parquet`` / ``stock_CON.parquet`` and
+# sidesteps the issue uniformly across asset types.
+ASSET_TYPE_FILE_PREFIX: dict[str, str] = {
+    "stocks": "stock_",
+    "etfs": "etf_",
+    "forex": "forex_",
+    "indices": "index_",
+    "cryptocurrencies": "crypto_",
+    "commodities": "commodity_",
+    "economic": "economic_",
+}
+
+
+def symbol_parquet_name(asset_type: str, symbol: str, suffix: str = "") -> str:
+    """Build a per-symbol parquet filename, prefixed by asset type.
+
+    *suffix* is appended before the extension (e.g. ``"_annual"`` for
+    fundamental endpoints).
+    """
+    prefix = ASSET_TYPE_FILE_PREFIX[asset_type]
+    return f"{prefix}{symbol}{suffix}.parquet"
+
+
+# ---------------------------------------------------------------------------
 # FirstRate Data CSV helpers
 # ---------------------------------------------------------------------------
 
@@ -417,8 +447,8 @@ async def fetch_fundamental_endpoint(
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
-        annual_path = output_dir / f"{symbol}_annual.parquet"
-        quarterly_path = output_dir / f"{symbol}_quarterly.parquet"
+        annual_path = output_dir / symbol_parquet_name(asset_type, symbol, "_annual")
+        quarterly_path = output_dir / symbol_parquet_name(asset_type, symbol, "_quarterly")
 
         if annual_path.exists() and quarterly_path.exists():
             continue

@@ -20,6 +20,7 @@ from historical_data_setup._common import (
     RateLimiter,
     fetch_av_json,
     read_catalog_symbols,
+    symbol_parquet_name,
 )
 from historical_data_setup.endpoints.sentiment import (
     SCHEMA,
@@ -170,7 +171,7 @@ async def fetch_sentiment(
 
     saved = 0
     for symbol in sorted(active_symbols):
-        sym_path = output_dir / f"{symbol}.parquet"
+        sym_path = output_dir / symbol_parquet_name(asset_type, symbol)
         if sym_path.exists():
             continue
 

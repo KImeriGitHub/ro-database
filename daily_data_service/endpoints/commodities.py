@@ -20,6 +20,7 @@ from historical_data_setup._common import (
     RateLimiter,
     fetch_av_json,
     read_catalog_symbols,
+    symbol_parquet_name,
 )
 from daily_data_service._common import since_expr, window_expr, years_before
 
@@ -226,7 +227,7 @@ async def fetch_commodities(
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
-        out_path = output_dir / f"{symbol}.parquet"
+        out_path = output_dir / symbol_parquet_name(_ASSET_TYPE, symbol)
 
         if out_path.exists():
             continue

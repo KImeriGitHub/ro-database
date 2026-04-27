@@ -13,6 +13,7 @@ from historical_data_setup._common import (
     RateLimiter,
     fetch_av_json,
     read_catalog_symbols,
+    symbol_parquet_name,
     validate_meta_data,
 )
 
@@ -47,7 +48,7 @@ async def fetch_forex(
         if symbol == "USDUSD":
             continue
 
-        out_path = output_dir / f"{symbol}.parquet"
+        out_path = output_dir / symbol_parquet_name(_ASSET_TYPE, symbol)
 
         if out_path.exists():
             continue

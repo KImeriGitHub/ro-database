@@ -19,6 +19,7 @@ from historical_data_setup._common import (
     RateLimiter,
     fetch_av_json,
     read_catalog_symbols,
+    symbol_parquet_name,
 )
 from historical_data_setup.endpoints.etf_profile import (
     REQUIRED_KEYS,
@@ -61,7 +62,7 @@ async def fetch_etf_profile(
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
-        out_path = output_dir / f"{symbol}.parquet"
+        out_path = output_dir / symbol_parquet_name(asset_type, symbol)
 
         if out_path.exists():
             continue

@@ -20,6 +20,7 @@ from historical_data_setup._common import (
     _build_fundamental_df,
     fetch_av_json,
     read_catalog_symbols,
+    symbol_parquet_name,
 )
 from daily_data_service._common import read_yield_skip_set, since_expr, years_before
 
@@ -60,8 +61,8 @@ async def fetch_earnings_estimates(
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]
-        annual_path = output_dir / f"{symbol}_annual.parquet"
-        quarterly_path = output_dir / f"{symbol}_quarterly.parquet"
+        annual_path = output_dir / symbol_parquet_name(asset_type, symbol, "_annual")
+        quarterly_path = output_dir / symbol_parquet_name(asset_type, symbol, "_quarterly")
 
         if annual_path.exists() and quarterly_path.exists():
             continue
