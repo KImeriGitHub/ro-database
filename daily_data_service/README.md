@@ -43,7 +43,9 @@ daily/
     ├── cryptocurrencies/
     ├── commodities/
     ├── economic/
-    └── ingestion_report.parquet
+    ├── ingestion_report.parquet
+    ├── monitoring_report.json   # written by monitoring_service at end of daily/weekend run
+    └── monitoring_report.md     # human-readable rendering of the JSON
 ```
 
 ## Date resolution
@@ -120,6 +122,8 @@ Because saving an empty-but-valid frame is treated as success:
 ## Output schemas
 
 Every parquet file is schema-identical to its historical counterpart (same column names and dtypes, just fewer rows). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#stocks--etfs) for per-endpoint schemas.
+
+Per-symbol filenames use the same asset-type prefix scheme as the historical setup (e.g. `daily/<date>/etfs/prices/etf_SPY.parquet`, `daily/<date>/stocks/income_statement/stock_AAPL_annual.parquet`). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table and rationale.
 
 ## Usage
 
@@ -273,6 +277,17 @@ After the retry tasks finish:
 
 The ingestion report only concerns the ALL_MESSAGES.parquet and thus the associated symbol is 'GLOBAL'.
 
+
+### Monitoring report
+
+After both the daily and the weekend pull, the container writes
+`monitoring_report.json` and `monitoring_report.md` into the same
+`daily/<folder_date>/` folder and uploads them to GCS alongside the
+ingestion report. The weekend run pulls the daily report from GCS first as
+`monitoring_report.previous.json` and uses it as the diff baseline so the
+report's `delta` section captures what `adjust_weekly` actually changed.
+A monitor failure is logged and skipped; it never fails the pull. See
+[monitoring_service/README.md](../monitoring_service/README.md).
 
 ### What the orchestrator does not do
 

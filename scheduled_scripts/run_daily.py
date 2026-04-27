@@ -30,11 +30,17 @@ from asset_catalog_service.update_catalog import update_all as update_catalog_al
 from config.gcp import GCS_BUCKET
 from daily_data_service.setup_daily import run_daily_pull
 from daily_data_service._common import resolve_start_marker
+from historical_data_setup._common import get_av_call_count, reset_av_call_count
 from maintainance_scripts import gcs_client
 from maintainance_scripts.logging_setup import configure_logging
 from maintainance_scripts.paths import (
     gcs_catalog_prefix,
     gcs_daily_prefix,
+)
+from monitoring_service.report import (
+    REPORT_FILENAME_JSON,
+    REPORT_FILENAME_MD,
+    run_and_persist,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,10 +68,76 @@ def _push_catalog(catalog_local: Path) -> None:
     gcs_client.upload_tree(catalog_local, gcs_catalog_prefix())
 
 
+def _try_pull_previous_monitoring_report(
+    daily_local: Path, folder_date: date,
+) -> Path | None:
+    """Look one folder-date back in GCS for the prior monitoring_report.json.
+
+    Best-effort: if the prior folder doesn't exist or the blob is absent the
+    monitor just records ``previous_available=False`` and moves on.
+    """
+    daily_prefix = gcs_daily_prefix()
+    prior_dates: list[date] = []
+    for info in gcs_client.list_blobs(f"{daily_prefix}/"):
+        rel = info.name[len(daily_prefix) + 1:]
+        head = rel.split("/", 1)[0] if "/" in rel else ""
+        try:
+            d = date.fromisoformat(head)
+        except ValueError:
+            continue
+        if d < folder_date:
+            prior_dates.append(d)
+    if not prior_dates:
+        return None
+    prior = max(prior_dates)
+    blob_name = f"{gcs_daily_prefix(prior)}/{REPORT_FILENAME_JSON}"
+    if not gcs_client.blob_exists(blob_name):
+        return None
+    local = daily_local / prior.isoformat() / REPORT_FILENAME_JSON
+    gcs_client.download_file(blob_name, local)
+    logger.info(f"Pulled previous monitoring report from {blob_name}")
+    return local
+
+
+def _build_and_push_monitoring_report(
+    catalog_local: Path,
+    daily_local: Path,
+    folder_date: date,
+    api_call_count: int,
+) -> None:
+    folder_dir = daily_local / folder_date.isoformat()
+    if not folder_dir.exists():
+        logger.info(f"No daily output at {folder_dir}; skipping monitoring report.")
+        return
+
+    previous_path = _try_pull_previous_monitoring_report(daily_local, folder_date)
+
+    try:
+        run_and_persist(
+            mode="daily",
+            folder_date=folder_date,
+            catalog_dir=catalog_local,
+            folder_dir=folder_dir,
+            previous_report_path=previous_path,
+            api_call_count=api_call_count,
+        )
+    except Exception:
+        logger.exception("Monitoring report failed; pull is unaffected.")
+        return
+
+    prefix = gcs_daily_prefix(folder_date)
+    for fname in (REPORT_FILENAME_JSON, REPORT_FILENAME_MD):
+        local_path = folder_dir / fname
+        if local_path.exists():
+            gcs_client.upload_file(local_path, f"{prefix}/{fname}")
+
+
 async def _run(workdir: Path, api_tier: str) -> int:
     catalog_local = _pull_catalog(workdir)
     daily_local = workdir / "daily"
     daily_local.mkdir(parents=True, exist_ok=True)
+
+    reset_av_call_count()
 
     try:
         update_catalog_all(catalog_local)
@@ -90,6 +162,11 @@ async def _run(workdir: Path, api_tier: str) -> int:
     # starts fresh.
     _, folder_date, marker = resolve_start_marker(daily_local)
     marker.unlink(missing_ok=True)
+
+    api_calls_used = get_av_call_count()
+    _build_and_push_monitoring_report(
+        catalog_local, daily_local, folder_date, api_calls_used,
+    )
 
     _push_daily_folder(daily_local, folder_date)
     _push_catalog(catalog_local)

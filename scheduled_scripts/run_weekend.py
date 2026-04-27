@@ -31,11 +31,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config.gcp import GCS_BUCKET
 from daily_data_service.adjust_weekly import adjust_weekly
+from historical_data_setup._common import get_av_call_count, reset_av_call_count
 from maintainance_scripts import gcs_client
 from maintainance_scripts.logging_setup import configure_logging
 from maintainance_scripts.paths import (
     gcs_catalog_prefix,
     gcs_daily_prefix,
+)
+from monitoring_service.report import (
+    REPORT_FILENAME_JSON,
+    REPORT_FILENAME_MD,
+    run_and_persist,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,6 +106,48 @@ def _push_catalog(catalog_local: Path) -> None:
     gcs_client.upload_tree(catalog_local, gcs_catalog_prefix())
 
 
+def _build_and_push_monitoring_report(
+    catalog_local: Path,
+    daily_local: Path,
+    folder_date: date,
+    api_call_count: int,
+) -> None:
+    folder_dir = daily_local / folder_date.isoformat()
+    if not folder_dir.exists():
+        logger.info(f"No daily output at {folder_dir}; skipping monitoring report.")
+        return
+
+    # The previous report for a weekend run is the daily monitoring_report
+    # written into the same folder before adjust_weekly ran (uploaded by
+    # run_daily.py). Pull it from GCS to a sibling path so the diff captures
+    # what the weekend pass changed.
+    previous_path: Path | None = None
+    blob_name = f"{gcs_daily_prefix(folder_date)}/{REPORT_FILENAME_JSON}"
+    if gcs_client.blob_exists(blob_name):
+        previous_path = folder_dir / "monitoring_report.previous.json"
+        gcs_client.download_file(blob_name, previous_path)
+        logger.info(f"Pulled previous (pre-weekend) monitoring report from {blob_name}")
+
+    try:
+        run_and_persist(
+            mode="weekend",
+            folder_date=folder_date,
+            catalog_dir=catalog_local,
+            folder_dir=folder_dir,
+            previous_report_path=previous_path,
+            api_call_count=api_call_count,
+        )
+    except Exception:
+        logger.exception("Monitoring report failed; weekend pull is unaffected.")
+        return
+
+    prefix = gcs_daily_prefix(folder_date)
+    for fname in (REPORT_FILENAME_JSON, REPORT_FILENAME_MD):
+        local_path = folder_dir / fname
+        if local_path.exists():
+            gcs_client.upload_file(local_path, f"{prefix}/{fname}")
+
+
 async def _run(workdir: Path, look_back_days: int, api_tier: str) -> int:
     catalog_local = _pull_catalog(workdir)
     daily_local = workdir / "daily"
@@ -113,6 +161,8 @@ async def _run(workdir: Path, look_back_days: int, api_tier: str) -> int:
     folder_date = folder_dates[-1]
     _pull_folder(daily_local, folder_date)
 
+    reset_av_call_count()
+
     try:
         await adjust_weekly(
             catalog_dir=catalog_local,
@@ -123,6 +173,11 @@ async def _run(workdir: Path, look_back_days: int, api_tier: str) -> int:
     except Exception:
         logger.exception("adjust_weekly failed")
         return 1
+
+    api_calls_used = get_av_call_count()
+    _build_and_push_monitoring_report(
+        catalog_local, daily_local, folder_date, api_calls_used,
+    )
 
     _push_folder(daily_local, folder_date)
     _push_catalog(catalog_local)

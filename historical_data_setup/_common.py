@@ -80,6 +80,23 @@ class AVResponseError(Exception):
     """Raised when Alpha Vantage returns an unrecoverable error."""
 
 
+# Module-level counter incremented inside ``fetch_av_json`` once per HTTP
+# request actually issued (including retries). Lets the monitoring service
+# report API budget usage at the end of an in-process run. Resets are the
+# caller's responsibility -- in normal use the counter starts at zero per
+# Python process, which is the right granularity for daily/weekend jobs.
+_av_call_count = 0
+
+
+def get_av_call_count() -> int:
+    return _av_call_count
+
+
+def reset_av_call_count() -> None:
+    global _av_call_count
+    _av_call_count = 0
+
+
 async def fetch_av_json(
     url: str,
     session: aiohttp.ClientSession,
@@ -91,9 +108,11 @@ async def fetch_av_json(
     Detects AV throttle responses (keys "Note" or "Information") and retries
     after 60 s, up to *max_retries* times.
     """
+    global _av_call_count
     for attempt in range(1, max_retries + 1):
         await rate_limiter.wait()
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+            _av_call_count += 1
             resp.raise_for_status()
             data = await resp.json(content_type=None)
 

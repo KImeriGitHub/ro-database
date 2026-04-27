@@ -2,6 +2,22 @@
 
 One-time historical data download from Alpha Vantage. Fetches price, fundamental, FX, index, crypto, commodity, and economic data for all asset types in the catalog, saves as per-symbol `.parquet` files. Resumable -- already-downloaded symbols are skipped on re-run.
 
+## Per-symbol filename convention
+
+Every per-symbol parquet file is prefixed with an asset-type tag so Windows reserved names (`CON`, `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`) cannot collide with real tickers like `PRN` or `CON`. The schema sections below show the canonical name (`historical/.../SYMBOL.parquet`); the actual filename on disk is `<prefix><SYMBOL>.parquet`:
+
+| asset_type | prefix | example file |
+|---|---|---|
+| stocks | `stock_` | `historical/stocks/prices/stock_AAPL.parquet` |
+| etfs | `etf_` | `historical/etfs/prices_daily/etf_SPY.parquet` |
+| forex | `forex_` | `historical/forex/forex_EURUSD.parquet` |
+| indices | `index_` | `historical/indices/index_SPX.parquet` |
+| cryptocurrencies | `crypto_` | `historical/cryptocurrencies/crypto_BTC.parquet` |
+| commodities | `commodity_` | `historical/commodities/commodity_WTI.parquet` |
+| economic | `economic_` | `historical/economic/economic_CPI.parquet` |
+
+Fundamentals follow the same prefix and append `_annual` / `_quarterly` (e.g. `stock_AAPL_annual.parquet`). The `sentiment/ALL_MESSAGES.parquet` master table is not prefixed (it is not a per-symbol file). The single source of truth is `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")`.
+
 ## Data folder structure
 
 ```
@@ -25,7 +41,9 @@ historical/
 ├── cryptocurrencies/         # SYMBOL.parquet (DIGITAL_CURRENCY_DAILY, ~600 USD pairs)
 ├── commodities/              # SYMBOL.parquet (13 commodities, mixed daily/monthly)
 ├── economic/                 # SYMBOL.parquet (15 indicators, mixed intervals)
-└── ingestion_report.parquet  # issue tracking table
+├── ingestion_report.parquet  # issue tracking table
+├── monitoring_report.json    # written by monitoring_service at end of full setup run
+└── monitoring_report.md      # human-readable rendering of the JSON
 ```
 
 ## Usage
@@ -63,7 +81,20 @@ python historical_data_setup/setup_historical.py --api-tier standard
 
 # Custom paths
 python historical_data_setup/setup_historical.py --catalog-dir /path/to/catalog --historical-dir /path/to/historical
+
+# Skip the end-of-run monitoring report
+python historical_data_setup/setup_historical.py --no-monitor
 ```
+
+## Monitoring report
+
+After every full run, `monitoring_service.run_and_persist` writes
+`historical/monitoring_report.json` and `historical/monitoring_report.md`
+summarising catalog state, ingestion-report rollups, coverage probes
+(SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ holdings), file counts, storage size, and
+the total Alpha Vantage calls this run consumed. Pass `--no-monitor` to
+skip it. A monitor failure is logged and skipped; it never aborts the
+setup. See [monitoring_service/README.md](../monitoring_service/README.md).
 
 ## Recovery and resume
 

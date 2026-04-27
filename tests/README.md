@@ -13,6 +13,11 @@ tests/
 ├── historical_data_setup/      # Tests for historical_data_setup
 │   ├── test_rate_limiter.py    # Sliding-window RateLimiter behavior
 │   └── test_cross_endpoint.py  # Cross-endpoint concurrency + shared rate limit
+├── monitoring_service/         # Tests for monitoring_service
+│   ├── test_analyze_catalog.py    # catalog/*.parquet rollups
+│   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
+│   ├── test_analyze_coverage.py   # SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ-holdings probes
+│   └── test_diff.py               # signed deltas vs previous monitoring_report.json
 ├── call_speedtests/            # Scripts that measure real API call performance
 │   ├── estimate_sentiment_calls.py        # NEWS_SENTIMENT backward pagination cost
 │   ├── estimate_prices_calls.py           # TIME_SERIES_INTRADAY monthly pagination
@@ -53,6 +58,25 @@ Unit tests covering the sliding-window rate limiter and cross-endpoint concurren
 
 - `test_rate_limiter.py` -- verifies `RateLimiter` respects `calls_per_minute`, `window`, and `min_gap`; that concurrent waiters share the budget; and that the window slides forward as timestamps age out.
 - `test_cross_endpoint.py` -- uses a hand-rolled mock `aiohttp.ClientSession` to confirm two endpoint coroutines interleave, never exceed the shared rate limit, and that a slow endpoint does not starve a fast one.
+
+### monitoring_service
+
+Unit tests for the end-of-run monitoring report. Each analyzer is exercised
+against a fresh temporary directory of synthetic parquet files (no real
+catalog or ingestion report needed). Tests cover:
+
+- `test_analyze_catalog.py` -- per-file status bucketing (Active / Delisted /
+  Corrupted, case-insensitive), missing-file fallback, yield_status True /
+  False / Null counts plus ratios, earnings_calendar averages.
+- `test_analyze_ingestion.py` -- flat counts for `timezone_mismatch` and
+  `av_throttle`, per-(asset_type, endpoint) breakdowns for the other issue
+  types, missing-file fallback.
+- `test_analyze_coverage.py` -- SPY/MDY/EWJ/EWU/DIA/QQQ probes including
+  intraday row-count and per-OHLCV-column null-ratio thresholds, daily
+  exact-row-count check, and QQQ-holdings extension when the profile is
+  present.
+- `test_diff.py` -- signed deltas vs a previous monitoring_report.json,
+  including malformed/missing previous reports.
 
 ### call_speedtests
 

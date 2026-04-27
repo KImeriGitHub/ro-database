@@ -220,6 +220,12 @@ data_transformation/          # Transforms daily raw data into AssetData instanc
 scheduled_scripts/            # Orchestration scripts for download runs and API budget tracking
 maintainance_scripts/         # common py files used throughout the repo
 
+monitoring_service/           # End-of-run summary of database state and changes
+                              # (catalog, ingestion report, coverage probes, file counts,
+                              # storage size, AV calls used, diff vs previous report).
+                              # Auto-runs after daily / weekend / historical pulls; also
+                              # invocable via `python -m monitoring_service.run_monitor`.
+
 consistency_tests/            # Validates raw and transformed data against other sources
                               # e.g., checks that intraday open matches daily open
 
@@ -248,6 +254,8 @@ catalog/
 historical/
 ├── .setup_started_at            # mtime = original start time; preserved across resumes
 ├── ingestion_report.parquet     # per-run issue log (overwritten each run)
+├── monitoring_report.json       # end-of-run database snapshot (machine-readable)
+├── monitoring_report.md         # end-of-run database snapshot (human-readable)
 ├── stocks/
 │   ├── prices/
 │   ├── prices_daily/
@@ -272,6 +280,8 @@ daily/
 ├── .setup_started_at            # mtime = folder-date anchor; preserved across resumes
 └── YYYY-MM-DD/
     ├── ingestion_report.parquet # per-run issue log for this date
+    ├── monitoring_report.json   # end-of-run database snapshot (machine-readable)
+    ├── monitoring_report.md     # end-of-run database snapshot (human-readable)
     ├── stocks/
     │   ├── prices/
     │   ├── prices_daily/
@@ -336,6 +346,72 @@ daily/
 
 **Historical price data notes:**
 Historical prices are stored in two separate subfolders under `stocks/`: `prices/` holds intraday bars from `TIME_SERIES_INTRADAY` (Open, High, Low, Close, Volume), and `prices_daily/` holds daily bars from `TIME_SERIES_DAILY_ADJUSTED` (Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient). Adjusted close is not calculated or stored in either folder. If supplemented with FirstRate Data, the FirstRate bundle ships three daily variants per symbol (unadjusted, split-adjusted, split+dividend-adjusted) plus unadjusted 1-min bars. `DividendAmount` and `SplitCoefficient` are derived from the three daily variants to match the AV schema. The data source is recorded per ticker so the origin is preserved.
+
+**Per-symbol parquet filenames:**
+Per-symbol files are prefixed with their asset type so Windows reserved names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) cannot collide with real tickers. The mapping is `stocks` -> `stock_`, `etfs` -> `etf_`, `forex` -> `forex_`, `indices` -> `index_`, `cryptocurrencies` -> `crypto_`, `commodities` -> `commodity_`, `economic` -> `economic_`. So `historical/etfs/prices/SPY.parquet` is actually written as `historical/etfs/prices/etf_SPY.parquet`, fundamentals become `stock_AAPL_annual.parquet` / `stock_AAPL_quarterly.parquet`, and the helper `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")` is the single source of truth. The `sentiment/ALL_MESSAGES.parquet` master table and the asset-class catalog files (`stocks.parquet`, `etfs.parquet`, ...) keep their existing names; only the per-symbol files are prefixed.
+
+## Monitoring
+
+Every daily, weekend, and historical run ends with a monitoring pass that
+snapshots the state of the database and records regressions both to disk and
+to Cloud Logging. See [monitoring_service/README.md](monitoring_service/README.md)
+for the full breakdown.
+
+- **When it runs.** Automatically at the end of `scheduled_scripts/run_daily.py`,
+  `scheduled_scripts/run_weekend.py`, and (by default) the full-run path of
+  `historical_data_setup/setup_historical.py`. Can also be invoked manually:
+  `python -m monitoring_service.run_monitor [--mode {daily,weekend,historical}]
+  [--folder-date YYYY-MM-DD]`. The CLI defaults to `--mode daily` and the
+  latest `YYYY-MM-DD` folder under `daily/`. Failures inside the monitor
+  never fail the underlying run; they are logged and skipped.
+
+- **What it checks.**
+  1. **Catalog health.** Per-file symbol counts. For `stocks`, `etfs`,
+     `indices`, `forex`, `cryptocurrencies`: breakdown by status (Active /
+     Delisted / Corrupted). For `commodities`, `economic`: row count. For
+     `yield_status`: per-endpoint True / False / Null counts and the True /
+     False ratios over True+False. For `earnings_calendar`: row count, cast
+     issue count, average days until the next reportDate.
+  2. **Ingestion report.** From the run's `ingestion_report.parquet`: total
+     `timezone_mismatch` and `av_throttle` (ideally zero, warning if not);
+     `structure_error`, `empty_content`, `cast_failure` totals plus a
+     per-`(asset_type, endpoint)` breakdown.
+  3. **Coverage probes.** Confirms SPY, MDY, EWJ, EWU, DIA, QQQ each have
+     intraday and daily price parquets with the expected shape (intraday
+     >= 390 rows of 1-min bars, per-OHLCV-column null ratio < 1%; daily =
+     exactly one row). Reads today's QQQ ETF profile and extends the probe
+     to every constituent it lists. If the QQQ profile file is not in this
+     run's folder, the holdings probe is logged "skipped" and the six ETFs
+     are still checked.
+  4. **File counts.** Per `(asset_type, endpoint)`, parquet files written
+     vs the catalog size narrowed by `yield_status` (True cells only).
+     Quickly exposes a silently broken endpoint task.
+  5. **Storage size.** Total bytes and file count under the analysed folder.
+  6. **AV calls used.** A counter inside `fetch_av_json` reports how many
+     HTTP requests this run actually issued, for trend-tracking against
+     the 74 calls/min budget. CLI invocations show `null` because a fresh
+     process always sees zero.
+  7. **Delta vs previous report.** Signed deltas of catalog status counts,
+     yield True/False counts, ingestion issue totals, and coverage totals
+     against the previous `monitoring_report.json` (downloaded from GCS).
+     `catalog/` and `yield_status.parquet` are overwritten in place each
+     run, so the JSON snapshot is the only durable prior state available.
+
+- **Output.** `monitoring_report.json` (machine-readable) and
+  `monitoring_report.md` (human summary) land alongside `ingestion_report.parquet`
+  (in `daily/<YYYY-MM-DD>/` for daily/weekend runs, `historical/` for setup)
+  and are uploaded to GCS by the same push step that ships the ingestion
+  report. The summary is also written to stdout, so it shows up verbatim
+  in Cloud Logging.
+
+- **Dashboards and alerts.** Headline counts are emitted as structured log
+  fields (`jsonPayload.monitor.catalog.stocks.active`, `monitor.ingestion.av_throttle`,
+  `monitor.coverage.intraday_ok`, `monitor.api_calls.total`, etc.), so Cloud
+  Logging log-based metrics or Cloud Monitoring custom metrics can chart
+  them and alert on thresholds. Google Analytics is **not** used here: GA
+  is a web/app analytics product and does not fit pipeline telemetry. The
+  right GCP fit is Cloud Logging plus optional Cloud Monitoring custom
+  metrics (or log-based metrics) on the structured fields above.
 
 ## Estimated costs
 

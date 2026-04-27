@@ -31,7 +31,13 @@ from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
 from historical_data_setup.ensure_folders import ensure_historical_folders
-from historical_data_setup._common import RateLimiter, IssueTracker
+from historical_data_setup._common import (
+    IssueTracker,
+    RateLimiter,
+    get_av_call_count,
+    reset_av_call_count,
+)
+from monitoring_service.report import run_and_persist
 from historical_data_setup.endpoints.prices import fetch_intraday_prices
 from historical_data_setup.endpoints.prices_daily import fetch_daily_prices
 from historical_data_setup.endpoints.income_statement import fetch_income_statement
@@ -104,6 +110,7 @@ async def run_historical_setup(
     api_tier: str = "premium",
     stocks_dir: Path | None = None,
     etfs_dir: Path | None = None,
+    run_monitor: bool = True,
 ) -> None:
     """Orchestrate the historical data download with cross-endpoint concurrency.
 
@@ -141,6 +148,7 @@ async def run_historical_setup(
     api_key = get_alpha_vantage_key(api_tier)
     rate_limiter = RateLimiter(74.0)
     issue_tracker = IssueTracker()
+    reset_av_call_count()
 
     # Build the list of (label, coroutine-factory) pairs.
     plan: list[tuple[str, object]] = []
@@ -211,6 +219,19 @@ async def run_historical_setup(
             "Skipping yield_status finalize (partial run via --asset-types/--endpoints)"
         )
 
+    if run_monitor:
+        try:
+            run_and_persist(
+                mode="historical",
+                folder_date=started_at.date(),
+                catalog_dir=catalog_dir,
+                folder_dir=historical_dir,
+                previous_report_path=None,
+                api_call_count=get_av_call_count(),
+            )
+        except Exception:
+            logger.exception("Monitoring report failed; setup is unaffected.")
+
 
 if __name__ == "__main__":
     import argparse
@@ -248,6 +269,10 @@ if __name__ == "__main__":
         "--etfs-dir", type=Path, default=None,
         help="FirstRate Data ETFs directory (flat folder with per-symbol CSVs)",
     )
+    parser.add_argument(
+        "--no-monitor", action="store_true",
+        help="Skip the end-of-run monitoring report.",
+    )
     args = parser.parse_args()
 
     asyncio.run(run_historical_setup(
@@ -258,4 +283,5 @@ if __name__ == "__main__":
         api_tier=args.api_tier,
         stocks_dir=args.stocks_dir,
         etfs_dir=args.etfs_dir,
+        run_monitor=not args.no_monitor,
     ))
