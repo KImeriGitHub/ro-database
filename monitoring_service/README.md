@@ -32,7 +32,7 @@ Per file under `catalog/`:
   ratios `true / (true + false)` and `false / (true + false)`. Null cells
   (the inapplicable pairs) are reported but excluded from the ratios.
 - `earnings_calendar.parquet`: total row count, `cast_issues` row count, and
-  the average days between `today` and the next `reportDate`.
+  the average days between `today` and the next `reportedDate`.
 
 ### Ingestion report (`monitoring_service/analyze_ingestion.py`)
 

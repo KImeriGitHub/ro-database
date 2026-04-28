@@ -126,7 +126,7 @@ def render_markdown(report: dict) -> str:
         lines.append(
             f"earnings_calendar: {ec['total']:,} rows, "
             f"{ec['cast_issues']:,} cast issues, "
-            f"avg days to next reportDate: {ec['avg_days_to_next_reportDate']}"
+            f"avg days to next reportedDate: {ec['avg_days_to_next_reportedDate']}"
         )
         lines.append("")
 

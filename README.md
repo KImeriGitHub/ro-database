@@ -215,7 +215,7 @@ daily_data_service/           # Daily incremental AV pull (mirrors historical_da
                               # at a truncated recent window, no FirstRate Data).
                               # Writes parquet under daily/YYYY-MM-DD/, finalizes yield_status.
 
-data_transformation/          # Transforms daily raw data into AssetData instances
+data_transformation/          # Transforms raw data into AssetData instances
 
 scheduled_scripts/            # Orchestration scripts for download runs and API budget tracking
 maintainance_scripts/         # common py files used throughout the repo
@@ -371,7 +371,7 @@ for the full breakdown.
      Delisted / Corrupted). For `commodities`, `economic`: row count. For
      `yield_status`: per-endpoint True / False / Null counts and the True /
      False ratios over True+False. For `earnings_calendar`: row count, cast
-     issue count, average days until the next reportDate.
+     issue count, average days until the next reportedDate.
   2. **Ingestion report.** From the run's `ingestion_report.parquet`: total
      `timezone_mismatch` and `av_throttle` (ideally zero, warning if not);
      `structure_error`, `empty_content`, `cast_failure` totals plus a

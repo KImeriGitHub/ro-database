@@ -349,11 +349,11 @@ def test_daily_yield_status_noop(mock_fetch_text, mock_fetch_json):
 @patch("asset_catalog_service.updates.earnings_calendar.fetch_text")
 def test_daily_earnings_calendar_overwrites(mock_fetch):
     csv1 = (
-        "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
+        "symbol,name,reportedDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
         "AAPL,Apple Inc,2026-04-25,2026-03-31,1.62,USD,AMC\n"
     )
     csv2 = (
-        "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
+        "symbol,name,reportedDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
         "MSFT,Microsoft,2026-04-22,2026-03-31,3.22,USD,AMC\n"
     )
 

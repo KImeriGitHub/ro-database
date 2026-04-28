@@ -58,7 +58,7 @@ CRYPTO_CSV = (
 )
 
 EARNINGS_CSV = (
-    "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
+    "symbol,name,reportedDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
     "AAPL,Apple Inc,2026-04-25,2026-03-31,1.62,USD,AMC\n"
     "MSFT,Microsoft,2026-04-22,2026-03-31,3.22,USD,AMC\n"
     "BAD,Bad Corp,not-a-date,2026-03-31,xyz,USD,BMS\n"
@@ -397,13 +397,13 @@ def test_init_earnings_calendar(mock_fetch):
     df = pl.read_parquet(MOCK_DIR / "earnings_calendar.parquet")
     assert df.height == 3
     assert set(df.columns) == {
-        "symbol", "name", "reportDate", "fiscalDateEnding",
+        "symbol", "name", "reportedDate", "fiscalDateEnding",
         "estimate", "currency", "timeOfTheDay", "cast_issues",
     }
     # BAD row should have cast issues
     bad_row = df.filter(pl.col("symbol") == "BAD")
     assert bad_row["cast_issues"].to_list()[0] is not None
-    assert "reportDate" in bad_row["cast_issues"].to_list()[0]
+    assert "reportedDate" in bad_row["cast_issues"].to_list()[0]
     assert "estimate" in bad_row["cast_issues"].to_list()[0]
 
     # Good rows should have no cast issues

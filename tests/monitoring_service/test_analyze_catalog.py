@@ -96,7 +96,7 @@ def test_earnings_calendar_summary(catalog_dir):
     pl.DataFrame({
         "symbol": ["A", "B", "C"],
         "name": ["A Co", "B Co", "C Co"],
-        "reportDate": [today + timedelta(days=10), today + timedelta(days=20), None],
+        "reportedDate": [today + timedelta(days=10), today + timedelta(days=20), None],
         "fiscalDateEnding": [today, today, today],
         "estimate": [1.0, 2.0, None],
         "currency": ["USD", "USD", "USD"],
@@ -108,4 +108,4 @@ def test_earnings_calendar_summary(catalog_dir):
     ec = out["earnings_calendar"]
     assert ec["total"] == 3
     assert ec["cast_issues"] == 1
-    assert ec["avg_days_to_next_reportDate"] == pytest.approx(15.0, abs=0.01)
+    assert ec["avg_days_to_next_reportedDate"] == pytest.approx(15.0, abs=0.01)

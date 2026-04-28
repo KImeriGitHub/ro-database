@@ -31,9 +31,9 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
     raw = pl.read_csv(io.StringIO(csv_text), infer_schema_length=0)
 
     df = raw.with_columns(
-        pl.col("reportDate")
+        pl.col("reportedDate")
         .str.to_date("%Y-%m-%d", strict=False)
-        .alias("reportDate_parsed"),
+        .alias("reportedDate_parsed"),
         pl.col("fiscalDateEnding")
         .str.to_date("%Y-%m-%d", strict=False)
         .alias("fiscalDateEnding_parsed"),
@@ -47,11 +47,11 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
         pl.concat_str(
             [
                 pl.when(
-                    pl.col("reportDate").is_not_null()
-                    & (pl.col("reportDate") != "")
-                    & pl.col("reportDate_parsed").is_null()
+                    pl.col("reportedDate").is_not_null()
+                    & (pl.col("reportedDate") != "")
+                    & pl.col("reportedDate_parsed").is_null()
                 )
-                .then(pl.lit("reportDate"))
+                .then(pl.lit("reportedDate"))
                 .otherwise(pl.lit("")),
                 pl.when(
                     pl.col("fiscalDateEnding").is_not_null()
@@ -86,7 +86,7 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
     df = df.select(
         "symbol",
         "name",
-        pl.col("reportDate_parsed").alias("reportDate"),
+        pl.col("reportedDate_parsed").alias("reportedDate"),
         pl.col("fiscalDateEnding_parsed").alias("fiscalDateEnding"),
         pl.col("estimate_parsed").alias("estimate"),
         "currency",

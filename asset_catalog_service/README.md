@@ -180,9 +180,9 @@ Finalize runs only when no `--asset-types` / `--endpoints` subset flags were pas
 
 **Source:** Alpha Vantage `EARNINGS_CALENDAR` with `horizon=6month`.
 
-**Schema:** `symbol (Utf8), name (Utf8), reportDate (Date), fiscalDateEnding (Date), estimate (Float32), currency (Utf8), timeOfTheDay (Utf8), cast_issues (Utf8)`.
+**Schema:** `symbol (Utf8), name (Utf8), reportedDate (Date), fiscalDateEnding (Date), estimate (Float32), currency (Utf8), timeOfTheDay (Utf8), cast_issues (Utf8)`.
 
-**Behaviour:** Always fetched and overwritten, regardless of whether the file exists. The `cast_issues` column records which fields (if any) failed type casting for each row (e.g., `"reportDate,estimate"`). Rows where a cast failed have null in the affected typed column and the original value is not preserved.
+**Behaviour:** Always fetched and overwritten, regardless of whether the file exists. The `cast_issues` column records which fields (if any) failed type casting for each row (e.g., `"reportedDate,estimate"`). Rows where a cast failed have null in the affected typed column and the original value is not preserved.
 
 **Logging:** Three checkpoints are logged:
 1. Whether the CSV was fetched successfully.

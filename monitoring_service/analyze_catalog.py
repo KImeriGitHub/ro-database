@@ -93,20 +93,20 @@ def _earnings_calendar_summary(path: Path, today: date) -> dict:
     )
 
     avg_days: float | None = None
-    if "reportDate" in df.columns:
+    if "reportedDate" in df.columns:
         future = df.filter(
-            pl.col("reportDate").is_not_null()
-            & (pl.col("reportDate") >= today)
+            pl.col("reportedDate").is_not_null()
+            & (pl.col("reportedDate") >= today)
         )
         if future.height:
             avg_days = float(
-                (future["reportDate"] - today).dt.total_days().mean() or 0.0
+                (future["reportedDate"] - today).dt.total_days().mean() or 0.0
             )
 
     return {
         "total": total,
         "cast_issues": cast_issues,
-        "avg_days_to_next_reportDate": (
+        "avg_days_to_next_reportedDate": (
             round(avg_days, 2) if avg_days is not None else None
         ),
     }
@@ -116,7 +116,7 @@ def analyze_catalog(catalog_dir: Path, today: date | None = None) -> dict:
     """Build the ``catalog`` section of a monitoring report.
 
     *today* defaults to ``date.today()`` and is only used to compute the
-    earnings_calendar's ``avg_days_to_next_reportDate``.
+    earnings_calendar's ``avg_days_to_next_reportedDate``.
     """
     today = today or date.today()
     out: dict = {}
