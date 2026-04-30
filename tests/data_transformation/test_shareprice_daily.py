@@ -173,7 +173,7 @@ def test_build_shareprice_daily_empty_paths():
 
 
 def test_build_shareprice_daily_simple(tmp_path):
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_sp_source(p, [
         _row(date(2020, 1, 1), 100, 100, 100, 100, 1000),
         _row(date(2020, 1, 2), 100, 100, 100, 100, 1000),
@@ -188,7 +188,7 @@ def test_build_shareprice_daily_simple(tmp_path):
 
 
 def test_build_shareprice_daily_dividend_adjusts_pre_div_close(tmp_path):
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_sp_source(p, [
         _row(date(2020, 1, 1), 100, 100, 100, 100, 1000),
         _row(date(2020, 1, 2), 99,  99,  99,  99,  1000, div=1.0),
@@ -202,7 +202,7 @@ def test_build_shareprice_daily_dividend_adjusts_pre_div_close(tmp_path):
 
 
 def test_build_shareprice_daily_split_inflates_pre_split_volume(tmp_path):
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_sp_source(p, [
         _row(date(2020, 1, 1), 400, 400, 400, 400, 1000),
         _row(date(2020, 1, 2), 100, 100, 100, 100, 4000, sc=4.0),
@@ -217,7 +217,7 @@ def test_build_shareprice_daily_split_inflates_pre_split_volume(tmp_path):
 
 def test_factor_frame_aligns_with_surviving_dates(tmp_path):
     """A row dropped due to null Open must NOT appear in the factor frame."""
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_sp_source(p, [
         _row(date(2020, 1, 1), 100,  100, 100, 100, 1000),
         _row(date(2020, 1, 2), None, 100, 100, 100, 1000),  # Open null -> drop
@@ -230,7 +230,7 @@ def test_factor_frame_aligns_with_surviving_dates(tmp_path):
 
 
 def test_null_dropped_row_logged(tmp_path):
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_sp_source(p, [
         _row(date(2020, 1, 1), 100, 100, 100, 100, 1000),
         _row(date(2020, 1, 2), None, 100, 100, 100, 1000),
@@ -246,8 +246,8 @@ def test_null_dropped_row_logged(tmp_path):
 
 def test_dedup_under_1pct_logged(tmp_path):
     """Two source files overlap on a date with Close differing by <1%."""
-    h = tmp_path / "historical" / "stock_AAPL.parquet"
-    d = tmp_path / "daily" / "stock_AAPL.parquet"
+    h = tmp_path / "historical" / "stocks_AAPL.parquet"
+    d = tmp_path / "daily" / "stocks_AAPL.parquet"
     _write_sp_source(h, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
     _write_sp_source(d, [_row(date(2020, 1, 1), 100, 100, 100, 100.5, 1000)])
     report = TransformationReport()
@@ -267,7 +267,7 @@ def test_orchestrator_writes_stockdata_with_sector(tmp_path):
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     _write_sp_source(p, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
 
     overview = _make_overview([("AAPL", "stocks", "Apple Inc", "Technology")])
@@ -291,7 +291,7 @@ def test_orchestrator_writes_etfdata_no_sector(tmp_path):
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
-    p = historical / "etfs" / "prices_daily" / "etf_SPY.parquet"
+    p = historical / "etfs" / "prices_daily" / "etfs_SPY.parquet"
     _write_sp_source(p, [_row(date(2020, 1, 1), 300, 300, 300, 300, 100000)])
 
     overview = _make_overview([("SPY", "etfs", "SPDR S&P 500", "")])
@@ -309,7 +309,7 @@ def test_orchestrator_unknown_sector_falls_back_to_other(tmp_path):
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     _write_sp_source(p, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
     overview = _make_overview([("AAPL", "stocks", "Apple", "Made up sector")])
     transform_stocks_or_etfs(
@@ -324,11 +324,11 @@ def test_orchestrator_concat_historical_plus_daily_folders(tmp_path):
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
     _write_sp_source(
-        historical / "stocks" / "prices_daily" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
         [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)],
     )
     _write_sp_source(
-        daily / "2026-04-01" / "stocks" / "prices_daily" / "stock_AAPL.parquet",
+        daily / "2026-04-01" / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
         [_row(date(2026, 4, 1), 200, 200, 200, 200, 2000)],
     )
     overview = _make_overview([("AAPL", "stocks", "Apple", "Technology")])
@@ -344,7 +344,7 @@ def test_orchestrator_resume_skips_existing(tmp_path):
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     _write_sp_source(p, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
     overview = _make_overview([("AAPL", "stocks", "Apple", "Technology")])
 
@@ -367,7 +367,7 @@ def test_orchestrator_symbols_filter(tmp_path):
     dest = tmp_path / "transformed"
     for sym in ("AAPL", "MSFT"):
         _write_sp_source(
-            historical / "stocks" / "prices_daily" / f"stock_{sym}.parquet",
+            historical / "stocks" / "prices_daily" / f"stocks_{sym}.parquet",
             [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)],
         )
     overview = _make_overview([
@@ -387,7 +387,7 @@ def test_orchestrator_metadata_json_carries_sector_index(tmp_path):
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     _write_sp_source(p, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
     overview = _make_overview([("AAPL", "stocks", "Apple", "Healthcare")])
     transform_stocks_or_etfs(

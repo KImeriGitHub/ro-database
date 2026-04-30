@@ -272,15 +272,15 @@ class IssueTracker:
 # Asset-type filename prefix. Windows reserves names like CON, PRN, AUX, NUL,
 # COM0-9, LPT0-9 regardless of extension, so a ticker that collides with one
 # (e.g. PRN) would be unwritable as ``PRN.parquet``. Always prepending an
-# asset-type prefix yields ``etf_PRN.parquet`` / ``stock_CON.parquet`` and
+# asset-type prefix yields ``etfs_PRN.parquet`` / ``stocks_CON.parquet`` and
 # sidesteps the issue uniformly across asset types.
 ASSET_TYPE_FILE_PREFIX: dict[str, str] = {
-    "stocks": "stock_",
-    "etfs": "etf_",
+    "stocks": "stocks_",
+    "etfs": "etfs_",
     "forex": "forex_",
-    "indices": "index_",
-    "cryptocurrencies": "crypto_",
-    "commodities": "commodity_",
+    "indices": "indices_",
+    "cryptocurrencies": "cryptocurrencies_",
+    "commodities": "commodities_",
     "economic": "economic_",
 }
 

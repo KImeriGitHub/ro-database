@@ -154,7 +154,7 @@ def test_normalize_drops_inception_date():
 
 
 def test_build_drops_inception_date_in_final_schema(tmp_path):
-    p = tmp_path / "etf_SPY.parquet"
+    p = tmp_path / "etfs_SPY.parquet"
     _write_profile(p, [_profile_row(date(2026, 4, 15))])
     out = build_etf_profile("SPY", [p], TransformationReport())
     assert "inception_date" not in out.columns
@@ -167,7 +167,7 @@ def test_leveraged_castable_via_normalize_then_schema(tmp_path):
     """Normalize keeps leveraged as Utf8 (so concat doesn't trip on
     Categorical merges); the final schema cast in build_etf_profile
     converts to Categorical."""
-    p = tmp_path / "etf_SPY.parquet"
+    p = tmp_path / "etfs_SPY.parquet"
     _write_profile(p, [_profile_row(date(2026, 4, 15), leveraged="YES")])
     out = build_etf_profile("SPY", [p], TransformationReport())
     # Compare via dtype.base_type to be tolerant of polars' Categorical
@@ -179,7 +179,7 @@ def test_leveraged_castable_via_normalize_then_schema(tmp_path):
 # ── 4. List-of-Struct holdings round-trip ─────────────────────────────────────
 
 def test_holdings_list_struct_roundtrip_via_save_load(tmp_path):
-    p = tmp_path / "etf_SPY.parquet"
+    p = tmp_path / "etfs_SPY.parquet"
     holdings = [
         {"symbol": "AAPL", "weight": 0.07},
         {"symbol": "MSFT", "weight": 0.06},
@@ -242,7 +242,7 @@ def test_duplicate_date_triggers_dedup_log(tmp_path):
 # ── 7. Output schema exact ────────────────────────────────────────────────────
 
 def test_output_schema_exact(tmp_path):
-    p = tmp_path / "etf_SPY.parquet"
+    p = tmp_path / "etfs_SPY.parquet"
     _write_profile(p, [_profile_row(date(2026, 4, 15))])
     df = build_etf_profile("SPY", [p], TransformationReport())
     assert dict(df.schema) == SCHEMAS["etf_profile"]
@@ -264,11 +264,11 @@ def test_orchestrator_writes_etfdata_with_profile(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_daily_source(
-        historical / "etfs" / "prices_daily" / "etf_SPY.parquet",
+        historical / "etfs" / "prices_daily" / "etfs_SPY.parquet",
         [(date(2026, 4, 15), 300, 300, 300, 300, 100000, 0.0, 1.0)],
     )
     _write_profile(
-        historical / "etfs" / "etf_profile" / "etf_SPY.parquet",
+        historical / "etfs" / "etf_profile" / "etfs_SPY.parquet",
         [_profile_row(date(2026, 4, 15))],
     )
     overview = _make_overview([("SPY", "etfs", "SPDR S&P 500", "")])
@@ -291,7 +291,7 @@ def test_orchestrator_only_etfs_get_etf_profile(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_daily_source(
-        historical / "stocks" / "prices_daily" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
         [(date(2026, 4, 15), 100, 100, 100, 100, 1000, 0.0, 1.0)],
     )
     overview = _make_overview([("AAPL", "stocks", "Apple", "Technology")])
@@ -308,11 +308,11 @@ def test_orchestrator_resume_skips_existing_etf(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_daily_source(
-        historical / "etfs" / "prices_daily" / "etf_SPY.parquet",
+        historical / "etfs" / "prices_daily" / "etfs_SPY.parquet",
         [(date(2026, 4, 15), 300, 300, 300, 300, 100000, 0.0, 1.0)],
     )
     _write_profile(
-        historical / "etfs" / "etf_profile" / "etf_SPY.parquet",
+        historical / "etfs" / "etf_profile" / "etfs_SPY.parquet",
         [_profile_row(date(2026, 4, 15), it=0.30)],
     )
     overview = _make_overview([("SPY", "etfs", "SPDR", "")])
@@ -324,7 +324,7 @@ def test_orchestrator_resume_skips_existing_etf(tmp_path):
 
     # Mutate profile source; resume must not overwrite.
     _write_profile(
-        historical / "etfs" / "etf_profile" / "etf_SPY.parquet",
+        historical / "etfs" / "etf_profile" / "etfs_SPY.parquet",
         [_profile_row(date(2026, 4, 15), it=0.99)],
     )
     transform_stocks_or_etfs(
@@ -344,7 +344,7 @@ def test_orchestrator_includes_symbols_with_only_profile(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_profile(
-        historical / "etfs" / "etf_profile" / "etf_SPY.parquet",
+        historical / "etfs" / "etf_profile" / "etfs_SPY.parquet",
         [_profile_row(date(2026, 4, 15))],
     )
     overview = _make_overview([("SPY", "etfs", "SPDR", "")])

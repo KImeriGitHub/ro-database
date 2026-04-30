@@ -94,24 +94,24 @@ def test_build_source_index_nested_asset_type(tmp_path):
     """stocks/etfs use historical/<a>/<endpoint>/<prefix><sym>.parquet."""
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
-    _touch(historical / "stocks" / "prices_daily" / "stock_AAPL.parquet")
-    _touch(historical / "stocks" / "prices_daily" / "stock_MSFT.parquet")
-    _touch(daily / "2026-04-01" / "stocks" / "prices_daily" / "stock_AAPL.parquet")
-    _touch(daily / "2026-04-02" / "stocks" / "prices_daily" / "stock_AAPL.parquet")
-    _touch(daily / "2026-04-02" / "stocks" / "prices_daily" / "stock_NVDA.parquet")
+    _touch(historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
+    _touch(historical / "stocks" / "prices_daily" / "stocks_MSFT.parquet")
+    _touch(daily / "2026-04-01" / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
+    _touch(daily / "2026-04-02" / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
+    _touch(daily / "2026-04-02" / "stocks" / "prices_daily" / "stocks_NVDA.parquet")
 
     idx = build_source_index(historical, daily, "stocks", "prices_daily")
 
     assert set(idx.keys()) == {"AAPL", "MSFT", "NVDA"}
     # Historical first, then daily folders sorted ascending.
     aapl = idx["AAPL"]
-    assert aapl[0] == historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
-    assert aapl[1] == daily / "2026-04-01" / "stocks" / "prices_daily" / "stock_AAPL.parquet"
-    assert aapl[2] == daily / "2026-04-02" / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    assert aapl[0] == historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    assert aapl[1] == daily / "2026-04-01" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    assert aapl[2] == daily / "2026-04-02" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     # MSFT only in historical.
-    assert idx["MSFT"] == [historical / "stocks" / "prices_daily" / "stock_MSFT.parquet"]
+    assert idx["MSFT"] == [historical / "stocks" / "prices_daily" / "stocks_MSFT.parquet"]
     # NVDA only in daily.
-    assert idx["NVDA"] == [daily / "2026-04-02" / "stocks" / "prices_daily" / "stock_NVDA.parquet"]
+    assert idx["NVDA"] == [daily / "2026-04-02" / "stocks" / "prices_daily" / "stocks_NVDA.parquet"]
 
 
 def test_build_source_index_flat_asset_type(tmp_path):
@@ -127,11 +127,11 @@ def test_build_source_index_flat_asset_type(tmp_path):
 
 
 def test_build_source_index_ignores_other_asset_type_files(tmp_path):
-    """A file in stocks/prices_daily/ that isn't prefixed stock_ is ignored."""
+    """A file in stocks/prices_daily/ that isn't prefixed stocks_ is ignored."""
     historical = tmp_path / "historical"
-    _touch(historical / "stocks" / "prices_daily" / "stock_AAPL.parquet")
-    _touch(historical / "stocks" / "prices_daily" / "etf_SPY.parquet")  # wrong prefix
-    _touch(historical / "stocks" / "prices_daily" / "stock_AAPL.txt")  # wrong ext
+    _touch(historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
+    _touch(historical / "stocks" / "prices_daily" / "etfs_SPY.parquet")  # wrong prefix
+    _touch(historical / "stocks" / "prices_daily" / "stocks_AAPL.txt")  # wrong ext
 
     idx = build_source_index(historical, tmp_path / "daily", "stocks", "prices_daily")
     assert list(idx.keys()) == ["AAPL"]
@@ -140,13 +140,13 @@ def test_build_source_index_ignores_other_asset_type_files(tmp_path):
 def test_build_source_index_suffix(tmp_path):
     """Fundamentals use _annual / _quarterly suffixes."""
     historical = tmp_path / "historical"
-    _touch(historical / "stocks" / "earnings" / "stock_AAPL_annual.parquet")
-    _touch(historical / "stocks" / "earnings" / "stock_AAPL_quarterly.parquet")
+    _touch(historical / "stocks" / "earnings" / "stocks_AAPL_annual.parquet")
+    _touch(historical / "stocks" / "earnings" / "stocks_AAPL_quarterly.parquet")
 
     annual_idx = build_source_index(
         historical, tmp_path / "daily", "stocks", "earnings", suffix="_annual"
     )
-    assert annual_idx == {"AAPL": [historical / "stocks" / "earnings" / "stock_AAPL_annual.parquet"]}
+    assert annual_idx == {"AAPL": [historical / "stocks" / "earnings" / "stocks_AAPL_annual.parquet"]}
 
 
 def test_build_source_index_flat_requires_no_endpoint_arg_meaning(tmp_path):

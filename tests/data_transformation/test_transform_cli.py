@@ -60,7 +60,7 @@ def _build_synth_universe(
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
     }
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 100.0, "High": 100.0, "Low": 100.0,
@@ -73,7 +73,7 @@ def _build_synth_universe(
             "Date": pl.Datetime, "Open": pl.Float32, "High": pl.Float32,
             "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         }
-        pi = historical / "stocks" / "prices" / "stock_AAPL.parquet"
+        pi = historical / "stocks" / "prices" / "stocks_AAPL.parquet"
         pi.parent.mkdir(parents=True, exist_ok=True)
         pl.DataFrame([
             {"Date": datetime(2026, 4, 15, 9, 30), "Open": 100.0, "High": 101.0,
@@ -81,7 +81,7 @@ def _build_synth_universe(
         ], schema=intra_schema).write_parquet(pi)
 
     # ETF: prices_daily (+ optional profile)
-    pe = historical / "etfs" / "prices_daily" / "etf_SPY.parquet"
+    pe = historical / "etfs" / "prices_daily" / "etfs_SPY.parquet"
     pe.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 300.0, "High": 300.0, "Low": 300.0,
@@ -102,7 +102,7 @@ def _build_synth_universe(
             "portfolio_turnover": pl.Float32, "dividend_yield": pl.Float32,
             "inception_date": pl.Utf8, "leveraged": pl.Utf8,
         }
-        pp = historical / "etfs" / "etf_profile" / "etf_SPY.parquet"
+        pp = historical / "etfs" / "etf_profile" / "etfs_SPY.parquet"
         pp.parent.mkdir(parents=True, exist_ok=True)
         pl.DataFrame([{
             "date": date(2026, 4, 15),
@@ -128,7 +128,7 @@ def _build_synth_universe(
                    "Low": 1.09, "Close": 1.105}], schema=fx_schema).write_parquet(pf)
 
     # Indices (same shape as forex)
-    pi = historical / "indices" / "index_SPX.parquet"
+    pi = historical / "indices" / "indices_SPX.parquet"
     pi.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([{"Date": date(2026, 4, 15), "Open": 5000.0, "High": 5050.0,
                    "Low": 4990.0, "Close": 5025.0}], schema=fx_schema).write_parquet(pi)
@@ -138,7 +138,7 @@ def _build_synth_universe(
         "Date": pl.Date, "Open": pl.Float32, "High": pl.Float32,
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
     }
-    pc = historical / "cryptocurrencies" / "crypto_BTC.parquet"
+    pc = historical / "cryptocurrencies" / "cryptocurrencies_BTC.parquet"
     pc.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([{"Date": date(2026, 4, 15), "Open": 65000.0, "High": 66000.0,
                    "Low": 64000.0, "Close": 65500.0, "Volume": 1000.0}],
@@ -146,7 +146,7 @@ def _build_synth_universe(
 
     # Commodity (Date, value, unit)
     co_schema = {"Date": pl.Date, "value": pl.Float32, "unit": pl.Utf8}
-    pco = historical / "commodities" / "commodity_WTI.parquet"
+    pco = historical / "commodities" / "commodities_WTI.parquet"
     pco.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([{"Date": date(2026, 4, 15), "value": 73.0,
                    "unit": "dollars per barrel"}],
@@ -248,7 +248,7 @@ def test_symbols_filter_restricts_to_named_symbols(tmp_path):
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
     }
-    p = historical / "stocks" / "prices_daily" / "stock_MSFT.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_MSFT.parquet"
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 200.0, "High": 200.0, "Low": 200.0,
          "Close": 200.0, "Volume": 1000.0, "DividendAmount": 0.0,
@@ -292,7 +292,7 @@ def test_resume_does_not_overwrite_existing_symbol(tmp_path):
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
     }
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 999.0, "High": 999.0, "Low": 999.0,
          "Close": 999.0, "Volume": 1.0, "DividendAmount": 0.0,
@@ -357,7 +357,7 @@ _SENT_SOURCE_SCHEMA: dict = {
 
 
 def _write_insider_for(historical: Path, symbol: str = "AAPL") -> None:
-    p = historical / "stocks" / "insider" / f"stock_{symbol}.parquet"
+    p = historical / "stocks" / "insider" / f"stocks_{symbol}.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([{
         "transactionDate": date(2026, 4, 10),
@@ -371,7 +371,7 @@ def _write_insider_for(historical: Path, symbol: str = "AAPL") -> None:
 
 
 def _write_sentiment_for(historical: Path, symbol: str = "AAPL") -> None:
-    p = historical / "stocks" / "sentiment" / f"stock_{symbol}.parquet"
+    p = historical / "stocks" / "sentiment" / f"stocks_{symbol}.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     row = {
         "time_published": datetime(2026, 4, 12, 9, 30),
@@ -480,7 +480,7 @@ def test_rebuild_stocks_wipes_stocks_and_rebuilds(tmp_path):
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
     }
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 250.0, "High": 250.0, "Low": 250.0,
          "Close": 250.0, "Volume": 1000.0, "DividendAmount": 0.0,

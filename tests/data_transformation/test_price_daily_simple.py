@@ -189,7 +189,7 @@ def test_indices_end_to_end(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_forex_source(   # same shape as indices: Date,O,H,L,C
-        historical / "indices" / "index_SPX.parquet",
+        historical / "indices" / "indices_SPX.parquet",
         [(date(2020, 1, 1), 3300.0, 3320.0, 3290.0, 3310.0)],
     )
     overview = _make_overview([("SPX", "indices", "S&P 500 Index")])
@@ -206,7 +206,7 @@ def test_cryptocurrencies_volume_kept(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_crypto_source(
-        historical / "cryptocurrencies" / "crypto_BTC.parquet",
+        historical / "cryptocurrencies" / "cryptocurrencies_BTC.parquet",
         [(date(2020, 1, 1), 7200.0, 7300.0, 7100.0, 7250.0, 12000.0)],
     )
     overview = _make_overview([("BTC", "cryptocurrencies", "Bitcoin")])
@@ -223,7 +223,7 @@ def test_commodity_value_to_ohlc(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_value_source(
-        historical / "commodities" / "commodity_WTI.parquet",
+        historical / "commodities" / "commodities_WTI.parquet",
         [(date(2020, 1, 1), 60.0), (date(2020, 1, 2), 61.5)],
         with_unit=True,
     )
@@ -375,7 +375,7 @@ def test_volume_null_does_not_drop_row(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_crypto_source(
-        historical / "cryptocurrencies" / "crypto_BTC.parquet",
+        historical / "cryptocurrencies" / "cryptocurrencies_BTC.parquet",
         [(date(2020, 1, 1), 7200.0, 7300.0, 7100.0, 7250.0, None)],
     )
     overview = _make_overview([("BTC", "cryptocurrencies", "")])

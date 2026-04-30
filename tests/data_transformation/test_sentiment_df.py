@@ -274,14 +274,14 @@ def test_output_schema_exact_strings_dropped(tmp_path):
 
 def test_all_messages_parquet_skipped_by_source_enumeration(tmp_path):
     """build_source_index requires the per-asset-type prefix
-    ('stock_'); ALL_MESSAGES.parquet does not start with the prefix and
+    ('stocks_'); ALL_MESSAGES.parquet does not start with the prefix and
     is therefore not picked up."""
     historical = tmp_path / "historical"
     daily = tmp_path / "daily"
     sent_dir = historical / "stocks" / "sentiment"
     sent_dir.mkdir(parents=True, exist_ok=True)
     _write_sentiment(
-        sent_dir / "stock_AAPL.parquet",
+        sent_dir / "stocks_AAPL.parquet",
         [_row(datetime(2026, 4, 15, 9, 30), url="u")],
     )
     # Decoy with no asset-type prefix.

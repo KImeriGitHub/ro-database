@@ -8,20 +8,21 @@ Every per-symbol parquet file is prefixed with an asset-type tag so Windows rese
 
 | asset_type | prefix | example file |
 |---|---|---|
-| stocks | `stock_` | `historical/stocks/prices/stock_AAPL.parquet` |
-| etfs | `etf_` | `historical/etfs/prices_daily/etf_SPY.parquet` |
+| stocks | `stocks_` | `historical/stocks/prices/stocks_AAPL.parquet` |
+| etfs | `etfs_` | `historical/etfs/prices_daily/etfs_SPY.parquet` |
 | forex | `forex_` | `historical/forex/forex_EURUSD.parquet` |
-| indices | `index_` | `historical/indices/index_SPX.parquet` |
-| cryptocurrencies | `crypto_` | `historical/cryptocurrencies/crypto_BTC.parquet` |
-| commodities | `commodity_` | `historical/commodities/commodity_WTI.parquet` |
+| indices | `indices_` | `historical/indices/indices_SPX.parquet` |
+| cryptocurrencies | `cryptocurrencies_` | `historical/cryptocurrencies/cryptocurrencies_BTC.parquet` |
+| commodities | `commodities_` | `historical/commodities/commodities_WTI.parquet` |
 | economic | `economic_` | `historical/economic/economic_CPI.parquet` |
 
-Fundamentals follow the same prefix and append `_annual` / `_quarterly` (e.g. `stock_AAPL_annual.parquet`). The `sentiment/ALL_MESSAGES.parquet` master table is not prefixed (it is not a per-symbol file). The single source of truth is `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")`.
+Fundamentals follow the same prefix and append `_annual` / `_quarterly` (e.g. `stocks_AAPL_annual.parquet`). The `sentiment/ALL_MESSAGES.parquet` master table is not prefixed (it is not a per-symbol file). The single source of truth is `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")`.
 
 ## Data folder structure
 
 ```
 historical/
+├── .setup_started_at         # mtime = original start time; preserved across resumes, deleted on clean finalize
 ├── stocks/
 │   ├── prices/               # 1-min intraday (TIME_SERIES_INTRADAY)
 │   ├── prices_daily/         # daily adjusted (TIME_SERIES_DAILY_ADJUSTED)

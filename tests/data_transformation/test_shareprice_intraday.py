@@ -167,9 +167,9 @@ def test_normalize_strips_timezone_keeping_wallclock():
 # ── 2. Concat across historical + multiple daily folders ──────────────────────
 
 def test_concat_historical_plus_multiple_daily(tmp_path):
-    h = tmp_path / "stock_AAPL_hist.parquet"
-    d1 = tmp_path / "stock_AAPL_d1.parquet"
-    d2 = tmp_path / "stock_AAPL_d2.parquet"
+    h = tmp_path / "stocks_AAPL_hist.parquet"
+    d1 = tmp_path / "stocks_AAPL_d1.parquet"
+    d2 = tmp_path / "stocks_AAPL_d2.parquet"
     _write_intraday_source(h,  [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100, 500)])
     _write_intraday_source(d1, [(datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101, 600)])
     _write_intraday_source(d2, [(datetime(2020, 1, 3, 9, 30), 102, 102, 102, 102, 700)])
@@ -225,7 +225,7 @@ def test_dedup_over_1pct_logged_and_daily_wins(tmp_path):
 # ── 4. Orphan-date drop ───────────────────────────────────────────────────────
 
 def test_orphan_date_dropped_and_logged(tmp_path):
-    p = tmp_path / "stock_AAPL.parquet"
+    p = tmp_path / "stocks_AAPL.parquet"
     _write_intraday_source(p, [
         (datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100, 500),
         (datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101, 600),
@@ -365,11 +365,11 @@ def test_orchestrator_writes_both_daily_and_intraday(tmp_path):
     dest = tmp_path / "transformed"
 
     _write_daily_source(
-        historical / "stocks" / "prices_daily" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
         [(date(2020, 1, 1), 100, 100, 100, 100, 1000, 0.0, 1.0)],
     )
     _write_intraday_source(
-        historical / "stocks" / "prices" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices" / "stocks_AAPL.parquet",
         [(datetime(2020, 1, 1, 9, 30), 100, 101, 99, 100, 500)],
     )
     overview = _make_overview([("AAPL", "stocks", "Apple", "Technology")])
@@ -390,11 +390,11 @@ def test_orchestrator_symbols_filter_intraday(tmp_path):
     dest = tmp_path / "transformed"
     for sym in ("AAPL", "MSFT"):
         _write_daily_source(
-            historical / "stocks" / "prices_daily" / f"stock_{sym}.parquet",
+            historical / "stocks" / "prices_daily" / f"stocks_{sym}.parquet",
             [(date(2020, 1, 1), 100, 100, 100, 100, 1000, 0.0, 1.0)],
         )
         _write_intraday_source(
-            historical / "stocks" / "prices" / f"stock_{sym}.parquet",
+            historical / "stocks" / "prices" / f"stocks_{sym}.parquet",
             [(datetime(2020, 1, 1, 9, 30), 100, 101, 99, 100, 500)],
         )
     overview = _make_overview([
@@ -415,11 +415,11 @@ def test_orchestrator_resume_skips_existing_with_intraday(tmp_path):
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
     _write_daily_source(
-        historical / "stocks" / "prices_daily" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
         [(date(2020, 1, 1), 100, 100, 100, 100, 1000, 0.0, 1.0)],
     )
     _write_intraday_source(
-        historical / "stocks" / "prices" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices" / "stocks_AAPL.parquet",
         [(datetime(2020, 1, 1, 9, 30), 100, 101, 99, 100, 500)],
     )
     overview = _make_overview([("AAPL", "stocks", "Apple", "Technology")])
@@ -431,7 +431,7 @@ def test_orchestrator_resume_skips_existing_with_intraday(tmp_path):
 
     # Mutate intraday source; resume must skip without overwriting.
     _write_intraday_source(
-        historical / "stocks" / "prices" / "stock_AAPL.parquet",
+        historical / "stocks" / "prices" / "stocks_AAPL.parquet",
         [(datetime(2020, 1, 1, 9, 30), 999, 999, 999, 999, 1)],
     )
     transform_stocks_or_etfs(

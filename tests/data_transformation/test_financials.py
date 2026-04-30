@@ -186,14 +186,14 @@ def _write(path: Path, rows: list[dict], schema: dict) -> Path:
 
 
 def _hist_path(root: Path, endpoint: str, suffix: str, symbol: str = "AAPL") -> Path:
-    return root / "historical" / "stocks" / endpoint / f"stock_{symbol}{suffix}.parquet"
+    return root / "historical" / "stocks" / endpoint / f"stocks_{symbol}{suffix}.parquet"
 
 
 def _daily_path(root: Path, snap: date, endpoint: str, suffix: str,
                 symbol: str = "AAPL") -> Path:
     return (
         root / "daily" / snap.isoformat() / "stocks" / endpoint
-        / f"stock_{symbol}{suffix}.parquet"
+        / f"stocks_{symbol}{suffix}.parquet"
     )
 
 
@@ -237,7 +237,7 @@ def _gather_source_paths(root: Path, symbol: str = "AAPL") -> dict[tuple[str, st
                        "earnings", "earnings_estimates"):
                 for suf in ("_quarterly", "_annual"):
                     p = (snap_dir / "stocks" / ep
-                         / f"stock_{symbol}{suf}.parquet")
+                         / f"stocks_{symbol}{suf}.parquet")
                     if p.exists():
                         result[(ep, suf)].append(p)
     return result
@@ -991,7 +991,7 @@ def _build_minimal_stocks_universe(tmp_path: Path) -> tuple[Path, Path, Path]:
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
         "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
     }
-    p = historical / "stocks" / "prices_daily" / "stock_AAPL.parquet"
+    p = historical / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
     p.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([
         {"Date": date(2026, 4, 15), "Open": 100.0, "High": 100.0, "Low": 100.0,
@@ -1003,7 +1003,7 @@ def _build_minimal_stocks_universe(tmp_path: Path) -> tuple[Path, Path, Path]:
         "Date": pl.Datetime, "Open": pl.Float32, "High": pl.Float32,
         "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
     }
-    pi = historical / "stocks" / "prices" / "stock_AAPL.parquet"
+    pi = historical / "stocks" / "prices" / "stocks_AAPL.parquet"
     pi.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([{"Date": datetime(2026, 4, 15, 9, 30), "Open": 100.0,
                    "High": 101.0, "Low": 99.0, "Close": 100.0,

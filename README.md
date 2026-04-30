@@ -229,10 +229,7 @@ monitoring_service/           # End-of-run summary of database state and changes
 consistency_tests/            # Validates raw and transformed data against other sources
                               # e.g., checks that intraday open matches daily open
 
-tests/                        # Unified test directory
-├── asset_catalog_service/    # Tests for asset_catalog_service
-├── historical_data_setup/    # Tests for historical_data_setup (placeholder)
-└── call_speedtests/          # Scripts that measure real API call performance
+tests/                        # Unified test directory (one subdirectory per service plus call_speedtests/)
 ```
 
 ## Data storage structure
@@ -348,7 +345,7 @@ daily/
 Historical prices are stored in two separate subfolders under `stocks/`: `prices/` holds intraday bars from `TIME_SERIES_INTRADAY` (Open, High, Low, Close, Volume), and `prices_daily/` holds daily bars from `TIME_SERIES_DAILY_ADJUSTED` (Open, High, Low, Close, Volume, DividendAmount, SplitCoefficient). Adjusted close is not calculated or stored in either folder. If supplemented with FirstRate Data, the FirstRate bundle ships three daily variants per symbol (unadjusted, split-adjusted, split+dividend-adjusted) plus unadjusted 1-min bars. `DividendAmount` and `SplitCoefficient` are derived from the three daily variants to match the AV schema. The data source is recorded per ticker so the origin is preserved.
 
 **Per-symbol parquet filenames:**
-Per-symbol files are prefixed with their asset type so Windows reserved names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) cannot collide with real tickers. The mapping is `stocks` -> `stock_`, `etfs` -> `etf_`, `forex` -> `forex_`, `indices` -> `index_`, `cryptocurrencies` -> `crypto_`, `commodities` -> `commodity_`, `economic` -> `economic_`. So `historical/etfs/prices/SPY.parquet` is actually written as `historical/etfs/prices/etf_SPY.parquet`, fundamentals become `stock_AAPL_annual.parquet` / `stock_AAPL_quarterly.parquet`, and the helper `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")` is the single source of truth. The `sentiment/ALL_MESSAGES.parquet` master table and the asset-class catalog files (`stocks.parquet`, `etfs.parquet`, ...) keep their existing names; only the per-symbol files are prefixed.
+Per-symbol files are prefixed with their asset type so Windows reserved names (CON, PRN, AUX, NUL, COM0-9, LPT0-9) cannot collide with real tickers. The mapping is `stocks` -> `stocks_`, `etfs` -> `etfs_`, `forex` -> `forex_`, `indices` -> `indices_`, `cryptocurrencies` -> `cryptocurrencies_`, `commodities` -> `commodities_`, `economic` -> `economic_`. So `historical/etfs/prices/SPY.parquet` is actually written as `historical/etfs/prices/etfs_SPY.parquet`, fundamentals become `stocks_AAPL_annual.parquet` / `stocks_AAPL_quarterly.parquet`, and the helper `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")` is the single source of truth. The `sentiment/ALL_MESSAGES.parquet` master table and the asset-class catalog files (`stocks.parquet`, `etfs.parquet`, ...) keep their existing names; only the per-symbol files are prefixed.
 
 ## Monitoring
 

@@ -32,7 +32,7 @@ daily/
     │   ├── cash_flow/
     │   ├── earnings/
     │   ├── earnings_estimates/
-    │   ├── insider/                # SYMBOL.parquet (last year on transactionDate)
+    │   ├── insider/                # SYMBOL.parquet, INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
     │   └── sentiment/              # ALL_MESSAGES.parquet + {SYMBOL}.parquet
     ├── etfs/
     │   ├── prices/
@@ -123,7 +123,7 @@ Because saving an empty-but-valid frame is treated as success:
 
 Every parquet file is schema-identical to its historical counterpart (same column names and dtypes, just fewer rows). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#stocks--etfs) for per-endpoint schemas.
 
-Per-symbol filenames use the same asset-type prefix scheme as the historical setup (e.g. `daily/<date>/etfs/prices/etf_SPY.parquet`, `daily/<date>/stocks/income_statement/stock_AAPL_annual.parquet`). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table and rationale.
+Per-symbol filenames use the same asset-type prefix scheme as the historical setup (e.g. `daily/<date>/etfs/prices/etfs_SPY.parquet`, `daily/<date>/stocks/income_statement/stocks_AAPL_annual.parquet`). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table and rationale.
 
 ## Usage
 
