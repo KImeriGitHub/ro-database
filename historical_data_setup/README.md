@@ -183,7 +183,7 @@ ETFs use the `prices`, `prices_daily`, and `etf_profile` endpoints with `--asset
 
 Per symbol, fetches 1-min bars for every month from `max(ipoDate, 2000-01)` to `min(delistingDate, today)`.
 
-**Output schema** (`historical/stocks/prices/SYMBOL.parquet`):
+**Output schema** (`historical/stocks/prices/stocks_SYMBOL.parquet`):
 
 | Column | Type |
 |--------|------|
@@ -207,7 +207,7 @@ Avg round-trip per call is ~1.6s (large JSON payloads). For historical intraday 
 
 Per symbol, fetches the full daily price history in a single API call.
 
-**Output schema** (`historical/stocks/prices_daily/SYMBOL.parquet`):
+**Output schema** (`historical/stocks/prices_daily/stocks_SYMBOL.parquet`):
 
 | Column | Type |
 |--------|------|
@@ -233,7 +233,7 @@ Adjusted Close is intentionally omitted (calculated outside of raw data fetching
 
 Per symbol, fetches the full income statement history in a single API call. The response contains both annual and quarterly reports, saved as separate files.
 
-**Output schema** (`historical/stocks/income_statement/SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`):
+**Output schema** (`historical/stocks/income_statement/stocks_SYMBOL_annual.parquet` and `stocks_SYMBOL_quarterly.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -253,7 +253,7 @@ Fields vary across symbols and between annual/quarterly. Null sentinels (`None`,
 
 Same structure as income_statement. Per symbol, fetches balance sheet data.
 
-**Output schema** (`historical/stocks/balance_sheet/SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`):
+**Output schema** (`historical/stocks/balance_sheet/stocks_SYMBOL_annual.parquet` and `stocks_SYMBOL_quarterly.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -271,7 +271,7 @@ Same structure as income_statement. Per symbol, fetches balance sheet data.
 
 Same structure as income_statement. Per symbol, fetches cash flow data.
 
-**Output schema** (`historical/stocks/cash_flow/SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`):
+**Output schema** (`historical/stocks/cash_flow/stocks_SYMBOL_annual.parquet` and `stocks_SYMBOL_quarterly.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -289,14 +289,14 @@ Same structure as income_statement. Per symbol, fetches cash flow data.
 
 Per symbol, fetches earnings data. Unlike the other fundamental endpoints, the top-level keys are `annualEarnings` and `quarterlyEarnings`.
 
-**Output schema** (`historical/stocks/earnings/SYMBOL_annual.parquet`):
+**Output schema** (`historical/stocks/earnings/stocks_SYMBOL_annual.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
 | fiscalDateEnding | pl.Date | Sort key |
 | reportedEPS | pl.Float32 | |
 
-**Output schema** (`historical/stocks/earnings/SYMBOL_quarterly.parquet`):
+**Output schema** (`historical/stocks/earnings/stocks_SYMBOL_quarterly.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -320,7 +320,7 @@ Per symbol, fetches earnings data. Unlike the other fundamental endpoints, the t
 
 Per symbol, fetches analyst earnings estimates. The API response returns a flat `"estimates"` list; records are split into annual and quarterly based on the `"horizon"` field (`"fiscal year"` vs `"fiscal quarter"`). The `"date"` field is renamed to `fiscalDateEnding` for consistency with other fundamental endpoints.
 
-**Output schema** (`historical/stocks/earnings_estimates/SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`):
+**Output schema** (`historical/stocks/earnings_estimates/stocks_SYMBOL_annual.parquet` and `stocks_SYMBOL_quarterly.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -338,7 +338,7 @@ Typical fields include `eps_estimate_average`, `eps_estimate_high`, `eps_estimat
 
 Per symbol, fetches insider transaction history for **active stocks only**. The API response contains a flat `"data"` list. The `"transaction_date"` field is renamed to `transactionDate`; the `"ticker"` field is dropped (redundant with the file name). One file per symbol.
 
-**Output schema** (`historical/stocks/insider/SYMBOL.parquet`):
+**Output schema** (`historical/stocks/insider/stocks_SYMBOL.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -361,7 +361,7 @@ Fields vary across symbols. Known string columns (`executive`, `executive_title`
 
 Global (not per-ticker) query paginating backward from the current UTC time to 2010-01-01, 1000 articles per call. Each response's oldest `time_published` is used to compute the next `time_to` (ceiling to next minute to avoid gaps). After all pages are fetched, rows are filtered to tickers present in the catalog, deduplicated on `(url, ticker)`, and saved as a single `ALL_MESSAGES.parquet`. Per-symbol files are then split from this master table for every active symbol.
 
-**Output schema** (`historical/stocks/sentiment/ALL_MESSAGES.parquet` and `{SYMBOL}.parquet`):
+**Output schema** (`historical/stocks/sentiment/ALL_MESSAGES.parquet` and `stocks_{SYMBOL}.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -429,7 +429,7 @@ Sentiment is the heaviest endpoint in the historical setup -- both in RAM (~53 G
 
 Per symbol, fetches the ETF profile in a single API call. Only runs when `asset_type="etfs"` (skipped for stocks). The response is a flat object with scalar metadata, a `sectors` list, and a `holdings` list. Sectors are pivoted into fixed snake_case columns; unknown sectors accumulate into `other`. Holdings are stored as a list of `{symbol, weight}` structs; entries with `symbol == "n/a"` are discarded.
 
-**Output schema** (`historical/etfs/etf_profile/SYMBOL.parquet`):
+**Output schema** (`historical/etfs/etf_profile/etfs_SYMBOL.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -466,8 +466,8 @@ Per symbol, fetches the ETF profile in a single API call. Only runs when `asset_
 
 Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) store **two files per symbol** -- one for annual data and one for quarterly data:
 
-- **Historical:** `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`
-- **Daily:** `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`
+- **Historical:** `{asset type}_SYMBOL_annual.parquet` and `{asset type}_SYMBOL_quarterly.parquet`
+- **Daily:** `{asset type}_SYMBOL_annual.parquet` and `{asset type}_SYMBOL_quarterly.parquet`
 
 The Alpha Vantage API returns both annual and quarterly data in a single response (e.g., `annualReports` + `quarterlyReports` for financial statements, `annualEarnings` + `quarterlyEarnings` for earnings). Each is split and saved as a separate file. For `EARNINGS_ESTIMATES`, the split is based on the `horizon` field in the response.
 
@@ -479,7 +479,7 @@ This does not apply to price endpoints (`prices`, `prices_daily`), `insider`, or
 
 Per currency pair, fetches the full daily FX history in a single API call. The forex catalog contains ~160 currencies all paired against USD (e.g. `EURUSD`, `GBPUSD`). `USDUSD` is skipped. All symbols are processed regardless of `status` (no Delisted/Corrupted filtering). The API returns UTC timestamps; the pipeline validates that the timezone is `"UTC"` and records a `timezone_mismatch` if not.
 
-**Output schema** (`historical/forex/SYMBOL.parquet`):
+**Output schema** (`historical/forex/forex_SYMBOL.parquet`):
 
 | Column | Type |
 |--------|------|
@@ -504,7 +504,7 @@ No volume data is available for FX pairs. FX_INTRADAY is premium-only and not tr
 
 Per symbol, fetches the full daily crypto price history in a single API call. The cryptocurrencies catalog contains ~600 USD-paired symbols (filtered to `market=USD` at catalog creation time). All symbols are attempted regardless of `status` -- many will be dead/empty, and the ingestion report captures which ones failed. Volume is in the cryptocurrency's own unit (e.g. BTC), not USD. The `outputsize` parameter is not supported by this endpoint; the API returns all available history by default.
 
-**Output schema** (`historical/cryptocurrencies/SYMBOL.parquet`):
+**Output schema** (`historical/cryptocurrencies/cryptocurrencies_SYMBOL.parquet`):
 
 | Column | Type |
 |--------|------|
@@ -548,7 +548,7 @@ Daily interval is not available for these symbols; monthly is the finest granula
 ```
 The catalog maps XAU to GOLD and XAG to SILVER. The response uses `price` instead of `value`; this is renamed to `value` for consistency.
 
-**Output schema** (`historical/commodities/SYMBOL.parquet`):
+**Output schema** (`historical/commodities/commodities_SYMBOL.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -592,7 +592,7 @@ Fetches historical data for all 15 economic indicators in the catalog. Each indi
 
 All indicators share the same AV response structure (`name`, `interval`, `unit`, `data`). The `"."` value in the data list is treated as null.
 
-**Output schema** (`historical/economic/SYMBOL.parquet`):
+**Output schema** (`historical/economic/economic_SYMBOL.parquet`):
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -615,7 +615,7 @@ Per symbol, fetches the full daily index price history in a single API call. The
 
 Note: `INDEX_DATA` was introduced in April 2026 and may not work with older premium API keys.
 
-**Output schema** (`historical/indices/SYMBOL.parquet`):
+**Output schema** (`historical/indices/indices_SYMBOL.parquet`):
 
 | Column | Type |
 |--------|------|
