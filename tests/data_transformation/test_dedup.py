@@ -1,0 +1,178 @@
+"""Tests for data_transformation/frames/_dedup.py."""
+
+from __future__ import annotations
+
+import sys
+from datetime import date
+from pathlib import Path
+
+import polars as pl
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from data_transformation._common import TransformationReport
+from data_transformation.frames._dedup import (
+    SOURCE_ORDER_COL,
+    attach_source_order,
+    dedup_with_discrepancy_log,
+)
+
+
+_FLOAT_COLS = ("Open", "High", "Low", "Close", "Volume")
+
+
+def _make_frame(rows: list[tuple]) -> pl.DataFrame:
+    """rows: list of (Date, Open, High, Low, Close, Volume)"""
+    return pl.DataFrame(
+        {
+            "Date": [r[0] for r in rows],
+            "Open": [r[1] for r in rows],
+            "High": [r[2] for r in rows],
+            "Low": [r[3] for r in rows],
+            "Close": [r[4] for r in rows],
+            "Volume": [r[5] for r in rows],
+        },
+        schema={
+            "Date": pl.Date,
+            "Open": pl.Float32,
+            "High": pl.Float32,
+            "Low": pl.Float32,
+            "Close": pl.Float32,
+            "Volume": pl.Float32,
+        },
+    )
+
+
+def test_attach_source_order():
+    f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 1.0, 100.0)])
+    f2 = _make_frame([(date(2020, 1, 2), 2.0, 2.0, 2.0, 2.0, 200.0)])
+    out = attach_source_order([f1, f2])
+    assert out.height == 2
+    assert SOURCE_ORDER_COL in out.columns
+    assert out[SOURCE_ORDER_COL].to_list() == [0, 1]
+
+
+def test_dedup_no_duplicates_no_log():
+    df = attach_source_order([_make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 1.0, 100.0),
+        (date(2020, 1, 2), 2.0, 2.0, 2.0, 2.0, 200.0),
+    ])])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    assert out.height == 2
+    assert SOURCE_ORDER_COL not in out.columns
+    assert report.to_frame().height == 0
+
+
+def test_dedup_identical_duplicates_no_discrepancy_log():
+    """Two sources, same Date, same values: dedup but no discrepancy."""
+    f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 1.0, 100.0)])
+    f2 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 1.0, 100.0)])
+    df = attach_source_order([f1, f2])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    assert out.height == 1
+    assert report.to_frame().height == 0
+
+
+def test_dedup_under_1pct_discrepancy_logged():
+    """Close 100 vs 100.5 = 0.5% difference -> under_1pct."""
+    f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
+    f2 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.5, 100.0)])
+    df = attach_source_order([f1, f2])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily")
+    assert out.height == 1
+    rep = report.to_frame()
+    assert rep.height == 1
+    assert rep["issue_type"][0] == "dedup_value_discrepancy_under_1pct"
+    assert rep["count"][0] == 1
+
+
+def test_dedup_over_1pct_discrepancy_logged():
+    """Close 100 vs 110 = 10% difference -> over_1pct."""
+    f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
+    f2 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 110.0, 100.0)])
+    df = attach_source_order([f1, f2])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily")
+    assert out.height == 1
+    rep = report.to_frame()
+    assert rep.height == 1
+    assert rep["issue_type"][0] == "dedup_value_discrepancy_over_1pct"
+
+
+def test_dedup_keep_last_means_most_recent_source_wins():
+    """When concatenated in source order, dedup keeps the row from the
+    highest source order (the most recent daily snapshot)."""
+    f_hist = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
+    f_daily = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 110.0, 100.0)])
+    df = attach_source_order([f_hist, f_daily])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily")
+    assert out.height == 1
+    assert out["Close"][0] == 110.0
+
+
+def test_dedup_null_in_one_source_no_discrepancy():
+    """A duplicate where one source has null does not flag a discrepancy."""
+    f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
+    f2 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, None, 100.0)])
+    df = attach_source_order([f1, f2])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    assert out.height == 1
+    # Last source had null Close, so the kept row's Close is null.
+    assert out["Close"][0] is None
+    assert report.to_frame().height == 0
+
+
+def test_dedup_mixed_under_and_over_in_same_symbol():
+    """Two duplicate dates: one with <1% diff, one with >=1% -> two report rows."""
+    f_hist = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 200.0, 100.0),
+    ])
+    f_daily = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.5, 100.0),  # 0.5%
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 220.0, 100.0),  # 10%
+    ])
+    df = attach_source_order([f_hist, f_daily])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily")
+    assert out.height == 2
+    rep = report.to_frame()
+    assert rep.height == 2
+    assert set(rep["issue_type"].to_list()) == {
+        "dedup_value_discrepancy_under_1pct",
+        "dedup_value_discrepancy_over_1pct",
+    }
+
+
+def test_dedup_empty_frame():
+    df = pl.DataFrame(
+        schema={
+            "Date": pl.Date, "Open": pl.Float32, "High": pl.Float32,
+            "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
+            SOURCE_ORDER_COL: pl.UInt32,
+        }
+    )
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    assert out.height == 0
+    assert SOURCE_ORDER_COL not in out.columns
+    assert report.to_frame().height == 0
+
+
+def test_dedup_output_sorted_by_key():
+    """Output is sorted ascending by the key column."""
+    f = _make_frame([
+        (date(2020, 1, 5), 1.0, 1.0, 1.0, 1.0, 100.0),
+        (date(2020, 1, 1), 2.0, 2.0, 2.0, 2.0, 200.0),
+        (date(2020, 1, 3), 3.0, 3.0, 3.0, 3.0, 300.0),
+    ])
+    df = attach_source_order([f])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    dates = out["Date"].to_list()
+    assert dates == sorted(dates)

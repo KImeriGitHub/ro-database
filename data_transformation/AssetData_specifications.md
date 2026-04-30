@@ -47,37 +47,47 @@ Columns
 ### insider_df: pl.DataFrame
 Columns 
  'Date'              : pl.Date
- 'TransactionDate'   : pl.Date
- 'Executive_role'    : pl.Categorical  (index into CANONICAL_INSIDER_ROLES; see below)
- 'AcqDis'            : pl.Categorical  (1 for 'A' and -1 for 'D')
+ 'Executive_role'    : pl.Categorical  (label from CANONICAL_INSIDER_ROLES; see below)
+ 'AcqDis'            : pl.Categorical  ('A' for acquisition, 'D' for disposal)
  'Shares'            : pl.Float32
 
+`Date` is the raw `transactionDate` from INSIDER_TRANSACTIONS; the frame
+is a chronological list of transactions (not a per-trading-date snapshot).
+Avoiding lookahead leakage when consuming this frame is the responsibility
+of the feature-generation step.
+
 CANONICAL_INSIDER_ROLES: CAO, General Counsel, CFO, COO, CTO_CIO,
-Other C-Suite, CEO, Chairman, Director, VP, 10% Owner, Officer, Other
+VP, CEO, Other C-Suite, Chairman, Director, 10% Owner, Officer, Other
 
-`executive_role` is derived from the raw `executive_title` string returned by
-INSIDER_TRANSACTIONS. Mapping is by case-insensitive substring match against
-an ordered rule list; the first rule that matches wins. A title that matches
-no rule (including empty / null) falls through to `Other`.
+`Executive_role` is derived from the raw `executive_title` string returned by
+INSIDER_TRANSACTIONS. Mapping is by case-insensitive regex match against an
+ordered rule list; the first rule that matches wins. A title that matches no
+rule (including empty / null) falls through to `Other`.
 
-Order is most-specific first so that compound titles route correctly
-(e.g. "Chief Accounting Officer" hits CAO before the generic `chief ` rule;
-"President & CFO" hits CFO before CEO). Adjust the order if a different
-priority is desired -- the rule order IS the spec.
+The rule order IS the spec. It is arranged most-specific first so compound
+titles route correctly. Worth noting:
 
-Match rules (index : label : substring patterns):
- 0  CAO             : 'chief accounting', 'controller', 'principal accounting'
- 1  General Counsel : 'general counsel', 'chief legal', 'secretary'
- 2  CFO             : 'cfo', 'chief financial', 'treasurer', 'principal financial'
- 3  COO             : 'coo', 'chief operating'
- 4  CTO_CIO         : 'cto', 'cio', 'chief technology', 'chief information', 'chief digital'
- 5  Other C-Suite   : 'chief '   (catch-all for CMO, CHRO, CRO, CSO, ...)
- 6  CEO             : 'ceo', 'chief executive', 'president'
- 7  Chairman        : 'chairman', 'chair of'
- 8  Director        : 'director'
- 9  VP              : 'vp', 'vice president', 'executive vice', 'senior vice'
- 10 10% Owner       : '10%', 'beneficial owner'
- 11 Officer         : 'officer'
+ - VP precedes CEO so "Vice President" hits VP rather than CEO's `president`
+   pattern.
+ - CEO precedes the catch-all `chief ` (Other C-Suite) so "Chief Executive
+   Officer" hits CEO rather than the generic chief rule.
+ - Bare acronyms (`cfo`, `coo`, `cto`, `cio`, `vp`, `ceo`) use regex word
+   boundaries (`\b...\b`) so they do not match inside unrelated words
+   (e.g. "Director" contains the substring "cto" but `\bcto\b` does not match).
+
+Match rules (index : label : regex pattern, applied to lowercased title):
+ 0  CAO             : `chief accounting|controller|principal accounting`
+ 1  General Counsel : `general counsel|chief legal|secretary`
+ 2  CFO             : `\bcfo\b|chief financial|treasurer|principal financial`
+ 3  COO             : `\bcoo\b|chief operating`
+ 4  CTO_CIO         : `\bcto\b|\bcio\b|chief technology|chief information|chief digital`
+ 5  VP              : `\bvp\b|vice president|executive vice|senior vice`
+ 6  CEO             : `\bceo\b|chief executive|president`
+ 7  Other C-Suite   : `chief `   (catch-all for CMO, CHRO, CRO, CSO, ...)
+ 8  Chairman        : `chairman|chair of`
+ 9  Director        : `director`
+ 10 10% Owner       : `10%|beneficial owner`
+ 11 Officer         : `officer`
  12 Other           : (no pattern; default fallthrough, also catches empty/null)
 
 ### sentiment_df: pl.DataFrame
@@ -126,13 +136,15 @@ Match rules (index : label : substring patterns):
 Note: 
  - 'Date' is sourced from `reportedDate` (EARNINGS.quarterlyEarnings) and is not duplicated as its own field below.
  - qm: quarterly minus, qp: quarterly plus
- - m is in {0,1,2,...,16}
+ - m is in {1,2,...,16}
  - n encodes a signed quarterly offset: `m{|k|}` for k<0, `p{k}` for k>0, `0` for k=0.
    Range: {m8, m7, m6, m5, m4, m3, m2, m1, 0, p1, p2, p3, p4}.
    Regex: `_qp_(m|p)?(\d+)$` (sign letter absent => zero).
 Columns
  'Date'                                                             : pl.Date
+ 'days_to_fiscalDateEnding_qm0'                                     : pl.Float32
  'days_to_fiscalDateEnding_qm{m}'                                   : pl.Float32
+ 'reportTime_qm0'                                                   : pl.Categorical  ('pre-market', 'post-market', 'other')
  'reportTime_qm{m}'                                                 : pl.Categorical  ('pre-market', 'post-market', 'other')
  'accumulatedDepreciationAmortizationPPE_qm{m}'                     : pl.Float32
  'capitalExpenditures_qm{m}'                                        : pl.Float32
@@ -249,13 +261,14 @@ Columns
 Note: 
  - annual EARNINGS does not provide `reportedDate`, `reportTime`, `estimatedEPS`, `surprise`, or `surprisePercentage`; those are quarterly-only.
  - am: annually minus, ap: annually plus
- - m is in {0,1,2,3,4}
+ - m is in {1,2,3,4}
  - n encodes a signed annual offset: `m{|k|}` for k<0, `p{k}` for k>0, `0` for k=0.
    Range: {m2, m1, 0, p1}.
    Regex: `_ap_(m|p)?(\d+)$` (sign letter absent => zero).
 Columns
  'Date'                                                             : pl.Date
- 'days_to_fiscalDateEnding_am{m}'                                   : pl.Date
+ 'days_to_fiscalDateEnding_am0'                                     : pl.Float32
+ 'days_to_fiscalDateEnding_am{m}'                                   : pl.Float32
  'accumulatedDepreciationAmortizationPPE_am{m}'                     : pl.Float32
  'capitalExpenditures_am{m}'                                        : pl.Float32
  'capitalLeaseObligations_am{m}'                                    : pl.Float32

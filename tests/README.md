@@ -18,6 +18,16 @@ tests/
 │   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
 │   ├── test_analyze_coverage.py   # SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ-holdings probes
 │   └── test_diff.py               # signed deltas vs previous monitoring_report.json
+├── data_transformation/        # Tests for data_transformation
+│   ├── test_asset_data_service.py  # AssetData dataclasses round-trip
+│   ├── test_common.py              # source enumeration, sector lookup, schema cast, report
+│   ├── test_dedup.py               # shared dedup-with-discrepancy-log helper
+│   ├── test_overview.py            # Phase 1: assets_overview.parquet
+│   ├── test_price_daily_simple.py  # Phase 2: forex/indices/crypto/commodities/economic
+│   ├── test_shareprice_daily.py    # Phase 3: stocks/etfs daily + AdjClose/AdjVolume math
+│   ├── test_shareprice_intraday.py # Phase 4: intraday + factor-frame join + tz strip
+│   ├── test_etf_profile.py         # Phase 5: etf_profile + holdings List(Struct) round-trip
+│   └── test_transform_cli.py       # End-to-end CLI via subprocess.run
 ├── call_speedtests/            # Scripts that measure real API call performance
 │   ├── estimate_sentiment_calls.py        # NEWS_SENTIMENT backward pagination cost
 │   ├── estimate_prices_calls.py           # TIME_SERIES_INTRADAY monthly pagination
@@ -77,6 +87,15 @@ catalog or ingestion report needed). Tests cover:
   present.
 - `test_diff.py` -- signed deltas vs a previous monitoring_report.json,
   including malformed/missing previous reports.
+
+### data_transformation
+
+Unit tests for the per-symbol transformation pipeline that builds
+`AssetData` instances from raw `historical/` and `daily/` parquets.
+Each test builds synthetic source files in `tmp_path` -- no real
+catalog or daily folder is touched. Phase 6 (insider, sentiment,
+financials) is not yet implemented; its test plan lives in
+[../data_transformation/_tests_prompt.md](../data_transformation/_tests_prompt.md).
 
 ### call_speedtests
 

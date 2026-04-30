@@ -106,6 +106,18 @@ _AM_BASE_FIELDS: list[tuple[str, Any]] = [
     (name, dtype) for name, dtype in _QM_BASE_FIELDS if name not in _AM_EXCLUDE
 ]
 
+# m=0 / am=0 carry only the report-axis anchors (days_to_fiscalDateEnding for
+# both, reportTime for quarterly only). The fundamentals data fields are
+# defined for m=1..16 / am=1..4 only because m=0 corresponds to the next
+# upcoming report whose data has not been filed at row date d.
+_QM_M0_FIELDS: list[tuple[str, Any]] = [
+    ("days_to_fiscalDateEnding", pl.Float32),
+    ("reportTime", pl.Categorical),
+]
+_AM_M0_FIELDS: list[tuple[str, Any]] = [
+    ("days_to_fiscalDateEnding", pl.Float32),
+]
+
 _QP_BASE_FIELDS: list[tuple[str, Any]] = [
     ("earnings_estimate_days_diff", pl.Float32),
     ("eps_estimate_analyst_count", pl.Float32),
@@ -139,7 +151,9 @@ def _signed_suffix(n: int) -> str:
 
 def _build_quarterly_schema() -> dict:
     schema: dict = {"Date": pl.Date}
-    for m in range(0, 17):
+    for name, dtype in _QM_M0_FIELDS:
+        schema[f"{name}_qm0"] = dtype
+    for m in range(1, 17):
         for name, dtype in _QM_BASE_FIELDS:
             schema[f"{name}_qm{m}"] = dtype
     for n in range(-8, 5):
@@ -151,7 +165,9 @@ def _build_quarterly_schema() -> dict:
 
 def _build_annual_schema() -> dict:
     schema: dict = {"Date": pl.Date}
-    for m in range(0, 5):
+    for name, dtype in _AM_M0_FIELDS:
+        schema[f"{name}_am0"] = dtype
+    for m in range(1, 5):
         for name, dtype in _AM_BASE_FIELDS:
             schema[f"{name}_am{m}"] = dtype
     for n in range(-2, 2):
@@ -192,7 +208,6 @@ SCHEMAS: dict[str, dict] = {
     },
     "insider_df": {
         "Date": pl.Date,
-        "TransactionDate": pl.Date,
         "Executive_role": pl.Categorical,
         "AcqDis": pl.Categorical,
         "Shares": pl.Float32,

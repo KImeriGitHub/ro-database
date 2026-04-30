@@ -17,6 +17,7 @@ GCS_CREDENTIALS_FILE = SECRETS_DIR / "gcs_credentials.json"
 CATALOG_DIR = PROJECT_ROOT / "catalog"
 HISTORICAL_DIR = PROJECT_ROOT / "historical"
 DAILY_DIR = PROJECT_ROOT / "daily"
+TRANSFORMED_DIR = PROJECT_ROOT / "transformed"
 
 # Date at which the homegrown PIT fundamentals collection began. Fundamentals
 # observations before this date fall back to the 90 day reporting lag

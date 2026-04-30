@@ -21,6 +21,23 @@ CANONICAL_SECTORS = [
 _OTHER_SECTOR = CANONICAL_SECTORS.index("Other")
 
 
+CANONICAL_INSIDER_ROLES = [
+    "CAO",
+    "General Counsel",
+    "CFO",
+    "COO",
+    "CTO_CIO",
+    "VP",
+    "CEO",
+    "Other C-Suite",
+    "Chairman",
+    "Director",
+    "10% Owner",
+    "Officer",
+    "Other",
+]
+
+
 @dataclass
 class StockData(AssetDataMixin):
     ticker: str = ""
