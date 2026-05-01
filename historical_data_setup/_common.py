@@ -38,13 +38,25 @@ class RateLimiter:
         self,
         calls_per_minute: float = 74.0,
         window: float = 60.0,
-        min_gap: float = 0.05,
+        min_gap: float = 0.6,
     ):
         self._max_calls = int(calls_per_minute)
         self._window = window
         self._min_gap = min_gap
         self._timestamps: deque[float] = deque()
         self._lock = asyncio.Lock()
+
+        # Calculate the theoretical maximum gap allowed to still hit the target rate
+        max_allowable_gap = self._window / float(self._max_calls)
+
+        if self._min_gap >= max_allowable_gap:
+            logger.warning(
+                f"RateLimiter: min_gap ({self._min_gap}s) is too large to allow "
+                f"{self._max_calls} calls within {self._window}s. "
+                f"Reducing min_gap to {max_allowable_gap * 0.9:.2f}s."
+            )
+            # Cap the min_gap at 90% of the average to ensure the throughput is possible
+            self._min_gap = max_allowable_gap * 0.9
 
     async def wait(self) -> None:
         """Block until a call slot is available in the sliding window."""
