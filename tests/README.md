@@ -18,7 +18,7 @@ tests/
 │   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
 │   ├── test_analyze_coverage.py   # SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ-holdings probes
 │   └── test_diff.py               # signed deltas vs previous monitoring_report.json
-├── data_transformation/        # Tests for data_transformation
+├── data_transformation/            # Tests for data_transformation
 │   ├── test_asset_data_service.py  # AssetData dataclasses round-trip
 │   ├── test_common.py              # source enumeration, sector lookup, schema cast, report
 │   ├── test_dedup.py               # shared dedup-with-discrepancy-log helper
@@ -28,7 +28,19 @@ tests/
 │   ├── test_shareprice_intraday.py # Phase 4: intraday + factor-frame join + tz strip
 │   ├── test_etf_profile.py         # Phase 5: etf_profile + holdings List(Struct) round-trip
 │   └── test_transform_cli.py       # End-to-end CLI via subprocess.run
-├── call_speedtests/            # Scripts that measure real API call performance
+├── integration_tests/               # End-to-end smoke tests against a real, persistent database/
+│   ├── _helpers.py                  # MANDATORY_STOCKS/ETFS, reduce_catalogs, shared paths
+│   ├── int_test_init_catalog.py     # init_catalog -> analyze_catalog -> reduce_catalogs
+│   ├── int_test_update_catalog.py   # update_catalog with before/after symbol diff
+│   ├── int_test_historical_setup.py # setup_historical (FRD-backed prices) + monitor checks
+│   ├── int_test_run_daily.py        # setup_daily + monitor + prior-folder integrity check
+│   ├── int_test_adjust_weekly.py    # adjust_weekly + monitor (weekend mode)
+│   ├── int_test_transform.py        # transform.py + per-symbol output presence check
+│   ├── int_helper_reduce_catalog.py # standalone re-trim of database/catalog/
+│   ├── database/                    # populated by the scripts; persisted across runs
+│   ├── frd_dir/                     # FRD CSVs (pre-populated for FRD-covered subset)
+│   └── transformation/              # transform.py output
+├── call_speedtests/                       # Scripts that measure real API call performance
 │   ├── estimate_sentiment_calls.py        # NEWS_SENTIMENT backward pagination cost
 │   ├── estimate_prices_calls.py           # TIME_SERIES_INTRADAY monthly pagination
 │   ├── estimate_prices_daily_calls.py     # TIME_SERIES_DAILY_ADJUSTED cost
@@ -96,6 +108,46 @@ Each test builds synthetic source files in `tmp_path` -- no real
 catalog or daily folder is touched. Phase 6 (insider, sentiment,
 financials) is not yet implemented; its test plan lives in
 [../data_transformation/_tests_prompt.md](../data_transformation/_tests_prompt.md).
+
+### integration_tests
+
+Standalone scripts (not pytest) that exercise each major pipeline against a real, persistent `database/` folder under `tests/integration_tests/database/`. They make real Alpha Vantage calls and use the local `frd_dir/` for FirstRate-covered stock and ETF prices. The catalog is trimmed to a small fixed subset of symbols after init so subsequent runs stay cheap.
+
+**Symbol subset.** Mandatory stocks: `AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, JPM, GS, BRK-B, IBM, T, NEE, SPG, O, TSM, F` plus 10 extras picked deterministically from the active stock catalog by SHA-256 ranking with a fixed seed (the ranking is stable across re-inits unless one of the picks disappears from AV's `LISTING_STATUS`). Mandatory ETFs: `QQQ, SPY, GLD, MDY, EWJ, EWU, DIA`. Trimming logic lives in `_helpers.reduce_catalogs`, which also propagates the trim to `yield_status.parquet` and `earnings_calendar.parquet`.
+
+**Persistence.** None of the scripts wipe `database/` between runs. They are designed for chained execution (`init -> historical -> daily -> weekly -> transform`) and for manual inspection of intermediate state. Pass `--wipe` to `int_test_init_catalog.py` to start the catalog from scratch.
+
+**Opting out of catalog reduction.** `int_test_init_catalog.py`, `int_test_update_catalog.py`, `int_test_run_daily.py`, and `int_test_adjust_weekly.py` each accept `--no-reduce` to skip the post-run trim. To trim a catalog later (e.g. after a `--no-reduce` run, or after a daily/weekly finalize that appended new symbols), run `int_helper_reduce_catalog.py`, which only calls `_helpers.reduce_catalogs` against `database/catalog/`.
+
+**Suggested run order**
+
+```bash
+# 1. Build catalog from FRD CSVs + AV, then reduce
+python tests/integration_tests/int_test_init_catalog.py [--wipe]
+
+# 2. Pull historical (uses frd_dir for stocks/etfs prices, AV for everything else)
+python tests/integration_tests/int_test_historical_setup.py
+
+# 3. Daily incremental pull (also writes a monitoring report)
+python tests/integration_tests/int_test_run_daily.py
+
+# 4. Weekend retry pass (usually a no-op on the small int-test catalog)
+python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 6]
+
+# 5. Transform raw parquets into AssetData per-symbol folders
+python tests/integration_tests/int_test_transform.py
+```
+
+**Per-script checks**
+
+- `int_test_init_catalog.py` -- runs `asset_catalog_service.init_catalog.init_all`, verifies all expected catalog parquets exist, calls `monitoring_service.analyze_catalog` and asserts non-trivial counts (`stocks >= 1000`, `etfs >= 100`, etc.), then trims via `reduce_catalogs`.
+- `int_test_update_catalog.py` -- runs `asset_catalog_service.update_catalog.update_all` against an already-initialised catalog. Snapshots per-file symbol sets before and after, logs added/removed symbols (first 10 of each), then runs the same `analyze_catalog` count assertions as the init test. Trims at the end.
+- `int_test_historical_setup.py` -- runs `historical_data_setup.setup_historical.run_historical_setup` with `frd_dir` for stock/ETF prices and `run_monitor=True`. Verifies every `historical/<subfolder>/` exists and that the ingestion + monitoring reports were written.
+- `int_test_run_daily.py` -- snapshots every pre-existing `daily/<date>/` file, runs `run_daily_pull`, then asserts (a) a new `daily/<folder-date>/` was created with the full subtree and at least one parquet per leaf, (b) the pre-existing folders are byte-for-byte unchanged, (c) the monitoring report was written for the new folder. The script writes the monitoring report itself; `setup_daily` does not. Re-reduces the catalog at the end.
+- `int_test_adjust_weekly.py` -- runs `adjust_weekly` against the most recent date folder, asserts the folder and its `ingestion_report.parquet` survived the run, writes a `weekend`-mode monitoring report, and re-reduces the catalog.
+- `int_test_transform.py` -- runs `data_transformation.transform.main` and asserts that every kept stock and ETF has a `data_<SYM>/` directory with at least one non-empty parquet, plus that the flat asset-type roots (`forex`, `indices`, `cryptocurrencies`, `commodities`, `economic`) each have at least one populated symbol folder.
+
+**Known caveat.** Running `int_test_init_catalog.py` again after the catalog has been reduced will rebuild it back to full size from AV `LISTING_STATUS` (init_catalog is idempotent on existing data but writes the full universe); the script trims again at the end of every run.
 
 ### call_speedtests
 
