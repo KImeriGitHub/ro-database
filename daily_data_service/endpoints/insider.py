@@ -109,7 +109,10 @@ async def fetch_insider(
             cleaned.append(mapped)
         del records
 
-        df = pl.DataFrame(cleaned, infer_schema_length=0)
+        # infer_schema_length=None scans every row to keep columns String
+        # even when the first value is null; infer_schema_length=0 fails
+        # on date-looking strings under polars >=1.9.
+        df = pl.DataFrame(cleaned, infer_schema_length=None)
         del cleaned
 
         if "transactionDate" not in df.columns:

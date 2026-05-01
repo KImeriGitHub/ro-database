@@ -106,8 +106,11 @@ async def fetch_insider(
 
         del records
 
-        # Build all-String DataFrame
-        df = pl.DataFrame(cleaned, infer_schema_length=0)
+        # Build all-String DataFrame. infer_schema_length=None scans every row,
+        # which keeps a column String even when its first value is null
+        # (post-sentinel cleanup); infer_schema_length=0 fails on date-looking
+        # strings under polars >=1.9 because no scan happens at all.
+        df = pl.DataFrame(cleaned, infer_schema_length=None)
         del cleaned
 
         # Cast transactionDate (required)
