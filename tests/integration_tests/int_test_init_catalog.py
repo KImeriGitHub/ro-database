@@ -12,7 +12,7 @@ calendar). The catalog is left in place after the run for manual inspection
 and for the next int_test in the chain.
 
 Usage:
-    python tests/integration_tests/int_test_init_catalog.py [--wipe]
+    python tests/integration_tests/int_test_init_catalog.py [--wipe] [--no-reduce]
 """
 
 from __future__ import annotations

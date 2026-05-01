@@ -10,9 +10,24 @@ tests/
 │   ├── mock_catalog/           # Temp catalog dir used by tests (created/cleaned per test)
 │   ├── test_init.py            # Tests initial catalog creation (no parquets exist)
 │   └── test_daily.py           # Tests daily update logic (parquets already exist)
+├── daily_data_service/         # Tests for daily_data_service
+│   ├── test_adjust_weekly.py   # Weekend retry pass: dates, retry plan,
+│   │                           # sentiment rename, ingestion-report merge,
+│   │                           # stubbed end-to-end orchestrator
+│   └── test_common.py          # compute_folder_date thresholds, .setup_started_at
+│                               # marker resume, read_previous_date / read_yield_skip_set,
+│                               # window_expr / since_expr / years_before, ensure_daily_folders
+├── maintainance_scripts/       # Tests for maintainance_scripts
+│   ├── test_get_api_key.py     # Local file + Secret Manager fallback resolution
+│   ├── test_logging_setup.py   # CloudLoggingJsonFormatter + configure_logging idempotency
+│   └── test_paths.py           # Local <-> GCS blob round-trip across catalog/historical/daily
 ├── historical_data_setup/      # Tests for historical_data_setup
 │   ├── test_rate_limiter.py    # Sliding-window RateLimiter behavior
-│   └── test_cross_endpoint.py  # Cross-endpoint concurrency + shared rate limit
+│   ├── test_cross_endpoint.py  # Cross-endpoint concurrency + shared rate limit
+│   └── test_common.py          # _common helpers (generate_months, IssueTracker,
+│                               # symbol_parquet_name, frd_csv_path,
+│                               # validate_meta_data, fetch_av_json throttle/retry,
+│                               # AV call counter, ensure_historical_folders)
 ├── monitoring_service/         # Tests for monitoring_service
 │   ├── test_analyze_catalog.py    # catalog/*.parquet rollups
 │   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
@@ -74,12 +89,28 @@ pytest tests/asset_catalog_service/test_init.py
 
 Unit tests for initial catalog creation and daily update logic. Uses mocked Alpha Vantage API responses (no real API calls). The `mock_catalog/` directory is created and cleaned up automatically by each test via a pytest fixture.
 
+### daily_data_service
+
+Unit tests for the daily incremental pull. No real network or catalog -- every test builds the inputs in `tmp_path`.
+
+- `test_adjust_weekly.py` -- weekend retry orchestrator end-to-end with stubbed endpoint coroutines. Covers `resolve_dates` (full-week, fallback, non-date entries, empty), `_load_retry_plan` (per-(asset, endpoint) grouping including the `GLOBAL` sentinel), `_rename_sentiment_files`, `_merge_report` drop-and-append semantics, and four orchestrator scenarios (retry success / failure, sentiment full-rerun, fundamentals with `skip_empty_yield=False`, missing-report no-op).
+- `test_common.py` -- `compute_folder_date` weekday/weekend cutoffs at 20:00 ET, `.setup_started_at` marker resume from mtime, `read_previous_date` and `read_yield_skip_set` over `yield_status.parquet` (only explicit `False` cells skipped, nulls stay queryable), `window_expr` strict `(prev, folder]` truncation on both Date and Datetime columns, `since_expr` inclusivity, `years_before` Feb-29 clamping, and `ensure_daily_folders` idempotency.
+
+### maintainance_scripts
+
+Unit tests for the shared utility modules. No real GCP, no real network -- Secret Manager and the GCS client are stubbed, and `K_SERVICE` is monkeypatched to flip the Cloud Run detection.
+
+- `test_get_api_key.py` -- local file vs. Secret Manager fallback across all combinations of file-missing / tier-missing / placeholder values and the `USE_SECRET_MANAGER_FOR_AV_KEYS` flag.
+- `test_paths.py` -- local-path helpers, GCS prefix helpers, and the `to_gcs_blob_name` <-> `to_local_path` round-trip across `catalog/`, `historical/`, `daily/<date>/` (including the Windows-backslash-to-POSIX-slash contract).
+- `test_logging_setup.py` -- `detect_cloud_run`, the `CloudLoggingJsonFormatter` (severity / source location / extras / exception serialisation / underscore-prefix filtering), and `configure_logging` idempotency with text and JSON output modes.
+
 ### historical_data_setup
 
 Unit tests covering the sliding-window rate limiter and cross-endpoint concurrency used by the historical setup pipeline. Pure asyncio tests -- no real network, no pytest-asyncio dependency (each test wraps its body with `asyncio.run`).
 
 - `test_rate_limiter.py` -- verifies `RateLimiter` respects `calls_per_minute`, `window`, and `min_gap`; that concurrent waiters share the budget; and that the window slides forward as timestamps age out.
 - `test_cross_endpoint.py` -- uses a hand-rolled mock `aiohttp.ClientSession` to confirm two endpoint coroutines interleave, never exceed the shared rate limit, and that a slow endpoint does not starve a fast one.
+- `test_common.py` -- pure-helper coverage in `_common`: `generate_months` clamping/year-rollover, `IssueTracker` parquet round-trip and append-on-rerun, `symbol_parquet_name` Windows reserved-name protection, `frd_csv_path` lookup, `validate_meta_data` timezone branches, the `fetch_av_json` throttle-and-retry path (`Note` / `Information` keys, exhaustion -> `AVResponseError`), `get_av_call_count`/`reset_av_call_count`, and `ensure_historical_folders` idempotency.
 
 ### monitoring_service
 
