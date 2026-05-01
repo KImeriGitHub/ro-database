@@ -50,7 +50,7 @@ def _read_key_from_secret_manager(tier: str) -> str:
     return get_secret(secret_name)
 
 
-def get_alpha_vantage_key(tier: str = "standard") -> str:
+def get_alpha_vantage_key(tier: str = "premium") -> str:
     if tier not in VALID_TIERS:
         raise ValueError(f"Unknown tier '{tier}'. Choose from: {VALID_TIERS}")
 
@@ -82,8 +82,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Retrieve an Alpha Vantage API key.")
-    parser.add_argument("--tier", choices=VALID_TIERS, default="standard",
-                        help="API key tier (default: standard)")
+    parser.add_argument("--tier", choices=VALID_TIERS, default="premium",
+                        help="API key tier (default: premium)")
     args = parser.parse_args()
 
     print(get_alpha_vantage_key(args.tier))
