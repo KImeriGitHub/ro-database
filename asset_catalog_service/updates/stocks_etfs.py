@@ -15,6 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
+import requests
 
 from asset_catalog_service.updates._common import (
     AV_BASE,
@@ -29,6 +30,9 @@ _STOCKS_REQUIRED_HEADERS = {"Ticker", "Company Name", "Sector", "IPO Date", "Sta
 _ETFS_REQUIRED_HEADERS = {"Ticker", "Name", "IPO Date", "Status"}
 
 _RATE_BATCH = 73  # queries per minute (2 under limit for margin)
+
+_SECTOR_FETCH_MAX_ATTEMPTS = 3
+_SECTOR_FETCH_RETRY_BACKOFF = 5.0  # seconds, multiplied by attempt number
 
 # ── Validation ───────────────────────────────────────────────────────
 
@@ -151,11 +155,7 @@ def _fetch_sectors_batch(
                 time.sleep(sleep_time)
             batch_start = time.monotonic()
 
-        try:
-            results[symbol] = _fetch_sector(api_key, symbol)
-        except Exception as e:
-            logger.warning(f"Error fetching {symbol}: {e}. Defaulting to Other.")
-            results[symbol] = "Other"
+        results[symbol] = _fetch_sector_with_retry(api_key, symbol)
 
         if i > 0 and i % 500 == 0:
             logger.info(f"Sector fetch progress: {i}/{total}")
@@ -163,6 +163,40 @@ def _fetch_sectors_batch(
     logger.info(f"Sector fetch complete: {total} symbols.")
     return results
 
+
+def _fetch_sector_with_retry(api_key: str, symbol: str) -> str:
+    """Wrap _fetch_sector with retries for transient network errors.
+
+    Connection-aborted and timeout failures get a dedicated warning so they
+    are easy to spot in logs.  After all attempts fail, returns "Other".
+    """
+    for attempt in range(1, _SECTOR_FETCH_MAX_ATTEMPTS + 1):
+        try:
+            return _fetch_sector(api_key, symbol)
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(
+                f"Connection aborted fetching {symbol} "
+                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
+            )
+        except requests.exceptions.Timeout as e:
+            logger.warning(
+                f"Timeout fetching {symbol} "
+                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Error fetching {symbol} "
+                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
+            )
+
+        if attempt < _SECTOR_FETCH_MAX_ATTEMPTS:
+            time.sleep(_SECTOR_FETCH_RETRY_BACKOFF * attempt)
+
+    logger.warning(
+        f"Giving up on {symbol} after {_SECTOR_FETCH_MAX_ATTEMPTS} attempts. "
+        f"Defaulting to Other."
+    )
+    return "Other"
 
 # ── FirstRate loaders ────────────────────────────────────────────────
 
