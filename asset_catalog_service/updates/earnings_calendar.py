@@ -29,6 +29,9 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
 
     # 2. Transform
     raw = pl.read_csv(io.StringIO(csv_text), infer_schema_length=0)
+    # AV's EARNINGS_CALENDAR CSV uses "reportDate"; the EARNINGS endpoint
+    # uses "reportedDate". Normalise here so downstream sees one name.
+    raw = raw.rename({"reportDate": "reportedDate"})
 
     df = raw.with_columns(
         pl.col("reportedDate")

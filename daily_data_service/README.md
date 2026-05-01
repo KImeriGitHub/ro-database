@@ -103,6 +103,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 - **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to the start of previous-date, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `{SYMBOL}.parquet` files for active symbols (same logic as historical).
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly / non-daily rows get a 1-year window because `(previous-date, folder-date]` would usually be empty.
+- **earnings `reportedDate`**: the `EARNINGS` endpoint exposes the column as `reportedDate` (with "ed") and our daily parquets preserve that name. The unrelated `EARNINGS_CALENDAR` endpoint (used only by `catalog/earnings_calendar.parquet`) calls it `reportDate` in its CSV; that one is renamed to `reportedDate` at ingest so downstream code only ever sees `reportedDate`.
 
 ### Empty-after-truncation outcomes
 

@@ -58,7 +58,7 @@ CRYPTO_CSV = (
 )
 
 EARNINGS_CSV = (
-    "symbol,name,reportedDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
+    "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
     "AAPL,Apple Inc,2026-04-25,2026-03-31,1.62,USD,AMC\n"
     "MSFT,Microsoft,2026-04-22,2026-03-31,3.22,USD,AMC\n"
     "BAD,Bad Corp,not-a-date,2026-03-31,xyz,USD,BMS\n"
