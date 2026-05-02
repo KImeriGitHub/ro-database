@@ -91,6 +91,11 @@ def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
 
     Returned DataFrames have columns: symbol, name, ipoDate, delistingDate,
     status.  ``exchange`` and ``assetType`` are dropped.
+
+    A ticker can appear in both active and delisted lists when the symbol
+    was re-issued (old company delisted, new company now trades the same
+    ticker string). Active wins so ``status`` and ``ipoDate`` reflect the
+    currently-trading entity; the delisted row is dropped here.
     """
     logger.info("Fetching LISTING_STATUS (active + delisted)...")
     active_csv = fetch_text(
@@ -106,24 +111,41 @@ def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
     delisted_df = pl.read_csv(
         io.StringIO(delisted_csv), null_values=["null"], infer_schema_length=0
     )
+    # Active rows go first so unique(keep="first") prefers them on collision.
     combined = pl.concat([active_df, delisted_df], how="vertical_relaxed")
 
+    stocks_pre = combined.filter(pl.col("assetType") == "Stock")
     stocks = (
-        combined.filter(pl.col("assetType") == "Stock")
+        stocks_pre
         .with_columns(
             pl.col("ipoDate").cast(pl.Date, strict=False),
             pl.col("delistingDate").cast(pl.Date, strict=False),
         )
+        .unique(subset=["symbol"], keep="first", maintain_order=True)
         .select("symbol", "name", "ipoDate", "delistingDate", "status")
     )
+    if stocks.height < stocks_pre.height:
+        logger.info(
+            f"stocks: collapsed {stocks_pre.height - stocks.height} duplicate "
+            f"symbols from LISTING_STATUS (re-issued tickers; kept active row)"
+        )
+
+    etfs_pre = combined.filter(pl.col("assetType") == "ETF")
     etfs = (
-        combined.filter(pl.col("assetType") == "ETF")
+        etfs_pre
         .with_columns(
             pl.col("ipoDate").cast(pl.Date, strict=False),
             pl.col("delistingDate").cast(pl.Date, strict=False),
         )
+        .unique(subset=["symbol"], keep="first", maintain_order=True)
         .select("symbol", "name", "ipoDate", "delistingDate", "status")
     )
+    if etfs.height < etfs_pre.height:
+        logger.info(
+            f"etfs: collapsed {etfs_pre.height - etfs.height} duplicate "
+            f"symbols from LISTING_STATUS (re-issued tickers; kept active row)"
+        )
+
     return stocks, etfs
 
 
