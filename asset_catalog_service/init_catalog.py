@@ -16,8 +16,6 @@ import sys
 from pathlib import Path
 import logging
 
-import polars as pl
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
@@ -75,29 +73,6 @@ def init_all(
             func()
         except Exception:
             logger.exception(f"Failed to init {name}")
-
-    # Log symbols with null status or null ipoDate across all catalogs
-    for filename in sorted(catalog_dir.glob("*.parquet")):
-        df = pl.read_parquet(filename)
-        name = filename.stem
-        if "status" in df.columns:
-            null_status = df.filter(pl.col("status").is_null())
-            if null_status.height > 0:
-                syms = null_status["symbol"].to_list()
-                logger.warning(
-                    f"{name}: {len(syms)} symbols with null status: "
-                    f"{syms[:20]}"
-                    + (f" ... and {len(syms) - 20} more" if len(syms) > 20 else "")
-                )
-        if "ipoDate" in df.columns:
-            null_ipo = df.filter(pl.col("ipoDate").is_null())
-            if null_ipo.height > 0:
-                syms = null_ipo["symbol"].to_list()
-                logger.warning(
-                    f"{name}: {len(syms)} symbols with null ipoDate: "
-                    f"{syms[:20]}"
-                    + (f" ... and {len(syms) - 20} more" if len(syms) > 20 else "")
-                )
 
     logger.info("Catalog init complete")
 
