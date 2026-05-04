@@ -39,7 +39,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from daily_data_service.ensure_folders import DAILY_TREE
 from daily_data_service.setup_daily import run_daily_pull
 from historical_data_setup._common import get_av_call_count, reset_av_call_count
-from maintainance_scripts.logging_setup import configure_logging
 from monitoring_service.report import (
     REPORT_FILENAME_JSON,
     REPORT_FILENAME_MD,
@@ -49,6 +48,7 @@ from monitoring_service.report import (
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     DAILY_DIR,
+    configure_int_test_logging,
     reduce_catalogs,
 )
 
@@ -147,7 +147,7 @@ def _check_monitoring(day_root: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_logging()
+    configure_int_test_logging(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
         "--api-tier", default="premium",

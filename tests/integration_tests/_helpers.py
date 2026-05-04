@@ -18,9 +18,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import polars as pl
+
+from maintainance_scripts.logging_setup import (
+    DEFAULT_DATEFMT,
+    DEFAULT_FORMAT,
+    configure_logging,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +211,31 @@ INT_TESTS_DIR = Path(__file__).resolve().parent
 DATABASE_DIR = INT_TESTS_DIR / "database"
 FRD_DIR = INT_TESTS_DIR / "frd_dir"
 TRANSFORMATION_DIR = INT_TESTS_DIR / "transformation"
+LOGS_DIR = INT_TESTS_DIR / "logs"
 CATALOG_DIR = DATABASE_DIR / "catalog"
 HISTORICAL_DIR = DATABASE_DIR / "historical"
 DAILY_DIR = DATABASE_DIR / "daily"
+
+
+def configure_int_test_logging(script_path: str | Path) -> Path:
+    """Set up logging for an int_*.py script.
+
+    Calls :func:`configure_logging` for the usual stdout handler, then attaches
+    a ``FileHandler`` writing to
+    ``tests/integration_tests/logs/<YYYYMMDD-HHMMSS>_<script_stem>.log``.
+    The timestamp is captured at call time so each run gets its own file.
+    Returns the path of the log file.
+    """
+    configure_logging()
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    stem = Path(script_path).stem
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = LOGS_DIR / f"{timestamp}_{stem}.log"
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter(fmt=DEFAULT_FORMAT, datefmt=DEFAULT_DATEFMT)
+    )
+    logging.getLogger().addHandler(file_handler)
+    logger.info(f"Integration test log file: {log_path}")
+    return log_path

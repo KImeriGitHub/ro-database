@@ -27,10 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import polars as pl
 
 from asset_catalog_service.update_catalog import update_all
-from maintainance_scripts.logging_setup import configure_logging
 from monitoring_service.analyze_catalog import analyze_catalog
 
-from tests.integration_tests._helpers import CATALOG_DIR, reduce_catalogs
+from tests.integration_tests._helpers import (
+    CATALOG_DIR,
+    configure_int_test_logging,
+    reduce_catalogs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +129,7 @@ def _check_counts(report: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_logging()
+    configure_int_test_logging(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
         "--no-reduce", action="store_true",

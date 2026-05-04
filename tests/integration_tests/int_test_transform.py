@@ -24,13 +24,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import polars as pl
 
 from data_transformation.transform import main as transform_main
-from maintainance_scripts.logging_setup import configure_logging
 
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     DAILY_DIR,
     HISTORICAL_DIR,
     TRANSFORMATION_DIR,
+    configure_int_test_logging,
     kept_symbols,
 )
 
@@ -114,7 +114,7 @@ def _check_flat_asset_root(asset_type: str, dest_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_logging()
+    configure_int_test_logging(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
         "--rebuild-stocks", action="store_true",

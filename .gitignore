@@ -11,6 +11,8 @@ tmp/
 tests/integration_tests/database/*
 tests/integration_tests/frd_dir/*
 tests/integration_tests/transformation/*
+tests/integration_tests/logs/*
 !tests/integration_tests/database/.gitkeep
 !tests/integration_tests/frd_dir/.gitkeep
 !tests/integration_tests/transformation/.gitkeep
+!tests/integration_tests/logs/.gitkeep

@@ -21,15 +21,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from maintainance_scripts.logging_setup import configure_logging
-
-from tests.integration_tests._helpers import CATALOG_DIR, reduce_catalogs
+from tests.integration_tests._helpers import (
+    CATALOG_DIR,
+    configure_int_test_logging,
+    reduce_catalogs,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_logging()
+    configure_int_test_logging(__file__)
     argparse.ArgumentParser(description=__doc__.split("\n", 1)[0]).parse_args(argv)
 
     if not CATALOG_DIR.exists():

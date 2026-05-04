@@ -26,12 +26,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from asset_catalog_service.init_catalog import init_all
-from maintainance_scripts.logging_setup import configure_logging
 from monitoring_service.analyze_catalog import analyze_catalog
 
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     FRD_DIR,
+    configure_int_test_logging,
     reduce_catalogs,
 )
 
@@ -91,7 +91,7 @@ def _check_counts(report: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    configure_logging()
+    configure_int_test_logging(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
         "--wipe", action="store_true",
