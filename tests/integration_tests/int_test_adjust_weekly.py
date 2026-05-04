@@ -8,7 +8,7 @@ the catalog and latest daily folder are intact afterwards, then runs
 the monitoring report in ``weekend`` mode and re-reduces the catalog.
 
 Usage:
-    python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 6]
+    python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 7]
 """
 
 from __future__ import annotations
@@ -82,8 +82,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
-        "--look-back-days", type=int, default=6,
-        help="How many days back to look for previous_date (max useful: 6).",
+        "--look-back-days", type=int, default=7,
+        help="How many days back to look for previous_date (max useful: 7).",
     )
     parser.add_argument(
         "--api-tier", default="premium",

@@ -163,7 +163,7 @@ python tests/integration_tests/int_test_historical_setup.py
 python tests/integration_tests/int_test_run_daily.py
 
 # 4. Weekend retry pass (usually a no-op on the small int-test catalog)
-python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 6]
+python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 7]
 
 # 5. Transform raw parquets into AssetData per-symbol folders
 python tests/integration_tests/int_test_transform.py

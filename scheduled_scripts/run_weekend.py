@@ -191,7 +191,7 @@ def main() -> int:
         "--workdir", type=Path, default=None,
         help="Working directory (default: a tempdir)",
     )
-    parser.add_argument("--look-back-days", type=int, default=6)
+    parser.add_argument("--look-back-days", type=int, default=7)
     parser.add_argument(
         "--api-tier", default="premium", choices=("standard", "premium"),
     )

@@ -30,7 +30,7 @@ recomputed via the same ``finalize_yield_status`` the daily full run uses.
 
 Usage:
     python adjust_weekly.py [--catalog-dir PATH] [--daily-dir PATH]
-                            [--look-back-days 6] [--api-tier premium]
+                            [--look-back-days 7] [--api-tier premium]
 """
 
 from __future__ import annotations
@@ -334,7 +334,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--catalog-dir", type=Path, default=None)
     parser.add_argument("--daily-dir", type=Path, default=None)
-    parser.add_argument("--look-back-days", type=int, default=6)
+    parser.add_argument("--look-back-days", type=int, default=7)
     parser.add_argument(
         "--api-tier", default="premium", choices=("standard", "premium"),
     )

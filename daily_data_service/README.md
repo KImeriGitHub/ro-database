@@ -25,19 +25,19 @@ daily/
 ├── .setup_started_at               # mtime = start datetime; drives folder-date across resumes
 └── YYYY-MM-DD/                     # folder-date (see "Date resolution" below)
     ├── stocks/
-    │   ├── prices/                 # SYMBOL.parquet (1-min, truncated)
-    │   ├── prices_daily/           # SYMBOL.parquet (daily, truncated)
-    │   ├── income_statement/       # SYMBOL_annual.parquet + SYMBOL_quarterly.parquet (last 5y)
+    │   ├── prices/                 # stocks_SYMBOL.parquet (1-min, truncated)
+    │   ├── prices_daily/           # stocks_SYMBOL.parquet (daily, truncated)
+    │   ├── income_statement/       # stocks_SYMBOL_annual.parquet + stocks_SYMBOL_quarterly.parquet (last 5y)
     │   ├── balance_sheet/
     │   ├── cash_flow/
     │   ├── earnings/
     │   ├── earnings_estimates/
-    │   ├── insider/                # SYMBOL.parquet, INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
-    │   └── sentiment/              # ALL_MESSAGES.parquet + {SYMBOL}.parquet
+    │   ├── insider/                # stocks_SYMBOL.parquet, INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
+    │   └── sentiment/              # ALL_MESSAGES.parquet + stocks_SYMBOL.parquet
     ├── etfs/
     │   ├── prices/
     │   ├── prices_daily/
-    │   └── etf_profile/            # SYMBOL.parquet with date = folder-date
+    │   └── etf_profile/            # etfs_SYMBOL.parquet with date = folder-date
     ├── forex/
     ├── indices/
     ├── cryptocurrencies/
@@ -100,7 +100,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 
 - **prices (intraday)**: the `month` parameter is intentionally **omitted**. With `outputsize=full`, Alpha Vantage returns the trailing 30 days of 1-min bars regardless of month boundary, which cleanly covers any reasonable `(previous-date, folder-date]` gap including cross-month rollovers.
 - **prices_daily / forex `outputsize=compact`**: returns the trailing ~100 data points, which covers any reasonable previous-date-to-folder-date gap and saves payload.
-- **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to the start of previous-date, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `{SYMBOL}.parquet` files for active symbols (same logic as historical).
+- **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to the start of previous-date, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `stocks_SYMBOL.parquet` files for active symbols (same logic as historical).
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly / non-daily rows get a 1-year window because `(previous-date, folder-date]` would usually be empty.
 - **earnings `reportedDate`**: the `EARNINGS` endpoint exposes the column as `reportedDate` (with "ed") and our daily parquets preserve that name. The unrelated `EARNINGS_CALENDAR` endpoint (used only by `catalog/earnings_calendar.parquet`) calls it `reportDate` in its CSV; that one is renamed to `reportedDate` at ingest so downstream code only ever sees `reportedDate`.
@@ -229,7 +229,7 @@ Cells resolved per the same rules:
 | `structure_error` | False |
 | `av_throttle` | False |
 | `empty_content` (non-fundamental endpoint) | False |
-| `empty_content` (fundamental endpoint) | True if `{symbol}_annual.parquet` or `{symbol}_quarterly.parquet` exists, else False |
+| `empty_content` (fundamental endpoint) | True if `<prefix>_{symbol}_annual.parquet` or `<prefix>_{symbol}_quarterly.parquet` exists, else False |
 | `cast_failure` | True |
 | `timezone_mismatch` | True |
 
@@ -243,7 +243,7 @@ A second pass over the latest daily folder, intended for Saturday evening. It re
 
 - `folder_date` = max `YYYY-MM-DD` subdirectory under `daily/` (the most recent daily folder).
 - `previous_date` = max folder-date strictly earlier than `folder_date - look_back_days`. If no such folder exists, falls back to `folder_date - (look_back_days + 1)`.
-- Default `look_back_days = 6`. Running on Saturday evening this resolves to a wider `(previous_date, folder_date]` window spanning the whole trading week, which every price-like endpoint uses for truncation.
+- Default `look_back_days = 7`. Running on Saturday evening this resolves to a wider `(previous_date, folder_date]` window spanning the whole trading week, which every price-like endpoint uses for truncation.
 
 ### What gets re-queried
 
@@ -251,8 +251,8 @@ Only `(symbol, asset_type, endpoint)` triples present in `daily/<folder_date>/in
 
 For each retried triple, the endpoint's built-in `out_path.exists(): continue` guard does the right thing:
 
-- **Non-fundamental endpoints**: skip when `SYMBOL.parquet` already exists in the folder-date output dir.
-- **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
+- **Non-fundamental endpoints**: skip when `<prefix>_SYMBOL.parquet` already exists in the folder-date output dir (e.g. `stocks_AAPL.parquet`, `etfs_SPY.parquet`; see [historical_data_setup/README.md](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table).
+- **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `<prefix>_SYMBOL_annual.parquet` and `<prefix>_SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
 - **Sentiment**: handled specially (see below).
 
 The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call.
@@ -263,7 +263,7 @@ Every `fetch_*` in [`endpoints/`](endpoints/) accepts a `symbols_filter: set[str
 
 ### Sentiment is all-or-nothing
 
-Sentiment is one global paginated fetch, not per-symbol. Any sentiment issue in the ingestion report -- including the sentinel `GLOBAL` symbol used for global-fetch failures -- triggers a full sentiment rerun. Before `fetch_sentiment` is called, every file under `stocks/sentiment/` (the `ALL_MESSAGES.parquet` and each `SYMBOL.parquet`) is renamed to `*.pre_weekly` so the endpoint's existence guards don't short-circuit the rerun. Previous `.pre_weekly` siblings from an earlier weekend pass are overwritten.
+Sentiment is one global paginated fetch, not per-symbol. Any sentiment issue in the ingestion report -- including the sentinel `GLOBAL` symbol used for global-fetch failures -- triggers a full sentiment rerun. Before `fetch_sentiment` is called, every file under `stocks/sentiment/` (the `ALL_MESSAGES.parquet` and each `stocks_SYMBOL.parquet`) is renamed to `*.pre_weekly` so the endpoint's existence guards don't short-circuit the rerun. Previous `.pre_weekly` siblings from an earlier weekend pass are overwritten.
 
 `fetch_sentiment` then paginates from the wider `previous_date 00:00 UTC` back up to now, writes a fresh `ALL_MESSAGES.parquet`, and splits per-symbol files for every active stock.
 
@@ -305,7 +305,7 @@ python daily_data_service/adjust_weekly.py --look-back-days 10
 python daily_data_service/adjust_weekly.py --catalog-dir /path/to/catalog --daily-dir /path/to/daily
 
 # Container entrypoint
-python scheduled_scripts/run_weekend.py --look-back-days 6
+python scheduled_scripts/run_weekend.py --look-back-days 7
 ```
 
 ## Module structure
