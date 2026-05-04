@@ -29,13 +29,12 @@ secrets/                      # NOT IN GIT - API keys, GCS credentials
 config/                       # settings.py (paths, constants), gcp.py (GCP config)
 asset_catalog_service/        # Ticker/asset catalogs and API yield tracking code
 historical_data_setup/        # One-time historical data download (AV + optional FirstRate)
-daily_data_service/           # Daily incremental AV pull, truncated to recent window, writes daily/YYYY-MM-DD/
+daily_data_service/           # Daily incremental AV pull (setup_daily) + weekend retry pass (adjust_weekly)
 data_transformation/          # Transforms raw data into AssetData instances
-scheduled_scripts/            # Orchestration scripts, API budget tracking
-maintainance_scripts/         # Shared utility modules, access to api key
-response_schemas/             # AV API response structure validation
-consistency_tests/            # Data validation against other sources
-tests/                        # Unified test directory (asset_catalog_service, historical_data_setup, call_speedtests)
+scheduled_scripts/            # Cloud Run entrypoints (run_daily.py, run_weekend.py)
+maintainance_scripts/         # Shared utility modules, GCS client, API key resolution
+monitoring_service/           # End-of-run database snapshot + delta-vs-previous report
+tests/                        # Unified test directory (one subdir per service, plus call_speedtests/ and integration_tests/)
 ```
 
 ## Data storage layout (GCS + local mirror)

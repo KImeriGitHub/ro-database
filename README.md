@@ -102,7 +102,7 @@ After several years of collection, this produces a genuine PIT dataset for the c
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). All raw files are append-only and never modified or deleted. This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). Raw files are append-only by default, with two narrow exceptions: the weekend pass may extend or rewrite content in the most-recent `daily/<date>/` folder (retried cells, refreshed ingestion report, added monitoring report), and FirstRate ingestion may overwrite Alpha Vantage history when overlapping values agree. This is the permanent record.
 
 The one-time historical setup runs **locally** (it is a multi-hour job that benefits from local disk and easy restarts), and the resulting `historical/` and `catalog/` trees are pushed to the same GCS bucket once the setup finishes. After that initial upload, the container takes over for all ongoing daily work.
 
@@ -137,6 +137,35 @@ GCP Cloud Container                   GCS Bucket                          Local
                                                                  │ locally             │
                                                                  └─────────────────────┘
 ```
+
+### Run sequence
+
+The pipeline has a one-time bootstrap and two recurring runs:
+
+**One-time setup (local):**
+
+1. `python -m asset_catalog_service.init_catalog [--stocks-dir ... --etfs-dir ...]`
+   builds `catalog/` from scratch (FirstRate-aware if the dirs are provided).
+2. `python -m historical_data_setup.setup_historical` downloads full Alpha
+   Vantage history into `historical/`. Resumable; finalises `yield_status`
+   only on a clean full run.
+3. Push `catalog/` and `historical/` to GCS.
+
+**Recurring runs (Cloud Run):**
+
+- **Daily** (`scheduled_scripts/run_daily.py`) — pulls `catalog/` from GCS,
+  runs `update_catalog_all` to refresh metadata and yield_status, runs
+  `run_daily_pull` with `skip_empty_yield=True`, builds the monitoring
+  report, and pushes the new `daily/<date>/` folder and updated `catalog/`
+  back to GCS.
+- **Weekend** (`scheduled_scripts/run_weekend.py`, Saturday) — pulls
+  `catalog/` and the latest `daily/<date>/` folder, runs `adjust_weekly`
+  (retries the cells flagged in that folder's `ingestion_report.parquet`
+  with `look_back_days` widening the truncation window for fundamentals,
+  then rewrites the ingestion report and refreshes `yield_status`), builds
+  the monitoring report, and pushes the extended folder and `catalog/`
+  back. **Does not call `update_catalog_all`** — catalog refresh is the
+  daily run's responsibility.
 
 ### Recovery and resume
 
@@ -226,10 +255,7 @@ monitoring_service/           # End-of-run summary of database state and changes
                               # Auto-runs after daily / weekend / historical pulls; also
                               # invocable via `python -m monitoring_service.run_monitor`.
 
-consistency_tests/            # Validates raw and transformed data against other sources
-                              # e.g., checks that intraday open matches daily open
-
-tests/                        # Unified test directory (one subdirectory per service plus call_speedtests/)
+tests/                        # Unified test directory (one subdirectory per service plus call_speedtests/ and integration_tests/)
 ```
 
 ## Data storage structure
@@ -336,7 +362,7 @@ daily/
 - **News sentiment, insider transactions**: cut to last retrieved date.
 
 **Key rules:**
-- `daily/` is append-only — each day creates a new dated folder. Past days are never modified.
+- `daily/` is append-only at the dated-folder level — each run creates or extends a `YYYY-MM-DD` folder. Only the most-recent dated folder may be extended (by the weekend pass, which can retry flagged cells, rewrite that folder's `ingestion_report.parquet`, and add the monitoring report); folders older than the most-recent are never modified.
 - `historical/` is initially populated from Alpha Vantage. If FirstRate Data is added later, it may modify existing tickers — but only if the overlapping data between Alpha Vantage and FirstRate Data agrees. If the intersecting data conflicts, the ticker is flagged for review rather than silently overwritten.
 - The `catalog/` directory is the only mutable area: yield status and ticker metadata are updated as coverage changes.
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
@@ -428,6 +454,7 @@ for the full breakdown.
 - **Add Finnhub** for congressional trading data, insider sentiment, and ESG scores as supplementary alternative data.
 - **Add Polygon.io or Databento** if the project evolves toward live trading or HFT requiring real-time streaming or order book depth.
 - **EDGAR XBRL ingestion** as a direct SEC filing pipeline to cross-validate Alpha Vantage fundamentals and capture restatements at the source.
+- **Consistency tests** that validate raw and transformed data against independent sources (e.g., checking that intraday open matches daily open, or cross-checking fundamentals against EDGAR/FMP).
 - **If institutional access becomes available** (e.g., university affiliation), integrate CRSP/Compustat via WRDS to replace the homegrown PIT layer.
 - **Schedule local sync** of the GCS bucket before market open (e.g., cron + `gsutil rsync`) so no manual step is needed.
 - **GCS lifecycle rules** to move raw data older than 1 year to Nearline/Coldline storage.
