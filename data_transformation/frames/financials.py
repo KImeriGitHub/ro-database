@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -829,7 +829,7 @@ def build_financials(
         # report_table, m_anchor is past-the-end; defensively null
         # every financials column for this row (per spec, this state
         # is not expected to occur in practice).
-        m_anchor = bisect_left(rt_known_rd, d) if rt_known_rd else 0
+        m_anchor = bisect_right(rt_known_rd, d) if rt_known_rd else 0
         if m_anchor >= n_known_q:
             no_anchor_q_count += 1
             quarterly_rows.append(_build_empty_quarterly_row(d))
@@ -841,7 +841,7 @@ def build_financials(
             ))
 
         # Annual row. Same defensive rule on the annual axis.
-        m_anchor_a = bisect_left(rt_a_known_rd, d) if rt_a_known_rd else 0
+        m_anchor_a = bisect_right(rt_a_known_rd, d) if rt_a_known_rd else 0
         if m_anchor_a >= n_known_a:
             no_anchor_a_count += 1
             annual_rows.append(_build_empty_annual_row(d))
@@ -994,9 +994,9 @@ def _build_quarterly_row(
         if 0 <= pos < rt_len:
             ar = rt_rows[pos]
             f_n = ar["fiscalDateEnding"]
-            est_row, days_diff = est_q_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
+            est_row, _days_diff = est_q_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
             if est_row is not None:
-                row[f"earnings_estimate_days_diff_qp_{suffix}"] = float(days_diff)
+                row[f"earnings_estimate_days_diff_qp_{suffix}"] = float((f_n - d).days)
                 for fld_name, _t in _QP_DATA_FIELDS:
                     row[f"{fld_name}_qp_{suffix}"] = est_row.get(fld_name)
             else:
@@ -1058,9 +1058,9 @@ def _build_annual_row(
         if 0 <= pos < rt_len:
             ar = rt_rows[pos]
             f_n = ar["fiscalDateEnding"]
-            est_row, days_diff = est_a_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
+            est_row, _days_diff = est_a_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
             if est_row is not None:
-                row[f"earnings_estimate_days_diff_ap_{suffix}"] = float(days_diff)
+                row[f"earnings_estimate_days_diff_ap_{suffix}"] = float((f_n - d).days)
                 for fld_name, _t in _AP_DATA_FIELDS:
                     row[f"{fld_name}_ap_{suffix}"] = est_row.get(fld_name)
             else:

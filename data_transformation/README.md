@@ -375,23 +375,22 @@ Sources:
    here the 'reportedDate consistency check' below.
 2. **Next-upcoming entry.** From `assets_overview.parquet`'s
    `(reportedDate, timeOfTheDay)` for the symbol, paired with the
-   smallest `fiscalDateEnding` in the most recent
+   smallest `fiscalDateEnding` in the most recent extended
    `earnings_estimates/stocks_SYMBOL_quarterly.parquet` (see below) that is strictly
    greater than the largest past `fiscalDateEnding`. If no such
    estimate exists, the next-upcoming entry is omitted.
-3. **Further-future entries.** From the most recent
-   `earnings_estimates/stocks_SYMBOL_quarterly.parquet` for any `fiscalDateEnding`
+3. **Further-future entries.** From the most recent extended
+   `earnings_estimates/stocks_SYMBOL_quarterly.parquet` (see below) for any `fiscalDateEnding`
    strictly later than the next-upcoming entry. `reportedDate` and
-   `reportTime` are null for these rows; they only serve as
-   anchors for the `_qp_{n}` axis.
+   `reportTime` are null for these rows. Further-future entries only serve as
+   anchors for the `_qp_{n}` fields.
 
 `reportTime` is normalised to the categorical labels
 {`pre-market`, `post-market`, `other`}. Empty strings, nulls, and
 unknown labels map to `other`. Late filers (a quarter whose
-`reportedDate` post-dates a later quarter's) sit at their
-`reportedDate` position; their `fiscalDateEnding` will appear
-out-of-sequence relative to neighbours, which is the PIT-correct
-ordering.
+`reportedDate` post-dates a later quarter's) are fine; 
+their `fiscalDateEnding` will appear out-of-sequence relative 
+to neighbours, which is the PIT-correct ordering.
 
 #### Quarterly cell mapping
 
@@ -408,13 +407,13 @@ asymmetric by m:
 For each row date `d` in `shareprice_daily.Date`:
 
 - `m_anchor = smallest position i in report_table with
-  reportedDate[i] >= d`. If no such position exists, `m_anchor` is
+  reportedDate[i] > d`. If no such position exists, `m_anchor` is
   past-the-end and the entire row's financials columns (every
   `_qm{m>=0}` and every `_qp_{n}` cell) are nulled defensively.
   This state is not expected to occur in practice (assets_overview
   should always supply an upcoming reportedDate); it is logged via
   Python `logger.warning` per symbol.
-- For each `m in 0..16`, position `i = m_anchor - m`. Out-of-range
+- For each `m in 1..16`, position `i = m_anchor - m`. Out-of-range
   positions null all `_qm{m}` columns for that m.
 - `days_to_fiscalDateEnding_qm{m} = (d - report_table.fiscalDateEnding[i]).days`
   cast to Float32. Positive when the fiscal quarter has already
@@ -435,16 +434,10 @@ For each row date `d` in `shareprice_daily.Date`:
   `report_table.fiscalDateEnding[i]`; mismatches >10 days are
   logged as `financials_estimate_offcycle`.
 - `earnings_estimate_days_diff_qp_{n}` is the **signed** day offset
-  between the matched estimate's fiscalDateEnding and the
-  `report_table` anchor at position `i`, i.e.
-  `(earnings_estimates.fiscalDateEnding - report_table.fiscalDateEnding[i]).days`
-  cast to Float32. It is `0.0` when the estimate aligns exactly,
-  positive when `earnings_estimates.fiscalDateEnding` is later than
-  the anchor's, negative when earlier, and null when no estimate
-  matches within the +/-10-day margin (or the position is out of
-  range). It is the only `_qp_{n}` column that is not a direct copy
-  from `earnings_estimates`; downstream consumers can use it to gate
-  on the estimate's freshness relative to the anchor.
+  between the matched report_table's fiscalDateEnding and date d, i.e.
+  `(report_table.fiscalDateEnding[i] - d).days`
+  cast to Float32. It is the only `_qp_{n}` column that is not a direct copy
+  from `earnings_estimates`.
 
 #### Annual cell mapping
 
@@ -472,10 +465,10 @@ resolution mirrors the quarterly case (m in 0..4, n in -2..1),
 pulling from the d-PIT `*_a.parquet` files. `earnings_estimate_days_diff_ap_{n}`
 follows the same signed-offset convention as its quarterly
 counterpart:
-`(earnings_estimates_annual.fiscalDateEnding - report_table_annual.fiscalDateEnding[i]).days`
+ `(report_table_annual.fiscalDateEnding[i] - d).days`
 as Float32, null when no estimate matches within the +/-10-day
 margin or the position is out of range. The same defensive
-no-anchor rule applies: when no annual `reportedDate >= d` exists
+no-anchor rule applies: when no annual `reportedDate > d` exists
 in `report_table_annual`, every `_am{m>=0}` and every `_ap_{n}`
 cell on this row is nulled. Annual EARNINGS does not provide
 `reportTime`, `estimatedEPS`, `surprise`, or `surprisePercentage`

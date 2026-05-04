@@ -728,10 +728,12 @@ def test_estimate_match_within_9d_populates_with_signed_diff(tmp_path):
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
-    # The upcoming entry's anchor uses the smallest estimate fde > past
-    # (which is est_fde = 2026-04-09), so days_diff at qp_0 is 0.
+    # m_anchor=1 picks the upcoming entry (fde=2026-04-09) for qp_0.
+    # days_diff is the signed offset (report_table.fde[i] - d).days,
+    # i.e. (2026-04-09 - 2026-04-15) = -6, populated because the
+    # estimate at 2026-04-09 matches within the +/-10d margin.
     assert row["earnings_estimate_days_diff_qp_0"] == pytest.approx(
-        0.0, abs=1e-6
+        -6.0, abs=1e-6
     )
     assert row["eps_estimate_average_qp_0"] == pytest.approx(2.0, rel=1e-3)
     assert report.to_frame().filter(
