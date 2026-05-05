@@ -124,7 +124,9 @@ async def fetch_insider(
             continue
 
         try:
-            df = df.with_columns(pl.col("transactionDate").str.to_date("%Y-%m-%d"))
+            df = df.with_columns(
+                pl.col("transactionDate").str.to_date("%Y-%m-%d", exact=False)
+            )
         except Exception as e:
             issue_tracker.record(
                 symbol, asset_type, "insider",

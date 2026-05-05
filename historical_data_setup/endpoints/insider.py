@@ -124,7 +124,7 @@ async def fetch_insider(
 
         try:
             df = df.with_columns(
-                pl.col("transactionDate").str.to_date("%Y-%m-%d")
+                pl.col("transactionDate").str.to_date("%Y-%m-%d", exact=False)
             )
         except Exception as e:
             issue_tracker.record(

@@ -35,10 +35,10 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
 
     df = raw.with_columns(
         pl.col("reportedDate")
-        .str.to_date("%Y-%m-%d", strict=False)
+        .str.to_date("%Y-%m-%d", strict=False, exact=False)
         .alias("reportedDate_parsed"),
         pl.col("fiscalDateEnding")
-        .str.to_date("%Y-%m-%d", strict=False)
+        .str.to_date("%Y-%m-%d", strict=False, exact=False)
         .alias("fiscalDateEnding_parsed"),
         pl.col("estimate")
         .cast(pl.Float32, strict=False)
