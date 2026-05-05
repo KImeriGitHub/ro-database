@@ -277,7 +277,7 @@ async def fetch_sentiment(
                 if parsed is None:
                     break
                 new_time_to = (
-                    parsed - timedelta(minutes=10)
+                    parsed - timedelta(minutes=1)
                 ).strftime("%Y%m%dT%H%M")
 
             time_to = new_time_to

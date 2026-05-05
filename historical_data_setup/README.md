@@ -461,7 +461,7 @@ Per symbol, fetches the ETF profile in a single API call. Only runs when `asset_
 
 **Ingestion report issues:**
 - `structure_error` -- response missing required keys, or `sectors`/`holdings` not a list
-- `empty_content` -- empty sectors list
+- `empty_content` -- empty sectors list. Expected for non-equity ETFs (e.g. `GLD` and other physical-commodity, currency, or single-asset ETFs) where the AV response legitimately returns `sectors: []` and `holdings: []`; scalar metadata (`net_assets`, `net_expense_ratio`, `inception_date`, etc.) is still saved.
 - `cast_failure` -- sector weight, holding weight, or scalar field could not be cast to Float32
 - `av_throttle` -- persistent rate-limit after retries
 
