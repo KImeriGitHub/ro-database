@@ -102,7 +102,14 @@ async def fetch_intraday_prices(
             continue
 
         # --- Alpha Vantage path ---
-        months = generate_months(row["ipoDate"], row["delistingDate"])
+        try:
+            months = generate_months(row["ipoDate"], row["delistingDate"])
+        except ValueError as e:
+            issue_tracker.record(
+                symbol, asset_type, "prices",
+                "structure_error", f"date coercion failed: {e}",
+            )
+            continue
         if not months:
             logger.info(f"[{idx}/{total}] {symbol}: no months to fetch, skipping")
             continue

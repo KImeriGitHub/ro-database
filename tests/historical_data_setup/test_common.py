@@ -53,7 +53,7 @@ def _run(coro):
 def test_generate_months_clamps_to_2000_when_ipo_predates_it():
     """ipo_date earlier than 2000-01 must clamp to 2000-01 (the AV intraday
     horizon) -- otherwise we'd issue calls for months AV will not serve."""
-    months = generate_months("1980-05-15", "2000-04-30")
+    months = generate_months(date(1980, 5, 15), date(2000, 4, 30))
     assert months[0] == "2000-01"
     assert months[-1] == "2000-04"
     assert months == ["2000-01", "2000-02", "2000-03", "2000-04"]
@@ -62,32 +62,48 @@ def test_generate_months_clamps_to_2000_when_ipo_predates_it():
 def test_generate_months_uses_first_of_month_for_ipo():
     """An IPO mid-month should still include that month's start. The first
     output entry is the IPO's *month*, not its day."""
-    months = generate_months("2024-03-17", "2024-05-02")
+    months = generate_months(date(2024, 3, 17), date(2024, 5, 2))
     assert months == ["2024-03", "2024-04", "2024-05"]
 
 
 def test_generate_months_ipo_after_delisting_returns_empty():
     """Bogus catalog rows where ipo > delisting should produce an empty range,
     not an exception."""
-    assert generate_months("2024-06-01", "2024-03-01") == []
+    assert generate_months(date(2024, 6, 1), date(2024, 3, 1)) == []
 
 
 def test_generate_months_handles_year_boundary():
     """December -> January transition must increment the year."""
-    months = generate_months("2023-11-15", "2024-02-10")
+    months = generate_months(date(2023, 11, 15), date(2024, 2, 10))
     assert months == ["2023-11", "2023-12", "2024-01", "2024-02"]
 
 
-def test_generate_months_invalid_dates_fall_back_to_defaults():
-    """Malformed date strings fall back to (2000-01, today). We can't assert
-    on today's exact month, but the lower bound must clamp to 2000-01."""
-    months = generate_months("not-a-date", "also-bad")
-    assert months[0] == "2000-01"
-    assert len(months) > 12 * 25  # at least 25 years of months
+def test_generate_months_invalid_string_raises():
+    """A malformed string is a structure error: the caller must record and
+    skip the symbol rather than silently using a default range."""
+    with pytest.raises(ValueError, match="ipoDate"):
+        generate_months("not-a-date", date(2024, 1, 1))
+    with pytest.raises(ValueError, match="delistingDate"):
+        generate_months(date(2024, 1, 1), "also-bad")
+
+
+def test_generate_months_string_inputs_warn_and_coerce(caplog):
+    """Strings are accepted for back-compat but emit a warning; the catalog
+    is supposed to store pl.Date."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="historical_data_setup._common"):
+        months = generate_months("2024-03-17", "2024-05-02")
+    assert months == ["2024-03", "2024-04", "2024-05"]
+    assert any(
+        "ipoDate" in r.getMessage() and "str" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_generate_months_none_inputs_use_defaults():
-    """``None``/``None`` -> 2000-01 to today."""
+    """``None``/``None`` -> 2000-01 to today, per the README spec
+    ``max(ipoDate, 2000-01)`` / ``min(delistingDate, today)``. Active stocks
+    normally have ``delistingDate=None``."""
     months = generate_months(None, None)
     assert months[0] == "2000-01"
     assert all(len(m) == 7 and m[4] == "-" for m in months)
@@ -376,6 +392,56 @@ def test_build_fundamental_df_sorts_by_fiscal_date_ending_ascending():
     assert df["fiscalDateEnding"].to_list() == [
         date(2021, 12, 31), date(2023, 12, 31), date(2024, 12, 31),
     ]
+
+
+def test_build_fundamental_df_accepts_fiscal_date_with_trailing_offset():
+    """AV occasionally returns ``YYYY-MM-DD-04:00`` style strings for date
+    fields. ``str.to_date(..., exact=False)`` must consume only the leading
+    YYYY-MM-DD and ignore the timezone offset, otherwise the whole report
+    is dropped (a single bad row used to throw away every fundamental for
+    the symbol)."""
+    t = IssueTracker()
+    records = [
+        {"fiscalDateEnding": "2024-12-31-04:00", "reportedCurrency": "USD",
+         "totalRevenue": "1000"},
+        {"fiscalDateEnding": "2023-12-31", "reportedCurrency": "USD",
+         "totalRevenue": "900"},
+    ]
+    df = _build_fundamental_df(records, "AAPL", "stocks", "income_statement",
+                               "annual", t)
+    assert df is not None
+    assert df.schema["fiscalDateEnding"] == pl.Date
+    assert df["fiscalDateEnding"].to_list() == [date(2023, 12, 31), date(2024, 12, 31)]
+    assert t.count == 0
+
+
+def test_build_fundamental_df_accepts_reported_date_with_trailing_offset():
+    """Same lax handling as fiscalDateEnding: a ``-04:00`` suffix on
+    ``reportedDate`` must parse, not record a cast_failure."""
+    t = IssueTracker()
+    records = [
+        {"fiscalDateEnding": "2024-12-31", "reportedDate": "2025-02-14-04:00",
+         "reportedCurrency": "USD", "totalRevenue": "1000"},
+    ]
+    df = _build_fundamental_df(records, "AAPL", "stocks", "income_statement",
+                               "annual", t)
+    assert df is not None
+    assert df.schema["reportedDate"] == pl.Date
+    assert df["reportedDate"].to_list() == [date(2025, 2, 14)]
+    assert t.count == 0
+
+
+def test_coerce_date_accepts_string_with_trailing_offset(caplog):
+    """``_coerce_date`` (via ``generate_months``) uses a custom strptime that
+    mirrors polars ``exact=False``: the leading YYYY-MM-DD is consumed and
+    any trailing offset is ignored. Truly malformed strings still raise."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="historical_data_setup._common"):
+        months = generate_months("2024-03-17-04:00", "2024-05-02-04:00")
+    assert months == ["2024-03", "2024-04", "2024-05"]
+
+    with pytest.raises(ValueError, match="ipoDate"):
+        generate_months("garbage", date(2024, 1, 1))
 
 
 # ---------------------------------------------------------------------------

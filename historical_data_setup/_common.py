@@ -154,27 +154,54 @@ async def fetch_av_json(
 _EARLIEST = date(2000, 1, 1)
 
 
-def generate_months(ipo_date: str | None, delisting_date: str | None) -> list[str]:
+def _coerce_date(value: date | str, *, field: str) -> date:
+    """Coerce a catalog date column value to ``date``.
+
+    The catalog stores ``ipoDate`` / ``delistingDate`` as ``pl.Date``, so a
+    ``date`` is the expected input. ``str`` is back-compat: a warning is logged
+    and the string is parsed as ``YYYY-MM-DD``. Unparseable strings and
+    unexpected types raise ``ValueError`` so the caller can record a
+    structure_error and skip the symbol. ``None`` is not handled here -- the
+    caller decides the field-specific default per the generate_months spec.
+    """
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        logger.warning(
+            f"generate_months: {field} arrived as str ({value!r}); catalog should store pl.Date, coercing"
+        )
+        try:
+            return _strptime_lax_date(value)
+        except ValueError as e:
+            raise ValueError(f"{field}={value!r} is not YYYY-MM-DD") from e
+    raise ValueError(f"{field} has unexpected type {type(value).__name__}: {value!r}")
+
+
+def _strptime_lax_date(value: str) -> date:
+    """Parse the leading ``YYYY-MM-DD`` of *value*, ignoring any trailing chars.
+
+    Mirrors polars' ``str.to_date("%Y-%m-%d", exact=False)``: matches the
+    format from the start and tolerates trailing junk such as a timezone
+    offset (``"2020-09-28-04:00"`` -> ``date(2020, 9, 28)``). Raises
+    ``ValueError`` if the leading 10 characters are not a valid date.
+    """
+    return datetime.strptime(value[:10], "%Y-%m-%d").date()
+
+
+def generate_months(
+    ipo_date: date | str | None,
+    delisting_date: date | str | None,
+) -> list[str]:
     """Generate YYYY-MM strings from max(ipo_date, 2000-01) to min(delisting_date, today).
 
-    *ipo_date* and *delisting_date* are expected as ``"YYYY-MM-DD"`` strings or
-    ``None``.  ``None`` defaults to 2000-01 and today respectively.
+    *ipo_date* / *delisting_date* are expected as ``date`` (the catalog stores
+    ``pl.Date``). ``None`` defaults to 2000-01 and today respectively per the
+    spec ``max(ipoDate, 2000-01)`` / ``min(delistingDate, today)``. ``str``
+    inputs are coerced with a warning; unparseable strings raise ``ValueError``
+    so the caller can record a structure_error and skip the symbol.
     """
-    if ipo_date:
-        try:
-            start = datetime.strptime(ipo_date, "%Y-%m-%d").date()
-        except ValueError:
-            start = _EARLIEST
-    else:
-        start = _EARLIEST
-
-    if delisting_date:
-        try:
-            end = datetime.strptime(delisting_date, "%Y-%m-%d").date()
-        except ValueError:
-            end = date.today()
-    else:
-        end = date.today()
+    start = _EARLIEST if ipo_date is None else _coerce_date(ipo_date, field="ipoDate")
+    end = date.today() if delisting_date is None else _coerce_date(delisting_date, field="delistingDate")
 
     start = max(start.replace(day=1), _EARLIEST)
     end = end.replace(day=1)
@@ -402,7 +429,7 @@ def _build_fundamental_df(
     if "fiscalDateEnding" in df.columns:
         try:
             df = df.with_columns(
-                pl.col("fiscalDateEnding").str.to_date("%Y-%m-%d")
+                pl.col("fiscalDateEnding").str.to_date("%Y-%m-%d", exact=False)
             )
         except Exception as e:
             issue_tracker.record(
@@ -427,7 +454,7 @@ def _build_fundamental_df(
             # reportedDate -> attempt pl.Date
             try:
                 df = df.with_columns(
-                    pl.col(col_name).str.to_date("%Y-%m-%d")
+                    pl.col(col_name).str.to_date("%Y-%m-%d", exact=False)
                 )
             except Exception as e:
                 issue_tracker.record(
