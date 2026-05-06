@@ -92,10 +92,10 @@ ETFS_SEED = [
      "ipoDate": date(1993, 1, 29), "delistingDate": None, "status": "Active"},
 ]
 
-# Fresh data: MSFT vanished, GOOG added, AAPL ipoDate changed
+# Fresh data: MSFT vanished, GOOG added, AAPL ipoDate moved earlier
 DAILY_ACTIVE_CSV = (
     "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
-    "AAPL,Apple Inc,NASDAQ,Stock,1999-01-01,null,Active\n"
+    "AAPL,Apple Inc,NASDAQ,Stock,1979-01-01,null,Active\n"
     "GOOG,Alphabet Inc,NASDAQ,Stock,2004-08-19,null,Active\n"
     "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
 )
@@ -127,9 +127,10 @@ def test_daily_stocks_new_and_vanished(mock_fetch_text, mock_fetch_sector):
     msft = stocks.filter(pl.col("symbol") == "MSFT")
     assert msft["status"].to_list()[0] == "Corrupted"
 
-    # AAPL ipoDate changed -> Corrupted
+    # AAPL ipoDate moved earlier -> updated and marked Corrupted
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
     assert aapl["status"].to_list()[0] == "Corrupted"
+    assert aapl["ipoDate"].to_list()[0] == date(1979, 1, 1)
 
 
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
@@ -201,6 +202,70 @@ def test_daily_stocks_ipo_null_to_value(mock_fetch_text):
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
     assert aapl["ipoDate"].to_list()[0] == date(1980, 12, 12)
     assert aapl["status"].to_list()[0] == "Active"  # not Corrupted
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_stocks_ipo_later_is_ignored(mock_fetch_text):
+    """Fresh ipoDate later than existing must not flip status or rewrite the date.
+
+    Without this guard, AV occasionally reporting a later ipoDate (e.g.
+    delisted-row info disappearing) would re-mark the ticker Corrupted on
+    every run.
+    """
+    _seed_stocks([
+        {"symbol": "OSG", "name": "OSG Corp", "sector": "Industrials",
+         "ipoDate": date(2013, 5, 1), "delistingDate": None, "status": "Active"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "OSG,OSG Corp,NYSE,Stock,2015-12-01,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    osg = stocks.filter(pl.col("symbol") == "OSG")
+    assert osg["ipoDate"].to_list()[0] == date(2013, 5, 1)
+    assert osg["status"].to_list()[0] == "Active"
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_reissued_ticker_keeps_min_ipo(mock_fetch_text):
+    """When the same symbol appears in both active and delisted lists, the
+    catalog row should carry the earliest ipoDate across the two."""
+    _seed_stocks([
+        {"symbol": "GRML", "name": "Gorilla Inc", "sector": "Technology",
+         "ipoDate": date(2026, 3, 11), "delistingDate": None, "status": "Active"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    active = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "GRML,Gorilla Inc,NASDAQ,Stock,2026-03-11,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    delisted = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "GRML,Gorilla Old Inc,NASDAQ,Stock,2022-04-29,2024-08-15,Delisted\n"
+    )
+    mock_fetch_text.side_effect = [active, delisted]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    grml = stocks.filter(pl.col("symbol") == "GRML")
+    assert grml.height == 1
+    assert grml["ipoDate"].to_list()[0] == date(2022, 4, 29)
+    assert grml["status"].to_list()[0] == "Corrupted"
+
+    # Second run with identical input must be a no-op (no re-detect).
+    mock_fetch_text.side_effect = [active, delisted]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+    stocks2 = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    grml2 = stocks2.filter(pl.col("symbol") == "GRML")
+    assert grml2["ipoDate"].to_list()[0] == date(2022, 4, 29)
 
 
 @patch("asset_catalog_service.updates.stocks_etfs.fetch_text")

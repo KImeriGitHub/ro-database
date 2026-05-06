@@ -94,8 +94,10 @@ def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
 
     A ticker can appear in both active and delisted lists when the symbol
     was re-issued (old company delisted, new company now trades the same
-    ticker string). Active wins so ``status`` and ``ipoDate`` reflect the
-    currently-trading entity; the delisted row is dropped here.
+    ticker string).  The active row wins for ``name``, ``status``, and
+    ``delistingDate`` (so the catalog reflects the currently-trading entity),
+    but ``ipoDate`` is the minimum across the active and delisted rows so
+    the earliest date for which any data may exist under the ticker is kept.
     """
     logger.info("Fetching LISTING_STATUS (active + delisted)...")
     active_csv = fetch_text(
@@ -114,39 +116,43 @@ def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
     # Active rows go first so unique(keep="first") prefers them on collision.
     combined = pl.concat([active_df, delisted_df], how="vertical_relaxed")
 
-    stocks_pre = combined.filter(pl.col("assetType") == "Stock")
-    stocks = (
-        stocks_pre
-        .with_columns(
-            pl.col("ipoDate").cast(pl.Date, strict=False),
-            pl.col("delistingDate").cast(pl.Date, strict=False),
-        )
+    return (
+        _collapse_listings(combined, "Stock", "stocks"),
+        _collapse_listings(combined, "ETF", "etfs"),
+    )
+
+
+def _collapse_listings(
+    combined: pl.DataFrame, asset_type: str, label: str
+) -> pl.DataFrame:
+    """Filter to one assetType and dedup by symbol, keeping earliest ipoDate.
+
+    For re-issued tickers (same symbol present in both active and delisted),
+    the active row wins for every column except ipoDate, which is replaced
+    with the minimum ipoDate seen across all rows for that symbol.
+    """
+    pre = combined.filter(pl.col("assetType") == asset_type).with_columns(
+        pl.col("ipoDate").cast(pl.Date, strict=False),
+        pl.col("delistingDate").cast(pl.Date, strict=False),
+    )
+    min_ipo = pre.group_by("symbol").agg(
+        pl.col("ipoDate").min().alias("_min_ipo")
+    )
+    collapsed = (
+        pre
         .unique(subset=["symbol"], keep="first", maintain_order=True)
+        .join(min_ipo, on="symbol", how="left")
+        .with_columns(pl.col("_min_ipo").alias("ipoDate"))
+        .drop("_min_ipo")
         .select("symbol", "name", "ipoDate", "delistingDate", "status")
     )
-    if stocks.height < stocks_pre.height:
+    if collapsed.height < pre.height:
         logger.info(
-            f"stocks: collapsed {stocks_pre.height - stocks.height} duplicate "
-            f"symbols from LISTING_STATUS (re-issued tickers; kept active row)"
+            f"{label}: collapsed {pre.height - collapsed.height} duplicate "
+            f"symbols from LISTING_STATUS (re-issued tickers; kept active row, "
+            f"earliest ipoDate)"
         )
-
-    etfs_pre = combined.filter(pl.col("assetType") == "ETF")
-    etfs = (
-        etfs_pre
-        .with_columns(
-            pl.col("ipoDate").cast(pl.Date, strict=False),
-            pl.col("delistingDate").cast(pl.Date, strict=False),
-        )
-        .unique(subset=["symbol"], keep="first", maintain_order=True)
-        .select("symbol", "name", "ipoDate", "delistingDate", "status")
-    )
-    if etfs.height < etfs_pre.height:
-        logger.info(
-            f"etfs: collapsed {etfs_pre.height - etfs.height} duplicate "
-            f"symbols from LISTING_STATUS (re-issued tickers; kept active row)"
-        )
-
-    return stocks, etfs
+    return collapsed
 
 
 def _fetch_sector(api_key: str, symbol: str) -> str:
@@ -597,26 +603,41 @@ def _update_listing(
             .join(fresh_common, on="symbol", how="left")
         )
 
-        # 3a. ipoDate changed (both non-null) -> Corrupted
+        # 3a. ipoDate moved earlier (both non-null) -> update + Corrupted
+        # Fresh later than existing is ignored: we keep the earliest known
+        # date so we never lose a prior issuer's data window.  Without the
+        # update, the same change would be re-detected on every run.
         ipo_changed = merged.filter(
             pl.col("ipoDate").is_not_null()
             & pl.col("_ipo_new").is_not_null()
-            & (pl.col("ipoDate") != pl.col("_ipo_new"))
+            & (pl.col("_ipo_new") < pl.col("ipoDate"))
         )
         if ipo_changed.height > 0:
             ipo_syms = ipo_changed["symbol"].to_list()
             logger.info(
-                f"{label}: {len(ipo_syms)} ipoDate changes, marking Corrupted:"
+                f"{label}: {len(ipo_syms)} ipoDate moved earlier, "
+                f"updating and marking Corrupted:"
             )
             for row in ipo_changed.iter_rows(named=True):
                 logger.info(
                     f"  ! {row['symbol']}: ipo {row['ipoDate']} -> {row['_ipo_new']}"
                 )
-            result = result.with_columns(
-                pl.when(pl.col("symbol").is_in(ipo_syms))
-                .then(pl.lit("Corrupted"))
-                .otherwise(pl.col("status"))
-                .alias("status")
+            ipo_updates = ipo_changed.select(
+                "symbol", pl.col("_ipo_new").alias("_ipo_upd")
+            )
+            result = (
+                result.join(ipo_updates, on="symbol", how="left")
+                .with_columns(
+                    pl.when(pl.col("_ipo_upd").is_not_null())
+                    .then(pl.col("_ipo_upd"))
+                    .otherwise(pl.col("ipoDate"))
+                    .alias("ipoDate"),
+                    pl.when(pl.col("symbol").is_in(ipo_syms))
+                    .then(pl.lit("Corrupted"))
+                    .otherwise(pl.col("status"))
+                    .alias("status"),
+                )
+                .drop("_ipo_upd")
             )
 
         # 3a2. ipoDate was null, now has a value -> update it
