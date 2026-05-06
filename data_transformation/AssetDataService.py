@@ -7,6 +7,7 @@ import polars as pl
 
 _QM_BASE_FIELDS: list[tuple[str, Any]] = [
     ("days_to_fiscalDateEnding", pl.Float32),
+    ("days_to_reportedDate", pl.Float32),
     ("reportTime", pl.Categorical),
     ("accumulatedDepreciationAmortizationPPE", pl.Float32),
     ("capitalExpenditures", pl.Float32),
@@ -112,10 +113,12 @@ _AM_BASE_FIELDS: list[tuple[str, Any]] = [
 # upcoming report whose data has not been filed at row date d.
 _QM_M0_FIELDS: list[tuple[str, Any]] = [
     ("days_to_fiscalDateEnding", pl.Float32),
+    ("days_to_reportedDate", pl.Float32),
     ("reportTime", pl.Categorical),
 ]
 _AM_M0_FIELDS: list[tuple[str, Any]] = [
     ("days_to_fiscalDateEnding", pl.Float32),
+    ("days_to_reportedDate", pl.Float32),
 ]
 
 _QP_BASE_FIELDS: list[tuple[str, Any]] = [

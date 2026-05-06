@@ -398,12 +398,13 @@ to neighbours, which is the PIT-correct ordering.
 The `_qm{m}` columns in `SCHEMAS["financials_quarterly"]` are
 asymmetric by m:
 
-- `m = 0`: only `days_to_fiscalDateEnding_qm0` and `reportTime_qm0`
-  exist. The next report has not been filed yet at `d`, so no
-  data columns are defined for m=0.
+- `m = 0`: only `days_to_fiscalDateEnding_qm0`,
+  `days_to_reportedDate_qm0`, and `reportTime_qm0` exist. The next
+  report has not been filed yet at `d`, so no data columns are
+  defined for m=0.
 - `m = 1..16`: every base field
-  (`days_to_fiscalDateEnding`, `reportTime`, plus all statement
-  / earnings fields) has a column.
+  (`days_to_fiscalDateEnding`, `days_to_reportedDate`, `reportTime`,
+  plus all statement / earnings fields) has a column.
 
 For each row date `d` in `shareprice_daily.Date`:
 
@@ -420,6 +421,10 @@ For each row date `d` in `shareprice_daily.Date`:
   cast to Float32. Positive when the fiscal quarter has already
   ended (typical past quarters); slightly negative for m=0 on
   rows where the upcoming quarter has not yet ended.
+- `days_to_reportedDate_qm{m} = (d - report_table.reportedDate[i]).days`
+  cast to Float32. Positive when the report has already been
+  filed (m>=1, typical); negative for m=0 (the next upcoming
+  report by definition has `reportedDate > d`).
 - `reportTime_qm{m}` is `report_table.reportTime[i]`.
 - For `m >= 1`, the remaining `_qm{m}` columns are pulled from the
   d-PIT snapshot: each of `income_statement_q`, `balance_sheet_q`,
@@ -456,9 +461,13 @@ quarterly.
 
 The `_am{m}` columns are asymmetric by m:
 
-- `m = 0`: only `days_to_fiscalDateEnding_am0` exists. (Annual
-  EARNINGS provides no `reportTime`, so unlike the quarterly
-  schema there is no `reportTime_am0`.)
+- `m = 0`: only `days_to_fiscalDateEnding_am0` and
+  `days_to_reportedDate_am0` exist. (Annual EARNINGS provides no
+  `reportTime`, so unlike the quarterly schema there is no
+  `reportTime_am0`.) `reportedDate` for the annual axis is
+  inherited from the matched quarterly row at the same
+  fiscalDateEnding (see "Annual cell mapping" report_table_annual
+  construction).
 - `m = 1..4`: every base field has a column.
 
 For each row date `d`, the `am_anchor` and `_am{m}` / `_ap_{n}`

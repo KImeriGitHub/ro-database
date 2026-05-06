@@ -73,10 +73,10 @@ _DATA_ENDPOINTS: tuple[str, ...] = (
 
 # Anchor fields that come from report_table, not from snapshot rows.
 _ANCHOR_FIELDS_QM: frozenset[str] = frozenset({
-    "days_to_fiscalDateEnding", "reportTime",
+    "days_to_fiscalDateEnding", "days_to_reportedDate", "reportTime",
 })
 _ANCHOR_FIELDS_AM: frozenset[str] = frozenset({
-    "days_to_fiscalDateEnding",
+    "days_to_fiscalDateEnding", "days_to_reportedDate",
 })
 _ANCHOR_FIELDS_QP: frozenset[str] = frozenset({
     "earnings_estimate_days_diff",
@@ -915,9 +915,11 @@ def _build_empty_quarterly_row(d: date) -> dict[str, Any]:
     """
     row: dict[str, Any] = {"Date": d}
     row["days_to_fiscalDateEnding_qm0"] = None
+    row["days_to_reportedDate_qm0"] = None
     row["reportTime_qm0"] = None
     for m in _QM_MS:
         row[f"days_to_fiscalDateEnding_qm{m}"] = None
+        row[f"days_to_reportedDate_qm{m}"] = None
         row[f"reportTime_qm{m}"] = None
         for fld_name, _t in _QM_DATA_FIELDS:
             row[f"{fld_name}_qm{m}"] = None
@@ -933,8 +935,10 @@ def _build_empty_annual_row(d: date) -> dict[str, Any]:
     """All-null annual row for d. Same defensive rule as quarterly."""
     row: dict[str, Any] = {"Date": d}
     row["days_to_fiscalDateEnding_am0"] = None
+    row["days_to_reportedDate_am0"] = None
     for m in _AM_MS:
         row[f"days_to_fiscalDateEnding_am{m}"] = None
+        row[f"days_to_reportedDate_am{m}"] = None
         for fld_name, _t in _AM_DATA_FIELDS:
             row[f"{fld_name}_am{m}"] = None
     for n in _AP_NS:
@@ -958,14 +962,16 @@ def _build_quarterly_row(
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"Date": d}
 
-    # m=0 carries only the two anchor columns.
+    # m=0 carries only the anchor columns.
     pos0 = m_anchor
     if 0 <= pos0 < n_known:
         ar = rt_rows[pos0]
         row["days_to_fiscalDateEnding_qm0"] = float((d - ar["fiscalDateEnding"]).days)
+        row["days_to_reportedDate_qm0"] = float((d - ar["reportedDate"]).days)
         row["reportTime_qm0"] = ar["reportTime"]
     else:
         row["days_to_fiscalDateEnding_qm0"] = None
+        row["days_to_reportedDate_qm0"] = None
         row["reportTime_qm0"] = None
 
     # m=1..16: anchor + data fields.
@@ -975,6 +981,7 @@ def _build_quarterly_row(
             ar = rt_rows[pos]
             f_m = ar["fiscalDateEnding"]
             row[f"days_to_fiscalDateEnding_qm{m}"] = float((d - f_m).days)
+            row[f"days_to_reportedDate_qm{m}"] = float((d - ar["reportedDate"]).days)
             row[f"reportTime_qm{m}"] = ar["reportTime"]
             data = _lookup_data_at_fde(
                 f_m, "_quarterly", snap_lookups, fde_offcycle,
@@ -983,6 +990,7 @@ def _build_quarterly_row(
                 row[f"{fld_name}_qm{m}"] = data.get(fld_name)
         else:
             row[f"days_to_fiscalDateEnding_qm{m}"] = None
+            row[f"days_to_reportedDate_qm{m}"] = None
             row[f"reportTime_qm{m}"] = None
             for fld_name, _t in _QM_DATA_FIELDS:
                 row[f"{fld_name}_qm{m}"] = None
@@ -1026,13 +1034,15 @@ def _build_annual_row(
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"Date": d}
 
-    # am=0 carries only days_to_fiscalDateEnding (no reportTime in annual).
+    # am=0 carries only the days_to_* anchors (no reportTime in annual).
     pos0 = m_anchor
     if 0 <= pos0 < n_known:
         ar = rt_rows[pos0]
         row["days_to_fiscalDateEnding_am0"] = float((d - ar["fiscalDateEnding"]).days)
+        row["days_to_reportedDate_am0"] = float((d - ar["reportedDate"]).days)
     else:
         row["days_to_fiscalDateEnding_am0"] = None
+        row["days_to_reportedDate_am0"] = None
 
     # am=1..4: anchor + data fields.
     for m in _AM_MS:
@@ -1041,6 +1051,7 @@ def _build_annual_row(
             ar = rt_rows[pos]
             f_m = ar["fiscalDateEnding"]
             row[f"days_to_fiscalDateEnding_am{m}"] = float((d - f_m).days)
+            row[f"days_to_reportedDate_am{m}"] = float((d - ar["reportedDate"]).days)
             data = _lookup_data_at_fde(
                 f_m, "_annual", snap_lookups, fde_offcycle,
             )
@@ -1048,6 +1059,7 @@ def _build_annual_row(
                 row[f"{fld_name}_am{m}"] = data.get(fld_name)
         else:
             row[f"days_to_fiscalDateEnding_am{m}"] = None
+            row[f"days_to_reportedDate_am{m}"] = None
             for fld_name, _t in _AM_DATA_FIELDS:
                 row[f"{fld_name}_am{m}"] = None
 

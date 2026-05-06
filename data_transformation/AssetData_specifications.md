@@ -144,6 +144,8 @@ Columns
  'Date'                                                             : pl.Date
  'days_to_fiscalDateEnding_qm0'                                     : pl.Float32
  'days_to_fiscalDateEnding_qm{m}'                                   : pl.Float32
+ 'days_to_reportedDate_qm0'                                         : pl.Float32
+ 'days_to_reportedDate_qm{m}'                                       : pl.Float32
  'reportTime_qm0'                                                   : pl.Categorical  ('pre-market', 'post-market', 'other')
  'reportTime_qm{m}'                                                 : pl.Categorical  ('pre-market', 'post-market', 'other')
  'accumulatedDepreciationAmortizationPPE_qm{m}'                     : pl.Float32
@@ -269,6 +271,8 @@ Columns
  'Date'                                                             : pl.Date
  'days_to_fiscalDateEnding_am0'                                     : pl.Float32
  'days_to_fiscalDateEnding_am{m}'                                   : pl.Float32
+ 'days_to_reportedDate_am0'                                         : pl.Float32
+ 'days_to_reportedDate_am{m}'                                       : pl.Float32
  'accumulatedDepreciationAmortizationPPE_am{m}'                     : pl.Float32
  'capitalExpenditures_am{m}'                                        : pl.Float32
  'capitalLeaseObligations_am{m}'                                    : pl.Float32
