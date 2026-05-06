@@ -151,7 +151,8 @@ Source: `historical/<a>/prices_daily/` + `daily/*/<a>/prices_daily/` for
      over-multiplied - on the ex-split date the Volume is already in
      post-split units).
    - `div_factor[t] = product over i>t of (Close[i-1] - DividendAmount[i]) / Close[i-1]`.
-   - `AdjClose[t] = Close[t] * div_factor[t]`.
+   - `AdjClose[t] = Close[t] * div_factor[t] / cum_split[t]` (CRSP/Yahoo
+     convention - both dividends and splits removed).
    - `AdjVolume[t] = Volume[t] * cum_split[t]`.
    - Both formulas walk backward from the latest available row (``np.flip
      -> cumprod -> np.flip``), so the historical AdjClose/AdjVolume

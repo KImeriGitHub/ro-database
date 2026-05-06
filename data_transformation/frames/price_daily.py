@@ -287,10 +287,11 @@ def build_shareprice_daily(
     Returns ``(shareprice_daily, factor_frame)``.
 
     ``factor_frame`` schema: ``{Date, adj_factor, cum_split}``. ``adj_factor``
-    is ``AdjClose / Close`` (i.e. the dividend-adjustment multiplier applied
-    to OHLC); ``cum_split`` is the volume-side multiplier. Both are aligned
-    to the dates that survived to ``shareprice_daily`` (rows dropped due to
-    null Float32s do not appear).
+    is ``AdjClose / Close`` (the combined split + dividend multiplier
+    applied to OHLC, i.e. ``div_factor / cum_split``); ``cum_split`` is
+    the volume-side multiplier. Both are aligned to the dates that
+    survived to ``shareprice_daily`` (rows dropped due to null Float32s
+    do not appear).
     """
     empty_sp = pl.DataFrame(schema=SCHEMAS["shareprice_daily"])
     empty_factor = pl.DataFrame(schema=FACTOR_FRAME_SCHEMA)
@@ -329,7 +330,7 @@ def build_shareprice_daily(
         pl.Series("_div_factor", div_factor, dtype=pl.Float32),
     )
     merged = merged.with_columns(
-        (pl.col("Close") * pl.col("_div_factor"))
+        (pl.col("Close") * pl.col("_div_factor") / pl.col("_cum_split"))
             .cast(pl.Float32).alias("AdjClose"),
         (pl.col("Volume") * pl.col("_cum_split"))
             .cast(pl.Float32).alias("AdjVolume"),
@@ -355,7 +356,8 @@ def build_shareprice_daily(
 
     factor_frame = merged.select(
         pl.col("Date"),
-        pl.col("_div_factor").cast(pl.Float32).alias("adj_factor"),
+        (pl.col("_div_factor") / pl.col("_cum_split"))
+            .cast(pl.Float32).alias("adj_factor"),
         pl.col("_cum_split").cast(pl.Float32).alias("cum_split"),
     )
 
