@@ -19,9 +19,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_STATUSED = ("stocks", "etfs", "indices", "forex", "cryptocurrencies")
+_STATUSED = ("stocks", "etfs")
 _STATUS_FIELDS = ("total", "active", "delisted", "corrupted")
-_COUNT_ONLY = ("commodities", "economic")
+_COUNT_ONLY = ("indices", "forex", "cryptocurrencies", "commodities", "economic")
 
 
 def load_previous_report(path: Path | None) -> dict | None:

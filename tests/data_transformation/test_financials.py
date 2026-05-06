@@ -850,14 +850,21 @@ def test_reportedate_mismatch_triggers_full_noop(tmp_path):
 
 # ── 14. m=0 / am=0 schema pin ─────────────────────────────────────────────────
 
-def test_qm0_columns_only_two():
+def test_qm0_columns_only_anchors():
     qm0 = [c for c in SCHEMAS["financials_quarterly"] if c.endswith("_qm0")]
-    assert set(qm0) == {"days_to_fiscalDateEnding_qm0", "reportTime_qm0"}
+    assert set(qm0) == {
+        "days_to_fiscalDateEnding_qm0",
+        "days_to_reportedDate_qm0",
+        "reportTime_qm0",
+    }
 
 
-def test_am0_columns_only_one():
+def test_am0_columns_only_anchors():
     am0 = [c for c in SCHEMAS["financials_annually"] if c.endswith("_am0")]
-    assert set(am0) == {"days_to_fiscalDateEnding_am0"}
+    assert set(am0) == {
+        "days_to_fiscalDateEnding_am0",
+        "days_to_reportedDate_am0",
+    }
 
 
 # ── 15. reportTime normalisation ──────────────────────────────────────────────

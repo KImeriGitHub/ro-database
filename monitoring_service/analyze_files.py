@@ -85,7 +85,12 @@ def _expected_count(
 
 
 def _file_count(folder_dir: Path, asset_type: str, endpoint: str) -> int:
-    ep_dir = folder_dir / asset_type / endpoint
+    # Direct endpoints (forex, indices, ...) write SYMBOL.parquet straight
+    # under <asset_type>/, not under a nested <asset_type>/<endpoint>/.
+    if endpoint in _DIRECT_ENDPOINTS:
+        ep_dir = folder_dir / asset_type
+    else:
+        ep_dir = folder_dir / asset_type / endpoint
     if not ep_dir.exists():
         return 0
 

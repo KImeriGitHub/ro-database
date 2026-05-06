@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 # Catalogs that carry a ``status`` column; broken out by Active / Delisted /
 # Corrupted plus a total. The remaining catalogs only have a row count.
-_STATUSED_CATALOGS = ("stocks", "etfs", "indices", "forex", "cryptocurrencies")
-_COUNT_ONLY_CATALOGS = ("commodities", "economic")
+_STATUSED_CATALOGS = ("stocks", "etfs")
+_COUNT_ONLY_CATALOGS = (
+    "indices", "forex", "cryptocurrencies", "commodities", "economic",
+)
 
 # AV LISTING_STATUS uses lowercase "active"/"delisted"; the update logic in
 # ``asset_catalog_service.updates.stocks_etfs._update_listing`` writes

@@ -92,7 +92,7 @@ def render_markdown(report: dict) -> str:
     lines.append("")
     lines.append("| Catalog | Total | Active | Delisted | Corrupted |")
     lines.append("|---|---|---|---|---|")
-    for name in ("stocks", "etfs", "indices", "forex", "cryptocurrencies"):
+    for name in ("stocks", "etfs"):
         c = catalog.get(name, {})
         if c.get("missing"):
             lines.append(f"| {name} | missing | -- | -- | -- |")
@@ -101,7 +101,7 @@ def render_markdown(report: dict) -> str:
             f"| {name} | {c.get('total', 0):,} | {c.get('active', 0):,} "
             f"| {c.get('delisted', 0):,} | {c.get('corrupted', 0):,} |"
         )
-    for name in ("commodities", "economic"):
+    for name in ("indices", "forex", "cryptocurrencies", "commodities", "economic"):
         c = catalog.get(name, {})
         total = "missing" if c.get("missing") else f"{c.get('total', 0):,}"
         lines.append(f"| {name} | {total} | -- | -- | -- |")
@@ -194,7 +194,7 @@ def render_markdown(report: dict) -> str:
             f"{delta.get('previous_folder_date')}"
         )
         cat_d = delta.get("catalog", {})
-        for name in ("stocks", "etfs", "indices", "forex", "cryptocurrencies"):
+        for name in ("stocks", "etfs"):
             d = cat_d.get(name, {})
             lines.append(
                 f"  {name}: total {_fmt_signed(d.get('total'))}, "
@@ -202,6 +202,9 @@ def render_markdown(report: dict) -> str:
                 f"delisted {_fmt_signed(d.get('delisted'))}, "
                 f"corrupted {_fmt_signed(d.get('corrupted'))}"
             )
+        for name in ("indices", "forex", "cryptocurrencies", "commodities", "economic"):
+            d = cat_d.get(name, {})
+            lines.append(f"  {name}: total {_fmt_signed(d.get('total'))}")
         ing_d = delta.get("ingestion", {})
         lines.append(
             f"  ingestion: total {_fmt_signed(ing_d.get('total_issues'))}, "
