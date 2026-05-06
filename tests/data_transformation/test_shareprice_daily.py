@@ -210,9 +210,9 @@ def test_build_shareprice_daily_split_inflates_pre_split_volume(tmp_path):
     sp, _ = build_shareprice_daily("stocks", "AAPL", [p], TransformationReport())
     # Day-1 Volume * 4, day-2 unchanged.
     assert sp["AdjVolume"].to_list() == [4000.0, 4000.0]
-    # AdjClose under Convention 2 (the user-confirmed formula) is dividend-only.
-    # No dividends here, so AdjClose == Close.
-    assert sp["AdjClose"].to_list() == [400.0, 100.0]
+    # AdjClose folds in both splits and dividends (CRSP convention):
+    # day-1 pre-split $400 / 4 = $100, continuous with day-2 post-split $100.
+    assert sp["AdjClose"].to_list() == [100.0, 100.0]
 
 
 def test_factor_frame_aligns_with_surviving_dates(tmp_path):

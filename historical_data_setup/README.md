@@ -198,7 +198,7 @@ Per symbol, fetches 1-min bars for every month from `max(ipoDate, 2000-01)` to `
 Avg round-trip per call is ~1.6s (large JSON payloads). For historical intraday prices, FirstRate Data is used instead, so this endpoint is primarily needed for daily updates of the most recent month.
 
 **Ingestion report issues:**
-- `structure_error` -- response missing `"Meta Data"` or `"Time Series (1min)"` key, or fetch failure
+- `structure_error` -- response missing `"Meta Data"` or `"Time Series (1min)"` key, or fetch failure. Suppressed at the per-month granularity when the symbol overall yields at least one row (other months recovered); flushed only when every month for the symbol failed. `empty_content`, `cast_failure`, `timezone_mismatch`, and `av_throttle` are recorded immediately as usual.
 - `empty_content` -- empty time series, or empty individual bar
 - `cast_failure` -- OHLCV `float()` conversion failure
 - `timezone_mismatch` -- timezone is not `"US/Eastern"`

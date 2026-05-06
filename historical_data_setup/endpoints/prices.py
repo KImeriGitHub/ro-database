@@ -24,6 +24,44 @@ logger = logging.getLogger(__name__)
 _TS_KEY = "Time Series (1min)"
 
 
+class _MonthStructureBuffer:
+    """Buffers per-month ``structure_error`` records for the intraday price loop.
+
+    AV occasionally returns a malformed response for a single month (missing
+    'Meta Data' or 'Time Series (1min)') while neighbouring months for the
+    same symbol come back fine. Recording those one-off month errors when the
+    symbol overall succeeds adds noise to the ingestion report. Other issue
+    types pass through to the inner tracker untouched. Caller invokes
+    ``discard()`` when at least one month produced rows, or ``flush()`` when
+    no months produced rows so the underlying problem is still reported.
+    """
+
+    def __init__(self, inner: IssueTracker):
+        self._inner = inner
+        self._buffered: list[tuple[str, str, str, str, str]] = []
+
+    def record(
+        self,
+        symbol: str,
+        asset_type: str,
+        endpoint: str,
+        issue_type: str,
+        detail: str,
+    ) -> None:
+        if issue_type == "structure_error":
+            self._buffered.append((symbol, asset_type, endpoint, issue_type, detail))
+        else:
+            self._inner.record(symbol, asset_type, endpoint, issue_type, detail)
+
+    def flush(self) -> None:
+        for args in self._buffered:
+            self._inner.record(*args)
+        self._buffered.clear()
+
+    def discard(self) -> None:
+        self._buffered.clear()
+
+
 async def fetch_intraday_prices(
     catalog_dir: Path,
     historical_dir: Path,
@@ -117,6 +155,7 @@ async def fetch_intraday_prices(
         logger.info(f"  prices ({asset_type}): [{idx}/{total}] {symbol} fetching {len(months)} months")
 
         all_rows: list[dict] = []
+        month_tracker = _MonthStructureBuffer(issue_tracker)
 
         for month in months:
             url = (
@@ -128,23 +167,23 @@ async def fetch_intraday_prices(
             try:
                 data = await fetch_av_json(url, session, rate_limiter)
             except AVResponseError as e:
-                issue_tracker.record(
+                month_tracker.record(
                     symbol, asset_type, "prices",
                     "av_throttle", f"month={month}: {e}"
                 )
                 continue
             except Exception as e:
-                issue_tracker.record(
+                month_tracker.record(
                     symbol, asset_type, "prices",
                     "structure_error", f"month={month} fetch failed: {e}"
                 )
                 continue
 
-            validate_meta_data(data, symbol, asset_type, "prices", issue_tracker)
+            validate_meta_data(data, symbol, asset_type, "prices", month_tracker)
 
             ts = data.get(_TS_KEY)
             if ts is None:
-                issue_tracker.record(
+                month_tracker.record(
                     symbol, asset_type, "prices",
                     "structure_error", f"month={month} missing '{_TS_KEY}'"
                 )
@@ -152,7 +191,7 @@ async def fetch_intraday_prices(
                 continue
 
             if not ts:
-                issue_tracker.record(
+                month_tracker.record(
                     symbol, asset_type, "prices",
                     "empty_content", f"month={month} empty time series"
                 )
@@ -161,7 +200,7 @@ async def fetch_intraday_prices(
 
             for dt_str, ohlcv in ts.items():
                 if not ohlcv:
-                    issue_tracker.record(
+                    month_tracker.record(
                         symbol, asset_type, "prices",
                         "empty_content", f"month={month} empty bar at {dt_str}"
                     )
@@ -176,7 +215,7 @@ async def fetch_intraday_prices(
                         "Volume": float(ohlcv["5. volume"]),
                     })
                 except (KeyError, ValueError, TypeError) as e:
-                    issue_tracker.record(
+                    month_tracker.record(
                         symbol, asset_type, "prices",
                         "cast_failure", f"month={month} dt={dt_str}: {e}"
                     )
@@ -184,6 +223,7 @@ async def fetch_intraday_prices(
             del data, ts
 
         if all_rows:
+            month_tracker.discard()
             df = (
                 pl.DataFrame(all_rows)
                 .with_columns(
@@ -201,5 +241,7 @@ async def fetch_intraday_prices(
             df.write_parquet(out_path, compression="zstd")
             logger.info(f"  prices ({asset_type}): {symbol} saved {df.height} rows")
             del df
+        else:
+            month_tracker.flush()
 
         del all_rows
