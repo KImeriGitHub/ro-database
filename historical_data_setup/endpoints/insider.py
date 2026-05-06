@@ -124,12 +124,15 @@ async def fetch_insider(
 
         try:
             df = df.with_columns(
-                pl.col("transactionDate").str.to_date("%Y-%m-%d", exact=False)
+                pl.col("transactionDate")
+                .str.replace_all("\n", "")
+                .str.to_date("%Y-%m-%d", exact=False)
             )
         except Exception as e:
+            brief = str(e).split("\n\n", 1)[0]
             issue_tracker.record(
                 symbol, asset_type, "insider",
-                "cast_failure", f"transactionDate to Date failed: {e}",
+                "cast_failure", f"transactionDate to Date failed: {brief}",
             )
             del df
             continue
