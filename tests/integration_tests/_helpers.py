@@ -43,7 +43,7 @@ MANDATORY_STOCKS = [
 MANDATORY_ETFS = ["QQQ", "SPY", "GLD", "MDY", "EWJ", "EWU", "DIA"]
 
 EXTRA_RANDOM_STOCKS = 10
-RANDOM_SEED = "ro-database-int-tests-42"
+RANDOM_SEED = "ro-database-int-tests-41"
 
 # Catalogs whose symbols come from non-stock/non-etf asset types. Their rows
 # in yield_status.parquet must be kept untouched when we reduce.
@@ -86,17 +86,17 @@ def _kept_stocks(stocks_path: Path) -> list[str]:
             f"{missing_mandatory}"
         )
 
-    # Pool: active, non-mandatory, with an ipoDate set (more stable than
+    # OMITTING Pool: active, non-mandatory, with an ipoDate set (more stable than
     # newly-listed empty-history symbols).
-    pool_df = df
-    if "status" in pool_df.columns:
-        pool_df = pool_df.filter(
-            pl.col("status").str.to_lowercase() == "active"
-        )
-    if "ipoDate" in pool_df.columns:
-        pool_df = pool_df.filter(pl.col("ipoDate").is_not_null())
+    #pool_df = df
+    #if "status" in pool_df.columns:
+    #    pool_df = pool_df.filter(
+    #        pl.col("status").str.to_lowercase() == "active"
+    #    )
+    #if "ipoDate" in pool_df.columns:
+    #    pool_df = pool_df.filter(pl.col("ipoDate").is_not_null())
     pool = [
-        s for s in pool_df["symbol"].to_list() if s not in MANDATORY_STOCKS
+        s for s in df["symbol"].to_list() if s not in MANDATORY_STOCKS
     ]
     extras = pick_extra_stocks(pool, EXTRA_RANDOM_STOCKS)
 
