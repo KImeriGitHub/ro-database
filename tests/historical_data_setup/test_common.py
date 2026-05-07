@@ -609,6 +609,189 @@ def test_fetch_av_json_information_key_also_treated_as_throttle():
 
 
 # ---------------------------------------------------------------------------
+# fetch_av_json: 5xx / network-error retry (regression: 503 used to leak the
+# full URL -- with the API key -- through aiohttp's exception message).
+# ---------------------------------------------------------------------------
+
+
+class _StatusResp:
+    def __init__(self, status: int, data: dict | None = None):
+        self.status = status
+        self._data = data
+
+    async def json(self, content_type=None):
+        return self._data
+
+
+class _StatusCtx:
+    def __init__(self, status: int, data: dict | None = None):
+        self._status = status
+        self._data = data
+
+    async def __aenter__(self):
+        return _StatusResp(self._status, self._data)
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _StatusSession:
+    """Pops (status, payload-or-None) tuples off ``responses``.
+
+    A ``payload=None`` simulates a server-side error response (5xx/4xx) where
+    no JSON body needs to be parsed; ``payload=dict`` simulates a 200 OK.
+    """
+
+    def __init__(self, responses: list[tuple[int, dict | None]]):
+        self._responses = list(responses)
+        self.requests: list[str] = []
+
+    def get(self, url, timeout=None):
+        self.requests.append(url)
+        if not self._responses:
+            raise AssertionError("StatusSession ran out of scripted responses")
+        status, data = self._responses.pop(0)
+        return _StatusCtx(status, data)
+
+
+def test_fetch_av_json_retries_on_503_then_succeeds():
+    """A 503 must be treated as transient and retried with the short backoff,
+    not converted into a structure_error. Regression: aiohttp's
+    ``raise_for_status()`` used to bubble up a ClientResponseError whose str()
+    embeds the full URL (and thus the API key)."""
+    reset_av_call_count()
+    sess = _StatusSession([
+        (503, None),
+        (200, {"Time Series (Daily)": {"2026-04-15": {}}}),
+    ])
+    rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
+
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    with patch("historical_data_setup._common.asyncio.sleep", side_effect=fast_sleep):
+        out = _run(fetch_av_json("https://fake?apikey=SECRET", sess, rl))
+
+    assert out == {"Time Series (Daily)": {"2026-04-15": {}}}
+    assert len(sess.requests) == 2
+    # Short transient backoff was used (not the 60s throttle backoff).
+    assert 5 in sleeps and 60 not in sleeps
+    assert get_av_call_count() == 2
+
+
+def test_fetch_av_json_5xx_exhaustion_does_not_leak_api_key():
+    """After max_retries 5xx responses, ``AVResponseError`` is raised. The
+    message must mention the status code but MUST NOT contain the API key
+    or the full URL -- this is the leak that prompted the fix."""
+    reset_av_call_count()
+    sess = _StatusSession([(503, None), (502, None), (500, None)])
+    rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
+
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(seconds):
+        await real_sleep(0)
+
+    with patch("historical_data_setup._common.asyncio.sleep", side_effect=fast_sleep):
+        with pytest.raises(AVResponseError) as exc_info:
+            _run(fetch_av_json(
+                "https://www.alphavantage.co/query?function=X&apikey=SECRET_KEY_42",
+                sess, rl,
+            ))
+
+    msg = str(exc_info.value)
+    assert "SECRET_KEY_42" not in msg
+    assert "apikey" not in msg
+    assert "alphavantage.co" not in msg
+    # The status code from the last attempt should still be useful for triage.
+    assert "500" in msg
+    assert get_av_call_count() == 3
+
+
+def test_fetch_av_json_4xx_is_non_retryable_and_does_not_leak_api_key():
+    """A 4xx (client error) is not retried -- the request itself is malformed
+    or unauthorized, hammering AV won't help. The raised ``AVResponseError``
+    must still scrub the URL/API key."""
+    reset_av_call_count()
+    sess = _StatusSession([(401, None)])
+    rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
+
+    with pytest.raises(AVResponseError) as exc_info:
+        _run(fetch_av_json(
+            "https://www.alphavantage.co/query?function=X&apikey=SECRET_KEY_42",
+            sess, rl,
+        ))
+
+    msg = str(exc_info.value)
+    assert "SECRET_KEY_42" not in msg
+    assert "401" in msg
+    assert len(sess.requests) == 1  # not retried
+
+
+class _RaisingCtx:
+    """Async context manager whose ``__aenter__`` raises a network exception
+    that, like real aiohttp, embeds the request URL in its ``str()``."""
+
+    def __init__(self, exc: Exception):
+        self._exc = exc
+
+    async def __aenter__(self):
+        raise self._exc
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _RaisingSession:
+    def __init__(self, exceptions: list[Exception]):
+        self._exceptions = list(exceptions)
+        self.requests: list[str] = []
+
+    def get(self, url, timeout=None):
+        self.requests.append(url)
+        if not self._exceptions:
+            raise AssertionError("RaisingSession ran out of scripted exceptions")
+        return _RaisingCtx(self._exceptions.pop(0))
+
+
+def test_fetch_av_json_retries_on_aiohttp_client_error_then_raises_sanitized():
+    """Network-layer ``aiohttp.ClientError`` exceptions stringify with the URL
+    (and therefore the API key) embedded. ``fetch_av_json`` must retry, and on
+    exhaustion raise an ``AVResponseError`` whose message contains only the
+    exception type name -- never the URL or key."""
+    import aiohttp as _aiohttp
+
+    reset_av_call_count()
+    leaky_msg = "https://www.alphavantage.co/query?apikey=SECRET_KEY_42"
+    sess = _RaisingSession([
+        _aiohttp.ClientConnectionError(leaky_msg),
+        _aiohttp.ClientConnectionError(leaky_msg),
+        _aiohttp.ClientConnectionError(leaky_msg),
+    ])
+    rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
+
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(seconds):
+        await real_sleep(0)
+
+    with patch("historical_data_setup._common.asyncio.sleep", side_effect=fast_sleep):
+        with pytest.raises(AVResponseError) as exc_info:
+            _run(fetch_av_json(leaky_msg, sess, rl))
+
+    msg = str(exc_info.value)
+    assert "SECRET_KEY_42" not in msg
+    assert "apikey" not in msg
+    assert "alphavantage.co" not in msg
+    assert "ClientConnectionError" in msg
+    assert len(sess.requests) == 3
+
+
+# ---------------------------------------------------------------------------
 # ensure_historical_folders
 # ---------------------------------------------------------------------------
 

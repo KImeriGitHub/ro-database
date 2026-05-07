@@ -92,6 +92,14 @@ class AVResponseError(Exception):
     """Raised when Alpha Vantage returns an unrecoverable error."""
 
 
+# Backoff (seconds) between retries inside ``fetch_av_json``.
+# Throttle responses surface AV's per-minute budget, so they need a full minute
+# to clear; transient 5xx / network failures clear far quicker, hence a short
+# pause to avoid burning the call budget while still letting the server breathe.
+AV_THROTTLE_BACKOFF_SEC = 60.0
+AV_TRANSIENT_BACKOFF_SEC = 5.0
+
+
 # Module-level counter incremented inside ``fetch_av_json`` once per HTTP
 # request actually issued (including retries). Lets the monitoring service
 # report API budget usage at the end of an in-process run. Resets are the
@@ -117,32 +125,62 @@ async def fetch_av_json(
 ) -> dict:
     """Fetch JSON from Alpha Vantage with rate limiting and retry.
 
-    Detects AV throttle responses (keys "Note" or "Information") and retries
-    after 60 s, up to *max_retries* times.
+    Retries with backoff on:
+    - AV throttle responses (top-level ``Note`` or ``Information`` key):
+      ``AV_THROTTLE_BACKOFF_SEC``
+    - HTTP 5xx (e.g. 503 Service Unavailable) and transient network errors:
+      ``AV_TRANSIENT_BACKOFF_SEC``
+
+    Raises ``AVResponseError`` on retry exhaustion or any non-retryable HTTP
+    response. Error messages NEVER include the request URL because the URL
+    carries the API key as a query parameter; ``aiohttp``'s native exception
+    strings would otherwise leak it into logs.
     """
     global _av_call_count
     for attempt in range(1, max_retries + 1):
         await rate_limiter.wait()
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
-            _av_call_count += 1
-            resp.raise_for_status()
-            data = await resp.json(content_type=None)
 
-        # AV signals rate-limit / error via top-level "Note" or "Information"
-        throttle_msg = data.get("Note") or data.get("Information")
+        data: dict | None = None
+        retry_reason: str | None = None
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+                _av_call_count += 1
+                status = resp.status
+                if 500 <= status < 600:
+                    retry_reason = f"HTTP {status}"
+                elif status >= 400:
+                    raise AVResponseError(f"AV HTTP {status}: non-retryable")
+                else:
+                    data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Sanitize: aiohttp's str(e) echoes the request URL, which carries
+            # the API key. Keep only the exception type name.
+            retry_reason = f"network error {type(e).__name__}"
+
+        throttle_msg: str | None = None
+        if data is not None:
+            # AV signals rate-limit / error via top-level "Note" or "Information"
+            throttle_msg = data.get("Note") or data.get("Information")
+            if not throttle_msg:
+                return data
+
+        retry_in = AV_THROTTLE_BACKOFF_SEC if throttle_msg else AV_TRANSIENT_BACKOFF_SEC
+        log_reason = f"throttle: {throttle_msg[:120]}" if throttle_msg else retry_reason
+        if attempt < max_retries:
+            logger.warning(
+                f"AV {log_reason} (attempt {attempt}/{max_retries}) "
+                f"-- retrying in {int(retry_in)}s"
+            )
+            await asyncio.sleep(retry_in)
+            continue
+
         if throttle_msg:
-            if attempt < max_retries:
-                logger.warning(
-                    f"AV throttle (attempt {attempt}/{max_retries}): "
-                    f"{throttle_msg[:120]} -- retrying in 60s"
-                )
-                await asyncio.sleep(60)
-                continue
             raise AVResponseError(
                 f"AV throttle after {max_retries} retries: {throttle_msg[:200]}"
             )
-
-        return data
+        raise AVResponseError(
+            f"AV {retry_reason} after {max_retries} attempts"
+        )
 
     raise AVResponseError("fetch_av_json: exhausted retries without a valid response")
 
