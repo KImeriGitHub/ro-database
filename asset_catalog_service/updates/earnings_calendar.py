@@ -5,9 +5,12 @@ import logging
 from pathlib import Path
 
 import polars as pl
-import requests
 
-from asset_catalog_service.updates._common import AV_BASE, fetch_text
+from asset_catalog_service.updates._common import (
+    AV_BASE,
+    CatalogFetchError,
+    fetch_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +26,7 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
             f"&horizon=6month&apikey={api_key}"
         )
         logger.info("earnings_calendar: CSV fetched successfully")
-    except (requests.RequestException, ValueError) as e:
+    except CatalogFetchError as e:
         logger.error(f"earnings_calendar: failed to fetch CSV - {e}")
         return
 

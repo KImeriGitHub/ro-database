@@ -114,21 +114,55 @@ YIELD_ENDPOINTS = [
 ]
 
 
+class CatalogFetchError(Exception):
+    """Raised when a catalog HTTP fetch fails.
+
+    Catalog URLs embed the API key as a ``apikey=...`` query parameter, so
+    ``requests``' native exception messages (which echo the request URL) must
+    never reach the logs. ``fetch_text`` / ``fetch_json`` translate every
+    failure into a ``CatalogFetchError`` whose message contains only the HTTP
+    status code or the underlying exception's type name.
+    """
+
+
+def _sanitized_request_error(exc: Exception) -> CatalogFetchError:
+    """Build a ``CatalogFetchError`` whose message holds no URL.
+
+    ``requests`` exceptions stringify with the full request URL (and therefore
+    the API key) inlined. We extract the only safe-to-log piece -- the status
+    code for ``HTTPError``, otherwise the exception class name -- and discard
+    the rest. ``raise ... from None`` at the call site suppresses the chained
+    cause so ``logger.exception`` tracebacks don't reintroduce the URL either.
+    """
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return CatalogFetchError(f"HTTP {exc.response.status_code}")
+    return CatalogFetchError(type(exc).__name__)
+
+
 def fetch_text(url: str) -> str:
-    """Fetch text from a URL.  Raises on HTTP errors or unexpected JSON."""
-    resp = requests.get(url, timeout=60)
-    resp.raise_for_status()
+    """Fetch text from a URL. Raises ``CatalogFetchError`` on HTTP errors or
+    when the response is JSON (AV's stand-in for an error CSV)."""
+    try:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        raise _sanitized_request_error(e) from None
     text = resp.text.strip()
     if text.startswith("{"):
-        raise ValueError(f"Expected CSV but got JSON: {text[:200]}")
+        # AV emits an error JSON (e.g. throttle "Note") in place of the CSV.
+        # The body itself doesn't echo the URL, so it's safe to log verbatim.
+        raise CatalogFetchError(f"Expected CSV but got JSON: {text[:200]}")
     return text
 
 
 def fetch_json(url: str) -> dict:
-    """Fetch JSON from a URL."""
-    resp = requests.get(url, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
+    """Fetch JSON from a URL. Raises ``CatalogFetchError`` on HTTP errors."""
+    try:
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        raise _sanitized_request_error(e) from None
 
 
 def update_simple_catalog(

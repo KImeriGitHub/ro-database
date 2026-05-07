@@ -15,10 +15,10 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
-import requests
 
 from asset_catalog_service.updates._common import (
     AV_BASE,
+    CatalogFetchError,
     fetch_json,
     fetch_text,
     normalize_sector,
@@ -195,23 +195,15 @@ def _fetch_sectors_batch(
 def _fetch_sector_with_retry(api_key: str, symbol: str) -> str:
     """Wrap _fetch_sector with retries for transient network errors.
 
-    Connection-aborted and timeout failures get a dedicated warning so they
-    are easy to spot in logs.  After all attempts fail, returns "Other".
+    ``fetch_json`` translates every underlying ``requests`` failure into a
+    sanitized ``CatalogFetchError`` (no URL, no API key), and the ``e``
+    interpolation here surfaces only that scrubbed message. After all attempts
+    fail, returns "Other".
     """
     for attempt in range(1, _SECTOR_FETCH_MAX_ATTEMPTS + 1):
         try:
             return _fetch_sector(api_key, symbol)
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(
-                f"Connection aborted fetching {symbol} "
-                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
-            )
-        except requests.exceptions.Timeout as e:
-            logger.warning(
-                f"Timeout fetching {symbol} "
-                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
-            )
-        except Exception as e:
+        except CatalogFetchError as e:
             logger.warning(
                 f"Error fetching {symbol} "
                 f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
