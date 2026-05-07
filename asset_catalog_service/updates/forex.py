@@ -18,9 +18,13 @@ def update_forex(catalog_dir: Path) -> None:
     csv_text = fetch_text(f"{AV_BASE}/physical_currency_list/")
     raw = pl.read_csv(io.StringIO(csv_text))
 
-    fresh = raw.select(
-        pl.concat_str([pl.col("currency code"), pl.lit("USD")]).alias("symbol"),
-        pl.col("currency name").alias("name"),
+    fresh = (
+        raw
+        .filter(pl.col("currency code") != "USD")
+        .select(
+            pl.concat_str([pl.col("currency code"), pl.lit("USD")]).alias("symbol"),
+            pl.col("currency name").alias("name"),
+        )
     )
 
     if not path.exists():

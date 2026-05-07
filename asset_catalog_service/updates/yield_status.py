@@ -47,6 +47,11 @@ _FUNDAMENTAL_ENDPOINTS = {
     "earnings", "earnings_estimates",
 }
 
+# Endpoints whose writer still saves a usable file when empty_content is
+# logged for one optional sub-field (e.g. etf_profile writes scalar fields
+# even when the sectors list comes back empty).
+_EMPTY_CONTENT_EXEMPT = {"etf_profile"}
+
 # Issue types that unambiguously mean no usable data was saved.
 _HARD_FAIL_ISSUES = {"structure_error", "av_throttle"}
 
@@ -161,6 +166,8 @@ def _resolve_cell(
     if "empty_content" in issues:
         if column in _FUNDAMENTAL_ENDPOINTS:
             return _fundamental_files_exist(historical_dir, symbol, column)
+        if column in _EMPTY_CONTENT_EXEMPT:
+            return True
         return False
     return True
 
