@@ -1,9 +1,19 @@
 """Daily Data Service - adjust_weekly.py
 
-Weekend re-query pass over the most recent daily folder. Retries only the
-``(symbol, asset_type, endpoint)`` cells flagged in that folder's
-``ingestion_report.parquet`` and writes their results back into the same
-folder with the wider ``(previous_date, folder_date]`` truncation window.
+Weekend re-query pass over the most recent daily folder. The retry plan
+is the union of two sources, both keyed on
+``(symbol, asset_type, endpoint)``:
+
+  1. Every ``False`` cell in ``catalog/yield_status.parquet`` (asset_type
+     recovered by re-joining ``symbol`` against the catalog parquets;
+     the ``direct`` column maps to the symbol's asset_type as the
+     endpoint name). The ``sentiment`` column is excluded -- see below.
+  2. Every row in any ``daily/<d>/ingestion_report.parquet`` for ``d``
+     in ``(previous_date, folder_date]``. Older-date reports are read
+     but never modified (``daily/`` stays append-only beyond
+     ``folder_date``).
+
+All retried results land under ``daily/<folder_date>/``.
 
 Date resolution:
   - ``folder_date``   = max ``YYYY-MM-DD`` subdir under ``daily_dir``.
@@ -12,21 +22,26 @@ Date resolution:
     to ``folder_date - (look_back_days + 1)``.
 
 Skip semantics mirror the daily run: each endpoint's per-symbol
-``out_path.exists()`` guard means symbols that were written successfully
+``out_path.exists()`` guard means symbols that already have a valid file
 on ``folder_date`` are not re-queried. For fundamentals, the guard skips
 only when BOTH ``SYMBOL_annual.parquet`` and ``SYMBOL_quarterly.parquet``
 exist.
 
-Sentiment is all-or-nothing: any sentiment issue (including ``GLOBAL``)
-triggers a full rerun. Before ``fetch_sentiment`` is called, every file
-under ``stocks/sentiment/`` is renamed to ``*.pre_weekly`` so the endpoint's
-existence guards don't short-circuit the global fetch. Any existing
-``.pre_weekly`` siblings from a previous weekend pass are overwritten.
+Sentiment is all-or-nothing and is triggered ONLY by a ``GLOBAL`` row in
+an in-window ingestion report. ``yield_status`` ``sentiment`` False cells
+do not trigger the rerun (those cells track coverage of the global pull,
+not per-symbol fetch failures). When triggered, every file under
+``stocks/sentiment/`` is renamed to ``*.pre_weekly`` before
+``fetch_sentiment`` runs so the endpoint's existence guards don't
+short-circuit the global fetch; any existing ``.pre_weekly`` siblings
+from a previous weekend pass are overwritten.
 
-After all retries finish the ingestion report is rewritten in place:
-rows for retried ``(symbol, asset_type, endpoint)`` triples are dropped,
-fresh issues from this pass are appended, and ``yield_status.parquet`` is
-recomputed via the same ``finalize_yield_status`` the daily full run uses.
+After all retries finish, only ``daily/<folder_date>/ingestion_report.parquet``
+is rewritten: rows for retried triples are dropped (triples sourced
+exclusively from ``yield_status`` or older reports won't have a row here,
+and that's fine), fresh issues from this pass are appended, and
+``yield_status.parquet`` is recomputed via the same
+``finalize_yield_status`` the daily full run uses.
 
 Usage:
     python adjust_weekly.py [--catalog-dir PATH] [--daily-dir PATH]
@@ -104,26 +119,125 @@ def resolve_dates(
     return folder_date, previous_date
 
 
-def _load_retry_plan(
-    report_path: Path,
-) -> tuple[dict[tuple[str, str], set[str]], pl.DataFrame]:
-    """Return ``(plan, report_df)`` where:
+_CATALOG_FILES: tuple[tuple[str, str], ...] = (
+    ("stocks.parquet", "stocks"),
+    ("etfs.parquet", "etfs"),
+    ("forex.parquet", "forex"),
+    ("indices.parquet", "indices"),
+    ("cryptocurrencies.parquet", "cryptocurrencies"),
+    ("commodities.parquet", "commodities"),
+    ("economic.parquet", "economic"),
+)
 
-    - ``plan[(asset_type, endpoint)]`` is the set of symbols (including the
-      ``GLOBAL`` sentinel for sentiment) that appeared in the ingestion
-      report for that pair.
-    - ``report_df`` is the full report, returned so the caller can merge it.
+
+def _in_window_report_paths(
+    daily_dir: Path, previous_date: date, folder_date: date
+) -> list[Path]:
+    """Return ingestion_report.parquet paths for every YYYY-MM-DD subdir
+    whose date ``d`` satisfies ``previous_date < d <= folder_date``."""
+    out: list[Path] = []
+    for d in _list_folder_dates(daily_dir):
+        if previous_date < d <= folder_date:
+            p = daily_dir / d.isoformat() / "ingestion_report.parquet"
+            if p.exists():
+                out.append(p)
+    return out
+
+
+def _load_symbol_asset_type_map(catalog_dir: Path) -> dict[str, str]:
+    """Return ``{symbol: asset_type}`` from every catalog parquet."""
+    mapping: dict[str, str] = {}
+    for fname, asset_type in _CATALOG_FILES:
+        path = catalog_dir / fname
+        if not path.exists():
+            continue
+        for sym in pl.read_parquet(path)["symbol"].to_list():
+            mapping.setdefault(sym, asset_type)
+    return mapping
+
+
+def _yield_status_false_triples(
+    catalog_dir: Path,
+    sym_to_asset: dict[str, str],
+) -> list[tuple[str, str, str]]:
+    """Return ``(symbol, asset_type, endpoint)`` for every explicit ``False``
+    cell in ``yield_status.parquet``.
+
+    The ``sentiment`` column is excluded -- the sentiment full rerun is
+    gated on a ``GLOBAL`` row in an in-window ingestion report, not on
+    per-symbol yield cells. The ``direct`` column maps to the symbol's
+    asset_type as the endpoint name (e.g. forex symbol with
+    ``direct=False`` -> endpoint ``forex``).
     """
-    if not report_path.exists():
-        logger.info(f"No ingestion report at {report_path}; nothing to retry")
-        return {}, pl.DataFrame()
+    path = catalog_dir / "yield_status.parquet"
+    if not path.exists():
+        return []
+    df = pl.read_parquet(path)
+    out: list[tuple[str, str, str]] = []
+    for col in df.columns:
+        if col in ("symbol", "date", "sentiment"):
+            continue
+        false_syms = df.filter(pl.col(col).eq(False))["symbol"].to_list()
+        for sym in false_syms:
+            asset_type = sym_to_asset.get(sym)
+            if asset_type is None:
+                continue
+            ep = asset_type if col == "direct" else col
+            out.append((sym, asset_type, ep))
+    return out
 
-    report = pl.read_parquet(report_path)
+
+def _build_retry_plan(
+    catalog_dir: Path,
+    daily_dir: Path,
+    previous_date: date,
+    folder_date: date,
+) -> tuple[dict[tuple[str, str], set[str]], pl.DataFrame, bool]:
+    """Build the union retry plan from in-window ingestion reports and
+    yield_status False cells.
+
+    Returns ``(plan, folder_date_report, sentiment_full_rerun)``:
+
+    - ``plan[(asset_type, endpoint)]`` -> set of symbols. Sentiment is
+      never a per-symbol entry; per-symbol sentiment rows in any report
+      are ignored on the way in (sentiment is global -- see below).
+    - ``folder_date_report`` is the existing report at ``folder_date``
+      (empty DataFrame if missing). Only this report is rewritten on
+      merge; older-date reports stay append-only.
+    - ``sentiment_full_rerun`` is True iff any in-window ingestion report
+      has a row with ``symbol == 'GLOBAL'`` and ``endpoint == 'sentiment'``.
+      yield_status ``sentiment`` False cells do not set this flag.
+    """
     plan: dict[tuple[str, str], set[str]] = {}
-    for row in report.iter_rows(named=True):
-        key = (row["asset_type"], row["endpoint"])
-        plan.setdefault(key, set()).add(row["symbol"])
-    return plan, report
+    sentiment_full_rerun = False
+
+    for report_path in _in_window_report_paths(
+        daily_dir, previous_date, folder_date
+    ):
+        report = pl.read_parquet(report_path)
+        for row in report.iter_rows(named=True):
+            ep = row["endpoint"]
+            if ep == "sentiment":
+                if row["symbol"] == _SENTINEL_GLOBAL:
+                    sentiment_full_rerun = True
+                continue
+            plan.setdefault((row["asset_type"], ep), set()).add(row["symbol"])
+
+    sym_to_asset = _load_symbol_asset_type_map(catalog_dir)
+    for sym, asset_type, ep in _yield_status_false_triples(
+        catalog_dir, sym_to_asset
+    ):
+        plan.setdefault((asset_type, ep), set()).add(sym)
+
+    fd_report_path = (
+        daily_dir / folder_date.isoformat() / "ingestion_report.parquet"
+    )
+    if fd_report_path.exists():
+        fd_report = pl.read_parquet(fd_report_path)
+    else:
+        fd_report = pl.DataFrame()
+
+    return plan, fd_report, sentiment_full_rerun
 
 
 def _rename_sentiment_files(sentiment_dir: Path) -> int:
@@ -195,8 +309,10 @@ async def adjust_weekly(
     look_back_days: int = 6,
     api_tier: str = "premium",
 ) -> None:
-    """Retry the ``(symbol, asset_type, endpoint)`` cells flagged in the latest
-    daily folder's ingestion report, writing back into that same folder."""
+    """Retry the union of ``yield_status`` False cells and every
+    ``(symbol, asset_type, endpoint)`` row in any ingestion report dated
+    in ``(previous_date, folder_date]``, writing all results into
+    ``daily/<folder_date>/``."""
     project_root = Path(__file__).resolve().parent.parent
     if catalog_dir is None:
         catalog_dir = project_root / "catalog"
@@ -212,24 +328,31 @@ async def adjust_weekly(
         f"previous_date={previous_date}, look_back_days={look_back_days}"
     )
 
-    plan, old_report = _load_retry_plan(report_path)
+    plan, old_report, sentiment_full_rerun = _build_retry_plan(
+        catalog_dir, daily_dir, previous_date, folder_date,
+    )
+
+    # Sentiment is global: triggered only by a GLOBAL row in any in-window
+    # ingestion report. yield_status `sentiment` False cells are not a
+    # trigger source. Per-symbol sentiment rows (if any) were already
+    # filtered out by _build_retry_plan.
+    sentiment_key = ("stocks", "sentiment")
+    plan.pop(sentiment_key, None)
+    if sentiment_full_rerun:
+        plan[sentiment_key] = set()
+
     if not plan:
         logger.info("Nothing to retry; exiting without changes.")
         return
 
     ensure_daily_folders(daily_dir, folder_date)
 
-    # Sentiment: any entry (per-symbol or GLOBAL) forces a full rerun.
-    sentiment_key = ("stocks", "sentiment")
-    if sentiment_key in plan:
+    if sentiment_full_rerun:
         renamed = _rename_sentiment_files(day_root / "stocks" / "sentiment")
         logger.info(
             f"sentiment retry: renamed {renamed} file(s) to *.pre_weekly "
             f"before rerun"
         )
-        # Let fetch_sentiment write every active symbol again: the global
-        # paginated fetch covers all catalog tickers regardless of filter.
-        plan[sentiment_key] = set()
 
     api_key = get_alpha_vantage_key(api_tier)
     rate_limiter = RateLimiter(74.0)

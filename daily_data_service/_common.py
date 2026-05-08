@@ -92,6 +92,22 @@ def window_expr(col: str, previous_date: date, folder_date: date) -> pl.Expr:
     return (pl.col(col) > previous_date) & (pl.col(col) <= folder_date)
 
 
+PRICE_WINDOW_DAYS = 7
+
+
+def price_window_lower(previous_date: date, folder_date: date) -> date:
+    """Lower bound for the ``prices`` and ``prices_daily`` truncation window.
+
+    Returns ``min(previous_date, folder_date - PRICE_WINDOW_DAYS)`` so that
+    every successful daily run captures at least the trailing
+    ``PRICE_WINDOW_DAYS`` days of bars, even if intermediate runs failed
+    or skipped these symbols. ``previous_date`` is preserved when it's
+    older (e.g. a long outage) so the window can only widen, never
+    narrow, relative to the previous behaviour.
+    """
+    return min(previous_date, folder_date - timedelta(days=PRICE_WINDOW_DAYS))
+
+
 def since_expr(col: str, since: date) -> pl.Expr:
     """Polars expression for ``col >= since``."""
     return pl.col(col) >= since

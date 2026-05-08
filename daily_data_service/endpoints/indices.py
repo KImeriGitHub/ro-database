@@ -1,6 +1,10 @@
 """Daily pull of index prices (INDEX_DATA).
 
-Truncates to ``(previous_date, folder_date]``.
+Truncates to ``(min(previous_date, folder_date - PRICE_WINDOW_DAYS),
+folder_date]``. The trailing-week floor lets a successful run recover the
+last few days of bars even if intermediate runs failed; daily folders
+therefore overlap by up to ``PRICE_WINDOW_DAYS - 1`` days and downstream
+consumers must dedup on ``(symbol, Date)``.
 """
 
 import logging
@@ -19,7 +23,7 @@ from historical_data_setup._common import (
     read_catalog_symbols,
     symbol_parquet_name,
 )
-from daily_data_service._common import window_expr
+from daily_data_service._common import price_window_lower, window_expr
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +50,8 @@ async def fetch_indices(
     output_dir = daily_dir / _ASSET_TYPE
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_window = window_expr("Date", previous_date, folder_date)
+    window_lower = price_window_lower(previous_date, folder_date)
+    daily_window = window_expr("Date", window_lower, folder_date)
 
     total = catalog.height
     logger.info(f"{_ENDPOINT}: {total} symbols to process")
@@ -139,7 +144,7 @@ async def fetch_indices(
         if df.height == 0:
             logger.info(
                 f"  {_ENDPOINT}: {symbol} saved empty frame "
-                f"(no bars in ({previous_date}, {folder_date}])"
+                f"(no bars in ({window_lower}, {folder_date}])"
             )
         else:
             logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")

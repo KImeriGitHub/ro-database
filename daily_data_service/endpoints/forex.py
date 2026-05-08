@@ -1,7 +1,11 @@
 """Daily pull of forex daily prices (FX_DAILY).
 
 Uses ``outputsize=compact`` (trailing ~100 days), then truncates client-side
-to ``(previous_date, folder_date]``.
+to ``(min(previous_date, folder_date - PRICE_WINDOW_DAYS), folder_date]``.
+The trailing-week floor lets a successful run recover the last few days of
+bars even if intermediate runs failed; daily folders therefore overlap by
+up to ``PRICE_WINDOW_DAYS - 1`` days and downstream consumers must dedup
+on ``(symbol, Date)``.
 """
 
 import logging
@@ -21,7 +25,7 @@ from historical_data_setup._common import (
     symbol_parquet_name,
     validate_meta_data,
 )
-from daily_data_service._common import window_expr
+from daily_data_service._common import price_window_lower, window_expr
 
 logger = logging.getLogger(__name__)
 
@@ -141,16 +145,21 @@ async def fetch_forex(
                 "Low": pl.Float32,
                 "Close": pl.Float32,
             })
-            .filter(window_expr("Date", previous_date, folder_date))
+            .filter(window_expr(
+                "Date",
+                price_window_lower(previous_date, folder_date),
+                folder_date,
+            ))
             .sort("Date")
         )
         del rows
 
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
+            window_lower = price_window_lower(previous_date, folder_date)
             logger.info(
                 f"  {_ENDPOINT}: {symbol} saved empty frame "
-                f"(no bars in ({previous_date}, {folder_date}])"
+                f"(no bars in ({window_lower}, {folder_date}])"
             )
         else:
             logger.info(f"  {_ENDPOINT}: {symbol} saved {df.height} rows")

@@ -1,9 +1,13 @@
 """Daily pull of commodities data.
 
 Daily-interval group (WTI, BRENT, NATURAL_GAS, XAU, XAG) truncates to
-``(previous_date, folder_date]``. Monthly-interval group (COPPER, ALUMINUM,
-WHEAT, CORN, COTTON, SUGAR, COFFEE, ALL_COMMODITIES) truncates to
-``Date >= folder_date - 1 year``.
+``(min(previous_date, folder_date - PRICE_WINDOW_DAYS), folder_date]``;
+the trailing-week floor lets a successful run recover the last few days
+even after intermediate failures, so daily folders overlap by up to
+``PRICE_WINDOW_DAYS - 1`` days and downstream consumers must dedup on
+``(symbol, Date)``. Monthly-interval group (COPPER, ALUMINUM, WHEAT,
+CORN, COTTON, SUGAR, COFFEE, ALL_COMMODITIES) truncates to
+``Date >= folder_date - 1 year`` (unchanged).
 """
 
 import logging
@@ -22,7 +26,12 @@ from historical_data_setup._common import (
     read_catalog_symbols,
     symbol_parquet_name,
 )
-from daily_data_service._common import since_expr, window_expr, years_before
+from daily_data_service._common import (
+    price_window_lower,
+    since_expr,
+    window_expr,
+    years_before,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +228,8 @@ async def fetch_commodities(
     output_dir = daily_dir / _ASSET_TYPE
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    daily_window = window_expr("Date", previous_date, folder_date)
+    daily_lower = price_window_lower(previous_date, folder_date)
+    daily_window = window_expr("Date", daily_lower, folder_date)
     monthly_since = since_expr("Date", years_before(folder_date, 1))
 
     total = catalog.height
@@ -237,14 +247,14 @@ async def fetch_commodities(
                 symbol, _GOLD_SILVER_MAP[symbol],
                 api_key, session, rate_limiter, issue_tracker,
                 out_path, daily_window,
-                f"in ({previous_date}, {folder_date}]",
+                f"in ({daily_lower}, {folder_date}]",
             )
         elif symbol in _DAILY_SYMBOLS:
             await _fetch_standard(
                 symbol, "daily",
                 api_key, session, rate_limiter, issue_tracker,
                 out_path, daily_window,
-                f"in ({previous_date}, {folder_date}]",
+                f"in ({daily_lower}, {folder_date}]",
             )
         elif symbol in _MONTHLY_SYMBOLS:
             await _fetch_standard(

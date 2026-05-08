@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 REQUIRED_ETFS = ("SPY", "MDY", "EWJ", "EWU", "DIA", "QQQ")
 QQQ_PROFILE_FILE = symbol_parquet_name("etfs", "QQQ")
 INTRADAY_MIN_ROWS = 390
-DAILY_EXPECTED_ROWS = 1
+DAILY_MIN_ROWS = 1
 MAX_NULL_RATIO = 0.01
 _PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 
@@ -86,11 +86,11 @@ def _check_daily(path: Path) -> dict:
     df = pl.read_parquet(path)
     rows = df.height
     max_date = _max_date(df)
-    ok = rows == DAILY_EXPECTED_ROWS
+    ok = rows >= DAILY_MIN_ROWS
     return {
         "ok": ok,
         "reason": (
-            None if ok else f"rows={rows} != {DAILY_EXPECTED_ROWS}"
+            None if ok else f"rows={rows} < {DAILY_MIN_ROWS}"
         ),
         "rows": rows,
         "max_date": max_date,

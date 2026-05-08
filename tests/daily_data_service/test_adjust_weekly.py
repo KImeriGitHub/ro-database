@@ -120,38 +120,165 @@ def test_resolve_dates_raises_on_empty_daily_dir(workdir: Path):
 
 
 # ---------------------------------------------------------------------------
-# _load_retry_plan
+# _build_retry_plan
 # ---------------------------------------------------------------------------
 
 
-def test_load_retry_plan_groups_and_preserves_global_sentinel(workdir: Path):
-    """GLOBAL sentinel for sentiment must survive the groupby so the caller
-    can detect the need for a full sentiment rerun."""
-    day = workdir / "daily" / "2026-04-18"
-    day.mkdir(parents=True)
-    report_path = day / "ingestion_report.parquet"
-    _write_report(report_path, [
-        {"symbol": "AAPL",   "asset_type": "stocks", "endpoint": "prices_daily"},
-        {"symbol": "AAPL",   "asset_type": "stocks", "endpoint": "income_statement"},
-        {"symbol": "MSFT",   "asset_type": "stocks", "endpoint": "income_statement"},
-        {"symbol": "GLOBAL", "asset_type": "stocks", "endpoint": "sentiment"},
-        {"symbol": "NVDA",   "asset_type": "stocks", "endpoint": "sentiment"},
-        {"symbol": "SPY",    "asset_type": "etfs",   "endpoint": "prices"},
+def _write_catalog(catalog_dir: Path, asset_type: str, symbols: list[str]) -> None:
+    """Minimal catalog parquet sufficient to drive ``_load_symbol_asset_type_map``."""
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame({"symbol": symbols}).write_parquet(
+        catalog_dir / f"{asset_type}.parquet", compression="zstd",
+    )
+
+
+def _write_yield_status(
+    catalog_dir: Path, rows: list[dict], cols: list[str],
+) -> None:
+    """Write a yield_status.parquet from rows like
+    ``{"symbol": "AAPL", "prices": False, ...}``. Missing values default to None.
+    """
+    catalog_dir.mkdir(parents=True, exist_ok=True)
+    schema: dict = {"symbol": pl.Utf8}
+    for c in cols:
+        schema[c] = pl.Boolean
+    schema["date"] = pl.Date
+
+    data: dict = {"symbol": [r["symbol"] for r in rows]}
+    for c in cols:
+        data[c] = [r.get(c) for r in rows]
+    data["date"] = [date(2026, 4, 18)] * len(rows)
+
+    pl.DataFrame(data, schema=schema).write_parquet(
+        catalog_dir / "yield_status.parquet", compression="zstd",
+    )
+
+
+def test_build_retry_plan_unions_reports_and_yield_status(workdir: Path):
+    """Plan = union of (in-window ingestion reports) and (yield_status False
+    cells). Out-of-window reports are ignored."""
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+
+    _write_report(daily / "2026-04-15" / "ingestion_report.parquet", [
+        {"symbol": "AAPL", "asset_type": "stocks", "endpoint": "prices_daily"},
+    ])
+    _write_report(daily / "2026-04-18" / "ingestion_report.parquet", [
+        {"symbol": "MSFT", "asset_type": "stocks", "endpoint": "income_statement"},
+    ])
+    # Out-of-window (== previous_date) report must be ignored.
+    _write_report(daily / "2026-04-11" / "ingestion_report.parquet", [
+        {"symbol": "NVDA", "asset_type": "stocks", "endpoint": "prices_daily"},
     ])
 
-    plan, df = aw._load_retry_plan(report_path)
+    _write_catalog(catalog, "stocks", ["AAPL", "MSFT", "GOOG"])
+    _write_yield_status(catalog, [
+        {"symbol": "AAPL", "insider": False, "prices": True},
+        {"symbol": "GOOG", "prices": False},
+    ], cols=["prices", "insider"])
 
-    assert df.height == 6
-    assert plan[("stocks", "prices_daily")]     == {"AAPL"}
-    assert plan[("stocks", "income_statement")] == {"AAPL", "MSFT"}
-    assert plan[("stocks", "sentiment")]        == {"GLOBAL", "NVDA"}
-    assert plan[("etfs",   "prices")]           == {"SPY"}
+    plan, fd_report, full_rerun = aw._build_retry_plan(
+        catalog, daily,
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+
+    assert plan == {
+        ("stocks", "prices_daily"):     {"AAPL"},
+        ("stocks", "income_statement"): {"MSFT"},
+        ("stocks", "insider"):          {"AAPL"},
+        ("stocks", "prices"):           {"GOOG"},
+    }
+    assert full_rerun is False
+    assert fd_report.height == 1  # only the folder_date report
 
 
-def test_load_retry_plan_missing_file_returns_empty(workdir: Path):
-    plan, df = aw._load_retry_plan(workdir / "daily" / "nope.parquet")
+def test_build_retry_plan_global_sentiment_row_sets_full_rerun(workdir: Path):
+    """A GLOBAL row in any in-window report triggers ``sentiment_full_rerun``;
+    sentiment never appears as a per-symbol plan entry."""
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_report(daily / "2026-04-15" / "ingestion_report.parquet", [
+        {"symbol": "GLOBAL", "asset_type": "stocks", "endpoint": "sentiment"},
+    ])
+
+    plan, _fd, full_rerun = aw._build_retry_plan(
+        catalog, daily,
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+
+    assert full_rerun is True
+    assert ("stocks", "sentiment") not in plan
+
+
+def test_build_retry_plan_per_symbol_sentiment_row_is_dropped(workdir: Path):
+    """Non-GLOBAL sentiment rows in reports are silently dropped: sentiment
+    is global, per-symbol fetches don't exist."""
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_report(daily / "2026-04-18" / "ingestion_report.parquet", [
+        {"symbol": "NVDA", "asset_type": "stocks", "endpoint": "sentiment"},
+    ])
+
+    plan, _fd, full_rerun = aw._build_retry_plan(
+        catalog, daily,
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+
     assert plan == {}
-    assert df.height == 0
+    assert full_rerun is False
+
+
+def test_build_retry_plan_yield_status_sentiment_column_excluded(workdir: Path):
+    """yield_status ``sentiment`` False cells are NOT a trigger source --
+    the global rerun is gated only on GLOBAL ingestion-report rows."""
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_catalog(catalog, "stocks", ["AAPL"])
+    _write_yield_status(catalog, [
+        {"symbol": "AAPL", "sentiment": False},
+    ], cols=["sentiment"])
+
+    plan, _fd, full_rerun = aw._build_retry_plan(
+        catalog, daily,
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+
+    assert plan == {}
+    assert full_rerun is False
+
+
+def test_build_retry_plan_direct_column_maps_to_asset_type_endpoint(workdir: Path):
+    """yield_status ``direct=False`` on a forex/indices symbol becomes a
+    plan entry whose endpoint name is the symbol's asset_type."""
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_catalog(catalog, "forex", ["EURUSD"])
+    _write_catalog(catalog, "indices", ["DJI"])
+    _write_yield_status(catalog, [
+        {"symbol": "EURUSD", "direct": False},
+        {"symbol": "DJI",    "direct": False},
+    ], cols=["direct"])
+
+    plan, _fd, _full = aw._build_retry_plan(
+        catalog, daily,
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+
+    assert plan == {
+        ("forex",   "forex"):   {"EURUSD"},
+        ("indices", "indices"): {"DJI"},
+    }
+
+
+def test_build_retry_plan_missing_inputs_returns_empty(workdir: Path):
+    """No yield_status and no in-window reports -> empty plan, no rerun."""
+    plan, fd, full_rerun = aw._build_retry_plan(
+        workdir / "catalog", workdir / "daily",
+        previous_date=date(2026, 4, 11), folder_date=date(2026, 4, 18),
+    )
+    assert plan == {}
+    assert fd.height == 0
+    assert full_rerun is False
 
 
 # ---------------------------------------------------------------------------

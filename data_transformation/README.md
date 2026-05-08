@@ -119,6 +119,35 @@ Phases 5-6c ignore it) and dropped at the end of the per-symbol
 iteration along with every other intermediate. It is never written to
 disk.
 
+### Source overlap and dedup (non-optional)
+
+Every daily-interval endpoint in the daily ingest (`prices`,
+`prices_daily`, `forex`, `cryptocurrencies`, `indices`, the daily group
+of `commodities`, the daily indicators of `economic`) intentionally
+captures a trailing 7-day window per run
+(`(min(previous_date, folder_date - 7d), folder_date]`), so consecutive
+`daily/<date>/.../<symbol>.parquet` files for the same symbol overlap by
+up to 6 days. This is by design: it lets a single successful daily run
+recover the last few days of bars even when intermediate runs failed for
+that symbol. See
+[daily_data_service/README.md](../daily_data_service/README.md#truncation-rules).
+
+**Every frame builder that concats across daily folders MUST dedup**, or
+the output frames will contain duplicate `(Date)` / `(Datetime)` rows.
+The canonical place is step 3 of each per-frame section below
+("Deduplicate on `Date`/`Datetime`"), which delegates to
+[`frames/_dedup.py:dedup_with_discrepancy_log`](frames/_dedup.py) and
+logs `dedup_value_discrepancy_under_1pct` / `over_1pct` rows to
+`transformation_report.parquet` whenever overlapping rows disagree on a
+Float32 field. Skipping or replacing this step with a naive concat is a
+correctness bug; cross-folder overlap will reach downstream consumers.
+
+The remaining endpoints (fundamentals, `insider`, `sentiment`,
+`etf_profile`, monthly `commodities`, non-daily `economic`) do not use
+the 7-day floor, but their builders still dedup -- historical and daily
+snapshots can independently disagree on a value, and any append-only
+restatement detection produces overlapping rows the same way.
+
 ### Dtype discipline
 
 Every per-frame builder ends with an explicit cast/select against

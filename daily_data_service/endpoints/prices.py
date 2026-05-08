@@ -2,7 +2,12 @@
 
 Fetches a single response with no ``month`` parameter (AV returns the trailing
 30 days when ``outputsize=full`` and no month is specified), then truncates
-client-side to ``(previous_date, folder_date]``.
+client-side to ``(min(previous_date, folder_date - PRICE_WINDOW_DAYS),
+folder_date]``. The trailing-week floor lets a successful run recover the
+last few days of bars even if intermediate runs failed for a symbol;
+neighbouring daily folders therefore overlap by up to
+``PRICE_WINDOW_DAYS - 1`` days and downstream consumers must dedup on
+``(symbol, Datetime)``.
 """
 
 import logging
@@ -12,6 +17,7 @@ from pathlib import Path
 import aiohttp
 import polars as pl
 
+from daily_data_service._common import price_window_lower
 from historical_data_setup._common import (
     AV_BASE,
     AVResponseError,
@@ -135,7 +141,8 @@ async def fetch_intraday_prices(
                 "Volume": pl.Float32,
             })
             .filter(
-                (pl.col("Date").dt.date() > previous_date)
+                (pl.col("Date").dt.date()
+                    > price_window_lower(previous_date, folder_date))
                 & (pl.col("Date").dt.date() <= folder_date)
             )
             .sort("Date")
@@ -144,9 +151,10 @@ async def fetch_intraday_prices(
 
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
+            window_lower = price_window_lower(previous_date, folder_date)
             logger.info(
                 f"  prices ({asset_type}): {symbol} saved empty frame "
-                f"(no bars in ({previous_date}, {folder_date}])"
+                f"(no bars in ({window_lower}, {folder_date}])"
             )
         else:
             logger.info(f"  prices ({asset_type}): {symbol} saved {df.height} rows")

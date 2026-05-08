@@ -59,12 +59,14 @@ def _bar(date_str: str, close: float = 100.0) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_truncates_to_window_strictly_after_previous_strictly_through_folder(
+def test_truncates_to_seven_day_window_through_folder_date(
     tmp_path, fast_limiter,
 ):
-    """``window_expr`` is ``previous_date < Date <= folder_date``. Bars equal
-    to ``previous_date`` are dropped (already covered by the prior daily run);
-    bars equal to ``folder_date`` are kept."""
+    """The window is ``(min(previous_date, folder_date - 7d), folder_date]``.
+    With ``previous_date=2026-04-14`` and ``folder_date=2026-04-17``, the
+    floor pushes the lower bound back to ``2026-04-10`` (7 days before
+    folder), so bars 04-11..04-17 are kept and only ``<= 04-10`` / ``> 04-17``
+    are dropped."""
     catalog = tmp_path / "catalog"
     daily = tmp_path / "daily"
     _make_catalog(catalog, "stocks", ["AAPL"])
@@ -73,8 +75,11 @@ def test_truncates_to_window_strictly_after_previous_strictly_through_folder(
         return {
             "Meta Data": {"5. Time Zone": "US/Eastern"},
             "Time Series (Daily)": {
-                "2026-04-13": _bar("2026-04-13"),  # < previous, dropped
-                "2026-04-14": _bar("2026-04-14"),  # == previous, dropped (strict <)
+                "2026-04-09": _bar("2026-04-09"),  # < window_lower, dropped
+                "2026-04-10": _bar("2026-04-10"),  # == window_lower, dropped (strict <)
+                "2026-04-11": _bar("2026-04-11"),  # in window (within 7d floor)
+                "2026-04-13": _bar("2026-04-13"),  # in window
+                "2026-04-14": _bar("2026-04-14"),  # in window (no longer == lower)
                 "2026-04-15": _bar("2026-04-15"),  # in window
                 "2026-04-16": _bar("2026-04-16"),  # in window
                 "2026-04-17": _bar("2026-04-17"),  # == folder, kept
@@ -94,7 +99,50 @@ def test_truncates_to_window_strictly_after_previous_strictly_through_folder(
 
     df = pl.read_parquet(daily / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
     assert df["Date"].to_list() == [
-        date(2026, 4, 15), date(2026, 4, 16), date(2026, 4, 17),
+        date(2026, 4, 11),
+        date(2026, 4, 13),
+        date(2026, 4, 14),
+        date(2026, 4, 15),
+        date(2026, 4, 16),
+        date(2026, 4, 17),
+    ]
+
+
+def test_truncates_uses_previous_date_when_older_than_seven_day_floor(
+    tmp_path, fast_limiter,
+):
+    """When ``previous_date`` is older than ``folder_date - 7d``, the window
+    keeps using ``previous_date`` so a long outage's worth of bars is
+    captured (the floor only widens the window, never narrows it)."""
+    catalog = tmp_path / "catalog"
+    daily = tmp_path / "daily"
+    _make_catalog(catalog, "stocks", ["AAPL"])
+
+    async def fake_fetch(url, session, rate_limiter, max_retries=3):
+        return {
+            "Meta Data": {"5. Time Zone": "US/Eastern"},
+            "Time Series (Daily)": {
+                "2026-03-31": _bar("2026-03-31"),  # == previous, dropped (strict <)
+                "2026-04-01": _bar("2026-04-01"),  # in window
+                "2026-04-09": _bar("2026-04-09"),  # in window
+                "2026-04-17": _bar("2026-04-17"),  # == folder, kept
+                "2026-04-18": _bar("2026-04-18"),  # > folder, dropped
+            },
+        }
+
+    tracker = IssueTracker()
+    with patch.object(ep, "fetch_av_json", side_effect=fake_fetch):
+        _run(ep.fetch_daily_prices(
+            catalog_dir=catalog, daily_dir=daily, api_key="fake",
+            session=None, rate_limiter=fast_limiter, issue_tracker=tracker,
+            asset_type="stocks",
+            folder_date=date(2026, 4, 17),
+            previous_date=date(2026, 3, 31),  # 17 days back, older than 7d floor
+        ))
+
+    df = pl.read_parquet(daily / "stocks" / "prices_daily" / "stocks_AAPL.parquet")
+    assert df["Date"].to_list() == [
+        date(2026, 4, 1), date(2026, 4, 9), date(2026, 4, 17),
     ]
 
 

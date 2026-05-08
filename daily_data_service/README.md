@@ -78,8 +78,8 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 
 | Endpoint | Asset types | AV call | Truncation |
 |---|---|---|---|
-| `prices` | stocks, etfs | `TIME_SERIES_INTRADAY`, `interval=1min`, `adjusted=false`, `outputsize=full` (no `month` param) | `Date` in `(previous-date, folder-date]` |
-| `prices_daily` | stocks, etfs | `TIME_SERIES_DAILY_ADJUSTED`, **`outputsize=compact`** | `Date` in `(previous-date, folder-date]` |
+| `prices` | stocks, etfs | `TIME_SERIES_INTRADAY`, `interval=1min`, `adjusted=false`, `outputsize=full` (no `month` param) | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
+| `prices_daily` | stocks, etfs | `TIME_SERIES_DAILY_ADJUSTED`, **`outputsize=compact`** | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
 | `income_statement` | stocks | `INCOME_STATEMENT` | `fiscalDateEnding >= folder-date - 5 years` |
 | `balance_sheet` | stocks | `BALANCE_SHEET` | `fiscalDateEnding >= folder-date - 5 years` |
 | `cash_flow` | stocks | `CASH_FLOW` | `fiscalDateEnding >= folder-date - 5 years` |
@@ -88,18 +88,19 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 | `insider` | stocks | `INSIDER_TRANSACTIONS` | `transactionDate >= folder-date - 1 year` |
 | `sentiment` | stocks | `NEWS_SENTIMENT`, backward pagination | `time_from = previous-date 00:00 UTC` (INCLUDING) to current UTC time |
 | `etf_profile` | etfs | `ETF_PROFILE` | no truncation; `date` column set to folder-date |
-| `forex` | forex | `FX_DAILY`, **`outputsize=compact`** | `Date` in `(previous-date, folder-date]` |
-| `cryptocurrencies` | cryptocurrencies | `DIGITAL_CURRENCY_DAILY` | `Date` in `(previous-date, folder-date]` |
-| `commodities` (daily group: WTI, BRENT, NATURAL_GAS, XAU, XAG) | commodities | `interval=daily` or `GOLD_SILVER_HISTORY` | `Date` in `(previous-date, folder-date]` |
+| `forex` | forex | `FX_DAILY`, **`outputsize=compact`** | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
+| `cryptocurrencies` | cryptocurrencies | `DIGITAL_CURRENCY_DAILY` | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
+| `commodities` (daily group: WTI, BRENT, NATURAL_GAS, XAU, XAG) | commodities | `interval=daily` or `GOLD_SILVER_HISTORY` | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
 | `commodities` (monthly group: COPPER, ALUMINUM, WHEAT, CORN, COTTON, SUGAR, COFFEE, ALL_COMMODITIES) | commodities | `interval=monthly` | `Date >= folder-date - 1 year` |
-| `economic` (daily indicators: TREASURY_YIELD_*, FEDERAL_FUNDS_RATE) | economic | `interval=daily` | `Date` in `(previous-date, folder-date]` |
+| `economic` (daily indicators: TREASURY_YIELD_*, FEDERAL_FUNDS_RATE) | economic | `interval=daily` | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
 | `economic` (non-daily indicators: REAL_GDP, CPI, ...) | economic | (default interval per indicator) | `Date >= folder-date - 1 year` |
-| `indices` | indices | `INDEX_DATA`, `interval=daily` | `Date` in `(previous-date, folder-date]` |
+| `indices` | indices | `INDEX_DATA`, `interval=daily` | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
 
 ### Notes on specific endpoints
 
-- **prices (intraday)**: the `month` parameter is intentionally **omitted**. With `outputsize=full`, Alpha Vantage returns the trailing 30 days of 1-min bars regardless of month boundary, which cleanly covers any reasonable `(previous-date, folder-date]` gap including cross-month rollovers.
-- **prices_daily / forex `outputsize=compact`**: returns the trailing ~100 data points, which covers any reasonable previous-date-to-folder-date gap and saves payload.
+- **prices (intraday)**: the `month` parameter is intentionally **omitted**. With `outputsize=full`, Alpha Vantage returns the trailing 30 days of 1-min bars regardless of month boundary, which cleanly covers any reasonable window including cross-month rollovers.
+- **7-day floor on every daily-interval endpoint**: the lower bound is `min(previous-date, folder-date - 7d)` for `prices`, `prices_daily`, `forex`, `cryptocurrencies`, `indices`, the daily group of `commodities`, and the daily indicators of `economic`. The trailing-week floor lets a successful run recover the last few days of bars even when intermediate runs failed for a particular symbol. `previous-date` is preserved when it is older than `folder-date - 7d` (long outage), so the window only widens, never narrows. Consequence: neighbouring `daily/<date>/` parquets for these endpoints overlap by up to 6 days; aggregators across daily folders must dedup on `(symbol, Date)` (the `data_transformation` frames already do, via `dedup_with_discrepancy_log`). Monthly commodities and non-daily economic indicators keep their existing 1-year windows.
+- **prices_daily / forex `outputsize=compact`**: returns the trailing ~100 data points, which comfortably covers the 7-day floor and saves payload.
 - **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to the start of previous-date, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `stocks_SYMBOL.parquet` files for active symbols (same logic as historical).
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly / non-daily rows get a 1-year window because `(previous-date, folder-date]` would usually be empty.
@@ -247,9 +248,12 @@ A second pass over the latest daily folder, intended for Saturday evening. It re
 
 ### What gets re-queried
 
-Only `(symbol, asset_type, endpoint)` triples present in `daily/<folder_date>/ingestion_report.parquet` are retried. **Pairs that worked fine on `folder_date` are not touched** -- their existing parquet files stay intact.
+The retry plan is the union of two sources, both keyed on `(symbol, asset_type, endpoint)`:
 
-For each retried triple, the endpoint's built-in `out_path.exists(): continue` guard does the right thing:
+1. **`yield_status.parquet` False cells.** Every `(symbol, endpoint_column)` whose value is **explicitly `False`** in `catalog/yield_status.parquet`. The asset_type is recovered by re-joining `symbol` against the per-asset-type catalog parquets. The `direct` column maps to the symbol's own asset_type as the endpoint name (e.g. a forex symbol with `direct=False` becomes `(symbol, forex, forex)`). Null cells stay out of the plan.
+2. **Ingestion reports across `(previous_date, folder_date]`.** Every `(symbol, asset_type, endpoint)` row in any `daily/<d>/ingestion_report.parquet` for `d` strictly greater than `previous_date` and at most `folder_date`. Older-date reports are read but never modified -- `daily/` stays append-only beyond `folder_date`.
+
+All retried results land under `daily/<folder_date>/`, regardless of which source surfaced them. **Pairs that worked fine and already have a valid file on `folder_date` are not touched** -- the per-endpoint `out_path.exists(): continue` guard short-circuits them at dispatch time:
 
 - **Non-fundamental endpoints**: skip when `<prefix>_SYMBOL.parquet` already exists in the folder-date output dir (e.g. `stocks_AAPL.parquet`, `etfs_SPY.parquet`; see [historical_data_setup/README.md](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table).
 - **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `<prefix>_SYMBOL_annual.parquet` and `<prefix>_SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
@@ -263,20 +267,20 @@ Every `fetch_*` in [`endpoints/`](endpoints/) accepts a `symbols_filter: set[str
 
 ### Sentiment is all-or-nothing
 
-Sentiment is one global paginated fetch, not per-symbol. Any sentiment issue in the ingestion report -- including the sentinel `GLOBAL` symbol used for global-fetch failures -- triggers a full sentiment rerun. Before `fetch_sentiment` is called, every file under `stocks/sentiment/` (the `ALL_MESSAGES.parquet` and each `stocks_SYMBOL.parquet`) is renamed to `*.pre_weekly` so the endpoint's existence guards don't short-circuit the rerun. Previous `.pre_weekly` siblings from an earlier weekend pass are overwritten.
+Sentiment is one global paginated fetch, not per-symbol. The full rerun is triggered **only by a `GLOBAL` row in any `daily/<d>/ingestion_report.parquet` for `d` in `(previous_date, folder_date]`**. False cells on the `sentiment` column of `yield_status.parquet` are **not** a trigger source -- per-symbol sentiment cells reflect coverage of the global pull, not per-symbol fetch failures, so they do not warrant repaging the entire feed. Before `fetch_sentiment` is called, every file under `stocks/sentiment/` (the `ALL_MESSAGES.parquet` and each `stocks_SYMBOL.parquet`) is renamed to `*.pre_weekly` so the endpoint's existence guards don't short-circuit the rerun. Previous `.pre_weekly` siblings from an earlier weekend pass are overwritten.
 
 `fetch_sentiment` then paginates from the wider `previous_date 00:00 UTC` back up to now, writes a fresh `ALL_MESSAGES.parquet`, and splits per-symbol files for every active stock.
 
 ### Merge-in-place ingestion report
 
-After the retry tasks finish:
+After the retry tasks finish, only `daily/<folder_date>/ingestion_report.parquet` is rewritten -- older date folders' reports stay untouched (append-only):
 
-1. Every row in `daily/<folder_date>/ingestion_report.parquet` whose `(symbol, asset_type, endpoint)` triple was retried is dropped. For sentiment, **all** `endpoint=sentiment` rows for `asset_type=stocks` are dropped regardless of symbol (since the rerun replaces the whole set).
+1. Every row in `daily/<folder_date>/ingestion_report.parquet` whose `(symbol, asset_type, endpoint)` triple was retried is dropped. Triples sourced exclusively from `yield_status` False cells or from older-date reports won't have a row to drop here, and that is fine. For sentiment, **all** `endpoint=sentiment` rows for `asset_type=stocks` are dropped regardless of symbol (since the rerun replaces the whole set).
 2. Fresh issues recorded during this pass are appended.
 3. The merged frame is written back to the same path.
 4. `finalize_yield_status(catalog_dir, day_root, datetime.now(tz=ET))` rewrites `catalog/yield_status.parquet` from the merged report, so cells that had a structure/throttle/empty issue on the weekday run flip back to True if the weekend retry succeeded.
 
-The ingestion report only concerns the ALL_MESSAGES.parquet and thus the associated symbol is 'GLOBAL'.
+Fresh sentiment issues are logged against the sentinel `GLOBAL` symbol (the ingestion report only concerns `ALL_MESSAGES.parquet`).
 
 
 ### Monitoring report

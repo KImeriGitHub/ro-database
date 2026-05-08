@@ -53,7 +53,9 @@ def _make_commodities_catalog(catalog_dir: Path, symbols: list[str]) -> None:
 
 def test_daily_symbol_uses_interval_daily_and_window_truncation(tmp_path, fast_limiter):
     """WTI -> ``function=WTI&interval=daily``. Window is
-    ``(previous_date, folder_date]``."""
+    ``(min(previous_date, folder_date - 7d), folder_date]``: with
+    ``previous_date=2026-04-14`` and ``folder_date=2026-04-17`` the floor
+    pushes the lower bound back to ``2026-04-10``."""
     catalog = tmp_path / "catalog"
     daily = tmp_path / "daily"
     _make_commodities_catalog(catalog, ["WTI"])
@@ -67,7 +69,9 @@ def test_daily_symbol_uses_interval_daily_and_window_truncation(tmp_path, fast_l
             "interval": "daily",
             "unit": "dollars per barrel",
             "data": [
-                {"date": "2026-04-13", "value": "80.0"},  # < prev, dropped
+                {"date": "2026-04-09", "value": "78.0"},  # < lower, dropped
+                {"date": "2026-04-10", "value": "79.0"},  # == lower, dropped (strict <)
+                {"date": "2026-04-13", "value": "80.0"},  # in window (within 7d floor)
                 {"date": "2026-04-15", "value": "81.0"},  # in window
                 {"date": "2026-04-17", "value": "82.0"},  # == folder, kept
                 {"date": "2026-04-20", "value": "83.0"},  # > folder, dropped
@@ -87,9 +91,11 @@ def test_daily_symbol_uses_interval_daily_and_window_truncation(tmp_path, fast_l
     assert "function=WTI" in captured_urls[0]
     assert "interval=daily" in captured_urls[0]
     df = pl.read_parquet(daily / "commodities" / "commodities_WTI.parquet")
-    assert df["Date"].to_list() == [date(2026, 4, 15), date(2026, 4, 17)]
-    assert df["value"].to_list() == pytest.approx([81.0, 82.0])
-    assert df["unit"].to_list() == ["dollars per barrel"] * 2
+    assert df["Date"].to_list() == [
+        date(2026, 4, 13), date(2026, 4, 15), date(2026, 4, 17),
+    ]
+    assert df["value"].to_list() == pytest.approx([80.0, 81.0, 82.0])
+    assert df["unit"].to_list() == ["dollars per barrel"] * 3
 
 
 def test_monthly_symbol_uses_interval_monthly_and_one_year_cutoff(tmp_path, fast_limiter):

@@ -1,7 +1,12 @@
 """Daily pull of daily adjusted prices (TIME_SERIES_DAILY_ADJUSTED) for stocks/ETFs.
 
 Uses ``outputsize=compact`` (trailing ~100 data points), then truncates
-client-side to ``(previous_date, folder_date]``.
+client-side to ``(min(previous_date, folder_date - PRICE_WINDOW_DAYS),
+folder_date]``. The trailing-week floor lets a successful run recover
+the last few days of bars even if intermediate runs failed for a symbol;
+neighbouring daily folders therefore overlap by up to
+``PRICE_WINDOW_DAYS - 1`` days and downstream consumers must dedup on
+``(symbol, Date)``.
 """
 
 import logging
@@ -21,7 +26,7 @@ from historical_data_setup._common import (
     symbol_parquet_name,
     validate_meta_data,
 )
-from daily_data_service._common import window_expr
+from daily_data_service._common import price_window_lower, window_expr
 
 logger = logging.getLogger(__name__)
 
@@ -137,16 +142,21 @@ async def fetch_daily_prices(
                 "DividendAmount": pl.Float32,
                 "SplitCoefficient": pl.Float32,
             })
-            .filter(window_expr("Date", previous_date, folder_date))
+            .filter(window_expr(
+                "Date",
+                price_window_lower(previous_date, folder_date),
+                folder_date,
+            ))
             .sort("Date")
         )
         del rows
 
         df.write_parquet(out_path, compression="zstd")
         if df.height == 0:
+            window_lower = price_window_lower(previous_date, folder_date)
             logger.info(
                 f"  prices_daily ({asset_type}): {symbol} saved empty frame "
-                f"(no bars in ({previous_date}, {folder_date}])"
+                f"(no bars in ({window_lower}, {folder_date}])"
             )
         else:
             logger.info(f"  prices_daily ({asset_type}): {symbol} saved {df.height} rows")

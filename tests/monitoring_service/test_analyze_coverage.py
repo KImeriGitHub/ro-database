@@ -105,11 +105,27 @@ def test_intraday_null_ratio_per_column(folder_dir):
     assert "Open" in spy["intraday"]["reason"]
 
 
-def test_daily_must_have_exactly_one_row(folder_dir):
+def test_daily_passes_with_seven_day_window(folder_dir):
+    """The daily check is a coverage floor (``rows >= DAILY_MIN_ROWS``), not
+    a strict equality, since the 7-day prices_daily window can yield 1 to ~5
+    rows depending on holidays and how many trading days fall in the
+    window."""
     spy_fname = symbol_parquet_name("etfs", "SPY")
     _write_intraday(folder_dir / "etfs" / "prices" / spy_fname,
                     INTRADAY_MIN_ROWS)
-    _write_daily(folder_dir / "etfs" / "prices_daily" / spy_fname, 3)
+    _write_daily(folder_dir / "etfs" / "prices_daily" / spy_fname, 5)
+    out = analyze_coverage(folder_dir)
+    spy = next(r for r in out["etf_results"] if r["symbol"] == "SPY")
+    assert spy["daily"]["ok"]
+    assert spy["daily"]["rows"] == 5
+
+
+def test_daily_zero_rows_fails(folder_dir):
+    """A parquet that exists but has zero rows fails the coverage floor."""
+    spy_fname = symbol_parquet_name("etfs", "SPY")
+    _write_intraday(folder_dir / "etfs" / "prices" / spy_fname,
+                    INTRADAY_MIN_ROWS)
+    _write_daily(folder_dir / "etfs" / "prices_daily" / spy_fname, 0)
     out = analyze_coverage(folder_dir)
     spy = next(r for r in out["etf_results"] if r["symbol"] == "SPY")
     assert not spy["daily"]["ok"]
