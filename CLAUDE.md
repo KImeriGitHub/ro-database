@@ -6,9 +6,9 @@ Bias-aware market data infrastructure for algo trading research, backtesting, an
 
 ## Core concepts
 
-- **Point-in-time (PIT) fundamentals**: Homegrown daily snapshot pipeline captures fundamental data before restatements overwrite it. Raw data is append-only, never overwritten. Pre-collection history uses 90-day reporting lag approximation.
+- **Point-in-time (PIT) fundamentals**: Homegrown daily snapshot pipeline captures fundamental data before restatements overwrite it. Raw data is append-only, never overwritten. The PIT layer becomes productive once roughly 3 months of `daily/` snapshots have accumulated.
 - **Survivorship bias**: FirstRate Data (optional, one-time purchase) adds delisted securities that Alpha Vantage doesn't cover.
-- **Yield-aware API management**: Asset catalog tracks per-ticker, per-endpoint yield status. Empty tickers skipped daily, re-checked weekly. ~75 API calls/min budget.
+- **Yield-aware API management**: Asset catalog tracks per-ticker, per-endpoint yield status. Empty tickers skipped daily, re-checked weekly. Budget is `AV_RATE_LIMIT_PER_MIN` in `config/settings.py` (currently 70/min, under AV's 75/min cap).
 
 ## Architecture
 
@@ -48,7 +48,7 @@ tests/                        # Unified test directory (one subdir per service, 
 - `daily/` is append-only - past days are never modified
 - `catalog/` is the only mutable storage area
 - Raw data in GCS is processed once, then never modified
-- Historical data from FirstRate only overwrites Alpha Vantage data if overlapping data agrees; conflicts are flagged for review
+- FirstRate Data (when provided) takes precedence per symbol/endpoint for `prices/` and `prices_daily/`; AV is used for symbols/endpoints not covered by FRD. No FRD-vs-AV overlap comparison.
 - The yield status can tell what tickers are pulled daily
 - No em dashes in log messages
 

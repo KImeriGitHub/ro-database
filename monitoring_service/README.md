@@ -78,8 +78,10 @@ signal that something was written and as a baseline for GCS cost tracking.
 `historical_data_setup/_common.py` keeps a module-level counter that
 increments inside `fetch_av_json` once per HTTP request issued (including
 retries). Orchestrators reset it at the start of a run and pass the final
-value to the monitor. Reported as `api_calls.total_calls_made`. CLI
-invocations show `null` because a fresh process always sees zero.
+value to the monitor. Reported as `api_calls.total_calls_made` and useful
+for trend-tracking against the `AV_RATE_LIMIT_PER_MIN` budget (currently
+70/min, see [config/settings.py](../config/settings.py)). CLI invocations
+show `null` because a fresh process always sees zero.
 
 ### Delta vs previous report (`monitoring_service/diff.py`)
 

@@ -10,7 +10,7 @@ Manages all catalog parquet files that track the universe of tradeable assets an
 ## Usage
 
 ```bash
-# Initial setup (AV only, ~10k OVERVIEW queries for stock sectors, ~3 hours)
+# Initial setup (AV only, ~10k OVERVIEW queries for stock sectors, ~3 hours at AV_RATE_LIMIT_PER_MIN=70)
 python asset_catalog_service/init_catalog.py
 
 # Initial setup with FirstRate Data
@@ -54,7 +54,7 @@ update_all()
    - Log symbols present in AV but not in FirstRate CSV.
    - Log status disagreements for symbols present in both.
 4. For stock symbols still missing a sector after the merge: query `OVERVIEW` per symbol to get the sector. Normalize the sector value.
-5. If no FirstRate data provided: query AV `LISTING_STATUS` (2 calls) + `OVERVIEW` for every stock symbol (~10k+ API calls, ~3 hours at 75 calls/min).
+5. If no FirstRate data provided: query AV `LISTING_STATUS` (2 calls) + `OVERVIEW` for every stock symbol (~10k+ API calls, ~3 hours at `AV_RATE_LIMIT_PER_MIN` (currently 70 in [config/settings.py](../config/settings.py))).
 
 **Update (`update_catalog.py`):**
 - No FirstRate Data incorporation.

@@ -575,15 +575,28 @@ split and dividend that occurs after `t` in the source file. This is
 identical to how Yahoo Finance / CRSP "adjusted close" is published and
 is unavoidable while the schema retains a single `AdjClose` column.
 
-Daily snapshots from `PIT_COLLECTION_START_DATE` onward (see
-[config/settings.py](../config/settings.py)) *do* allow a
+Daily snapshots accumulated under `daily/<date>/` *do* allow a
 PIT-correct AdjClose - on snapshot date `d` only splits and dividends with
 `Date <= d` are knowable. Producing a per-snapshot-date AdjClose would
 require a different schema (e.g. an `(Date, snapshot_date)` keyed frame)
 and is deliberately out of scope here. The current frame is the best
 practical approximation; consumers that care about PIT-correct adjusted
-prices in the post-collection era should reconstruct them on demand from
-the raw `daily/*/<a>/prices_daily/` files.
+prices should reconstruct them on demand from the raw
+`daily/*/<a>/prices_daily/` files once enough daily folders have
+accumulated (see "PIT readiness" below).
+
+### PIT readiness
+
+The transformed frames in this module fold every available `daily/<date>/`
+snapshot into a single time series; nothing here knows about restatement
+boundaries. As a rule of thumb, treat the transformed dataset as
+**not yet productive** until at least roughly 3 months of `daily/<date>/`
+folders have accumulated. Below that, the PIT layer is too sparse for the
+fundamentals frames to reflect meaningful as-of-date behaviour, and most
+backtests that rely on `financials_quarterly` / `financials_annually`
+will silently behave as if the data had always been "latest available."
+There is no programmatic gate on this; it is a calendar-time prerequisite
+for users of the output.
 
 `shareprice_intraday` inherits the same bias via the daily factor it
 applies.

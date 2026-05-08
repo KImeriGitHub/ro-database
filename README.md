@@ -97,12 +97,12 @@ We run two daily snapshot pipelines:
 2. Stores each api return. Clearly indicates the `observed_date`
 3. Never overwrites previous values
 
-After several years of collection, this produces a genuine PIT dataset for the covered period. For the historical period before collection started, we apply a conservative 90-day reporting lag as an approximation.
+After several years of collection, this produces a genuine PIT dataset for the covered period. The pipeline becomes productive once roughly 3 months of `daily/` snapshots have accumulated; before that the PIT layer is too sparse to use directly. See [data_transformation/README.md](data_transformation/README.md#lookahead-bias-on-the-historical-period).
 
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). Raw files are append-only by default, with two narrow exceptions: the weekend pass may extend or rewrite content in the most-recent `daily/<date>/` folder (retried cells, refreshed ingestion report, added monitoring report), and FirstRate ingestion may overwrite Alpha Vantage history when overlapping values agree. This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). Raw files are append-only by default, with one narrow exception: the weekend pass may extend or rewrite content in the most-recent `daily/<date>/` folder (retried cells, refreshed ingestion report, added monitoring report). This is the permanent record.
 
 The one-time historical setup runs **locally** (it is a multi-hour job that benefits from local disk and easy restarts), and the resulting `historical/` and `catalog/` trees are pushed to the same GCS bucket once the setup finishes. After that initial upload, the container takes over for all ongoing daily work.
 
@@ -111,7 +111,7 @@ A local sync script downloads data from the GCS bucket to a local mirror. This l
 
 ### API call management
 
-**Rate limit:** Alpha Vantage allows **75 API calls per minute**. The pipeline's sliding-window limiter is configured to **74 calls per minute**, leaving 1 call as a safety margin. Some of this budget may need to be reserved for live trading hours (8:00 AM – 5:00 PM ET), so daily batch ingestion should be scheduled outside this window when possible.
+**Rate limit:** Alpha Vantage's premium plan caps usage at `AV_HARD_CAP_PER_MIN` calls per minute (75). The pipeline's sliding-window limiter is configured at `AV_RATE_LIMIT_PER_MIN` (currently 70 in [config/settings.py](config/settings.py)), leaving 5 calls as a safety margin for retries and catalog-side sweeps running in parallel. Some of this budget may need to be reserved for live trading hours (8:00 AM – 5:00 PM ET), so daily batch ingestion should be scheduled outside this window when possible.
 
 Full financial statements (income statement, balance sheet, cash flow) are saved as complete responses — no field filtering at ingestion time. To stay within Alpha Vantage API call budgets, the asset catalog tracks per-ticker, per-endpoint yield status:
 
@@ -210,15 +210,13 @@ All runtime dependencies (GCP client libraries, dataframe stack, HTML/parquet to
 
 5. **Homegrown PIT over paying for institutional data.** True PIT databases cost $5k–25k+/year. Our daily snapshot approach builds PIT organically. The trade-off is a cold-start period of several years.
 
-6. **Conservative reporting lag for pre-PIT history.** Before our collection started, we assume fundamentals weren't available until 90 days after the fiscal period end.
+6. **Append-only storage for raw data.** Fundamental data is never updated in place. New values create new rows. This is the foundation of the PIT layer.
 
-7. **Append-only storage for raw data.** Fundamental data is never updated in place. New values create new rows. This is the foundation of the PIT layer.
+7. **GCP container for fetching, local for processing.** Daily ingestion runs in a GCP Cloud container that writes to a single append-only GCS bucket. A local sync script mirrors the bucket contents for further processing and transformation. This separates the reliability of cloud-based fetching from the flexibility of local analytical workflows.
 
-8. **GCP container for fetching, local for processing.** Daily ingestion runs in a GCP Cloud container that writes to a single append-only GCS bucket. A local sync script mirrors the bucket contents for further processing and transformation. This separates the reliability of cloud-based fetching from the flexibility of local analytical workflows.
+8. **Raw data archived immutably in GCS.** Every API response is processed once into parquet and never modified. Schema violations are logged before data enters the pipeline.
 
-9. **Raw data archived immutably in GCS.** Every API response is processed once into parquet and never modified. Schema violations are logged before data enters the pipeline.
-
-10. **Yield-aware API call management.** The asset catalog tracks which tickers return data for each Alpha Vantage endpoint. Tickers with no data are skipped daily and re-checked weekly. This applies to financial statements, insider transactions, and news sentiment. Avoids wasting API calls on tickers where Alpha Vantage has no coverage.
+9. **Yield-aware API call management.** The asset catalog tracks which tickers return data for each Alpha Vantage endpoint. Tickers with no data are skipped daily and re-checked weekly. This applies to financial statements, insider transactions, and news sentiment. Avoids wasting API calls on tickers where Alpha Vantage has no coverage.
 
 ## Folder structure
 
@@ -228,7 +226,7 @@ secrets/                      # NOT IN GIT - optional locally; container pulls f
 └── gcs_credentials.json      # GCP service-account key (local dev only; Cloud Run uses ADC)
 
 config/
-├── settings.py               # Local paths, constants (PIT_COLLECTION_START_DATE)
+├── settings.py               # Local paths, AV rate-limit constants
 └── gcp.py                    # GCP project, region, bucket, instance config
 
 asset_catalog_service/        # Manages ticker/asset catalogs and API yield tracking
@@ -363,7 +361,7 @@ daily/
 
 **Key rules:**
 - `daily/` is append-only at the dated-folder level — each run creates or extends a `YYYY-MM-DD` folder. Only the most-recent dated folder may be extended (by the weekend pass, which can retry flagged cells, rewrite that folder's `ingestion_report.parquet`, and add the monitoring report); folders older than the most-recent are never modified.
-- `historical/` is initially populated from Alpha Vantage. If FirstRate Data is added later, it may modify existing tickers — but only if the overlapping data between Alpha Vantage and FirstRate Data agrees. If the intersecting data conflicts, the ticker is flagged for review rather than silently overwritten.
+- `historical/` is populated from Alpha Vantage by default. If FirstRate Data directories are provided to `setup_historical.py`, FRD CSVs are loaded for `prices/` and `prices_daily/` per symbol; symbols (or endpoints) not covered by FRD fall back to Alpha Vantage. The two endpoints are independent, so a symbol can use FRD for one and AV for the other. There is no FRD-vs-AV overlap comparison.
 - The `catalog/` directory is the only mutable area: yield status and ticker metadata are updated as coverage changes.
 - Only tickers with positive yield status (known to return data) are pulled daily. Empty/stopped tickers are re-checked weekly.
 
@@ -412,7 +410,7 @@ for the full breakdown.
   5. **Storage size.** Total bytes and file count under the analysed folder.
   6. **AV calls used.** A counter inside `fetch_av_json` reports how many
      HTTP requests this run actually issued, for trend-tracking against
-     the 74 calls/min budget. CLI invocations show `null` because a fresh
+     the `AV_RATE_LIMIT_PER_MIN` budget (currently 70/min). CLI invocations show `null` because a fresh
      process always sees zero.
   7. **Delta vs previous report.** Signed deltas of catalog status counts,
      yield True/False counts, ingestion issue totals, and coverage totals

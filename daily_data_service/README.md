@@ -22,7 +22,7 @@ FRD helpers (`frd_csv_path`), `generate_months`, and `fetch_fundamental_endpoint
 
 ```
 daily/
-├── .setup_started_at               # mtime = start datetime; drives folder-date across resumes
+├── .setup_started_at               # mtime = folder-date anchor; preserved across resumes
 └── YYYY-MM-DD/                     # folder-date (see "Date resolution" below)
     ├── stocks/
     │   ├── prices/                 # stocks_SYMBOL.parquet (1-min, truncated)
@@ -32,7 +32,7 @@ daily/
     │   ├── cash_flow/
     │   ├── earnings/
     │   ├── earnings_estimates/
-    │   ├── insider/                # stocks_SYMBOL.parquet, INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
+    │   ├── insider/                # stocks_SYMBOL.parquet (active stocks only), INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
     │   └── sentiment/              # ALL_MESSAGES.parquet + stocks_SYMBOL.parquet
     ├── etfs/
     │   ├── prices/
@@ -85,7 +85,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 | `cash_flow` | stocks | `CASH_FLOW` | `fiscalDateEnding >= folder-date - 5 years` |
 | `earnings` | stocks | `EARNINGS` | `fiscalDateEnding >= folder-date - 5 years` |
 | `earnings_estimates` | stocks | `EARNINGS_ESTIMATES` | `fiscalDateEnding >= folder-date - 5 years` |
-| `insider` | stocks | `INSIDER_TRANSACTIONS` | `transactionDate >= folder-date - 1 year` |
+| `insider` | stocks (active only) | `INSIDER_TRANSACTIONS` | `transactionDate >= folder-date - 1 year` |
 | `sentiment` | stocks | `NEWS_SENTIMENT`, backward pagination | `time_from = previous-date 00:00 UTC` (INCLUDING) to current UTC time |
 | `etf_profile` | etfs | `ETF_PROFILE` | no truncation; `date` column set to folder-date |
 | `forex` | forex | `FX_DAILY`, **`outputsize=compact`** | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
@@ -201,7 +201,7 @@ Operational notes:
 
 ## Cross-endpoint concurrency and rate limiting
 
-Identical to historical: one `asyncio` task per `(asset_type, endpoint)` pair, all sharing a single `aiohttp.ClientSession`, a single `RateLimiter` (sliding 60s window, 74 calls/min), and a single `IssueTracker`. See [`historical_data_setup/README.md`](../historical_data_setup/README.md#rate-limiting-and-cross-endpoint-execution).
+Identical to historical: one `asyncio` task per `(asset_type, endpoint)` pair, all sharing a single `aiohttp.ClientSession`, a single `RateLimiter` (sliding 60s window, sized to `AV_RATE_LIMIT_PER_MIN` from [config/settings.py](../config/settings.py); currently 70/min), and a single `IssueTracker`. See [`historical_data_setup/README.md`](../historical_data_setup/README.md#rate-limiting-and-cross-endpoint-execution).
 
 In practice, the daily call volume is a tiny fraction of a full historical pull (most endpoints do one call per symbol at most, and truncation is applied client-side after the fetch), so the budget is never the bottleneck -- wall-clock is dominated by intraday `prices` and `sentiment` paging.
 

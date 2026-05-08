@@ -419,14 +419,14 @@ The ingestion report only concerns the ALL_MESSAGES.parquet and thus the associa
 | Articles | 500,000 | ~40M |
 | Ticker rows | 687,590 | ~55M |
 | Time span covered | 1.2% (~73 days) | 100% (~16 years) |
-| Wall-clock time | 21 min | ~29 hours |
+| Wall-clock time | 21 min | < 1 h (as of 2026) |
 | Avg time per call | 2.56s | -- |
 | Avg history per call | 213 min (0.1 days) | -- |
-| Est. DataFrame RAM | -- | ~53 GB |
+| Est. DataFrame RAM | -- | < 1 GB (as of 2026) |
 
 These are upper-bound estimates -- older years have fewer articles per day, so calls cover more time and produce fewer rows. Actual totals will likely be lower.
 
-Sentiment is the heaviest endpoint in the historical setup -- both in RAM (~53 GB in-memory DataFrame) and in per-call wall-clock time (~2.5s/call due to multi-MB JSON payloads with nested text). Other endpoints return compact numeric data and are budget-bound rather than request-bound. Run sentiment on a machine with at least 128 GB RAM. Because sentiment alone consumes only ~24 of the 74 calls/min budget, co-schedule it with fast endpoints in the same `setup_historical.py` run (e.g. `--endpoints sentiment prices_daily income_statement`); the shared sliding-window rate limiter keeps the combined rate within budget.
+Sentiment is the slowest endpoint in the historical setup in per-call wall-clock time (~2.5s/call due to multi-MB JSON payloads with nested text). Other endpoints return compact numeric data and are budget-bound rather than request-bound. The full in-memory DataFrame is well under 1 GB as of 2026, so RAM is not a concern; wall-clock dominates instead. Because sentiment alone consumes only ~24 of the `AV_RATE_LIMIT_PER_MIN` budget (currently 70/min), co-schedule it with fast endpoints in the same `setup_historical.py` run (e.g. `--endpoints sentiment prices_daily income_statement`); the shared sliding-window rate limiter keeps the combined rate within budget.
 
 ### etf_profile (ETF_PROFILE)
 
@@ -681,7 +681,7 @@ The start time is recovered via the mtime of `historical/.setup_started_at`. The
 
 ### Sliding-window rate limiter
 
-A single `RateLimiter` is shared across every endpoint task in a run. It tracks timestamps of the last N calls in a trailing 60-second window (default `N = 74`, for a 1-call margin against AV's 75/min cap). `wait()` is async: it returns immediately if the window has room, otherwise it sleeps until the oldest timestamp falls out. An `asyncio.Lock` inside `wait()` serializes concurrent registrations so the budget is enforced globally, even when many coroutines hit it simultaneously.
+A single `RateLimiter` is shared across every endpoint task in a run. It tracks timestamps of the last N calls in a trailing 60-second window (default `N = AV_RATE_LIMIT_PER_MIN`, currently 70 in [config/settings.py](../config/settings.py); leaves a 5-call margin against AV's `AV_HARD_CAP_PER_MIN` of 75/min for retries and catalog-side sweeps). `wait()` is async: it returns immediately if the window has room, otherwise it sleeps until the oldest timestamp falls out. An `asyncio.Lock` inside `wait()` serializes concurrent registrations so the budget is enforced globally, even when many coroutines hit it simultaneously.
 
 AV throttle responses (`"Note"` / `"Information"` keys) trigger a 60s retry, up to 3 attempts. Persistent throttle failures are recorded as `av_throttle` issues in the ingestion report.
 
@@ -689,7 +689,7 @@ AV throttle responses (`"Note"` / `"Information"` keys) trigger a 60s retry, up 
 
 `setup_historical.py` builds one asyncio task per applicable `(asset_type, endpoint)` pair and runs them concurrently with `asyncio.gather` against a single `aiohttp.ClientSession`. Each endpoint function is `async` and processes its symbols sequentially **within the task**, but multiple tasks make HTTP calls in parallel under the shared rate limiter.
 
-This matters for slow endpoints. Intraday `prices` (~1.6 s/call) and `sentiment` (~2.5 s/call) cannot saturate the 75/min budget on their own. Running them alongside fast endpoints (`prices_daily`, `insider`, fundamentals, `forex`, `commodities`) keeps the API budget full without breaching the limit.
+This matters for slow endpoints. Intraday `prices` (~1.6 s/call) and `sentiment` (~2.5 s/call) cannot saturate the `AV_RATE_LIMIT_PER_MIN` budget on their own. Running them alongside fast endpoints (`prices_daily`, `insider`, fundamentals, `forex`, `commodities`) keeps the API budget full without breaching the limit.
 
 Good pairings for a single run:
 - `--endpoints sentiment prices_daily income_statement balance_sheet cash_flow` (sentiment is slow + writes `ALL_MESSAGES.parquet` first; fast fundamentals fill idle budget)
@@ -699,7 +699,7 @@ The concurrency design is asyncio-only: no threads, no multiprocessing. All coro
 
 ## Round-trip times per endpoint (measured 2026-04-11)
 
-Per-endpoint round-trip averages from catalog-sample speedtests, with full-catalog extrapolations at the 74 calls/min rate limit (1-call margin under AV's 75/min cap).
+Per-endpoint round-trip averages from catalog-sample speedtests, with full-catalog extrapolations at the `AV_RATE_LIMIT_PER_MIN` rate limit (currently 70 in [config/settings.py](../config/settings.py); 5-call margin under AV's `AV_HARD_CAP_PER_MIN` of 75/min). Extrapolated totals in the table below were computed against the previous 74/min ceiling and are slightly optimistic at the current 70/min setting.
 
 | Endpoint | Avg round-trip | Sample size | Full-catalog calls | Est. total time | Notes |
 |----------|---------------|-------------|-------------------|-----------------|-------|
@@ -711,8 +711,8 @@ Per-endpoint round-trip averages from catalog-sample speedtests, with full-catal
 | insider | 0.70s | 10 | 8,649 | ~1.9 h | Active stocks only; ~1,150 rows/call |
 | prices_daily | 0.70s | 30 | 22,623 | ~5.5 h | Stocks + ETFs combined; ~1,740 rows/call |
 | Fundamentals (5 endpoints) | 0.5s | 30 | 80,480 | ~12.4 h | 16,096 stocks x 5 endpoints |
-| sentiment | ~2.5s | 500 | ~40,000 | ~29 h | Global paginated fetch to 2010; multi-MB payloads |
-| prices (intraday) | ~1.6s | 20 | 2,223,345 | ~600 h | One call per symbol-month. Historical intraday uses FRD instead |
+| sentiment | ~2.5s | 500 | ~40,000 | < 1 h (as of 2026) | Global paginated fetch to 2010; multi-MB payloads |
+| prices (intraday) | ~1.6s | 20 | 2,223,345 | < 100 h (as of 2026) | One call per symbol-month. Historical intraday uses FRD instead |
 
 > `indices` is not included in this table: the `INDEX_DATA` endpoint is not accessible with our current API tier, so no timing data has been gathered yet.
 
@@ -734,7 +734,7 @@ Per-endpoint round-trip averages from catalog-sample speedtests, with full-catal
 | EARNINGS | 0.34s |
 | EARNINGS_ESTIMATES | 0.52s |
 
-Fundamentals and similar lightweight endpoints are rate-limit-bound: the ~0.8s/call budget ceiling dominates their own round-trip. Intraday prices and sentiment return large payloads where the HTTP request itself takes longer than one budget slot, so run alone they leave most of the 74/min budget unused. With cross-endpoint execution (see "Rate limiting and cross-endpoint execution" above), a slow endpoint can run alongside fast ones in the same run, sharing one rate limiter and one `aiohttp` session, so the combined call rate approaches 74/min without any single endpoint exceeding it. The full historical setup (all endpoints, no FRD) is dominated by intraday prices (~556 h); substituting FRD for `prices` drops the critical path to fundamentals (~18.4 h) plus sentiment (~29 h), which can now overlap in a single concurrent run.
+Fundamentals and similar lightweight endpoints are rate-limit-bound: the per-call budget ceiling (`60 / AV_RATE_LIMIT_PER_MIN` seconds, ~0.86s at 70/min) dominates their own round-trip. Intraday prices and sentiment return large payloads where the HTTP request itself takes longer than one budget slot, so run alone they leave most of the budget unused. With cross-endpoint execution (see "Rate limiting and cross-endpoint execution" above), a slow endpoint can run alongside fast ones in the same run, sharing one rate limiter and one `aiohttp` session, so the combined call rate approaches `AV_RATE_LIMIT_PER_MIN` without any single endpoint exceeding it. Substituting FRD for intraday `prices` drops the critical path to fundamentals (~18.4 h) plus sentiment (under 1 h as of 2026), which can overlap in a single concurrent run.
 
 ## Null handling
 
