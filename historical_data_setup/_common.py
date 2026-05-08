@@ -97,7 +97,7 @@ class AVResponseError(Exception):
 # to clear; transient 5xx / network failures clear far quicker, hence a short
 # pause to avoid burning the call budget while still letting the server breathe.
 AV_THROTTLE_BACKOFF_SEC = 60.0
-AV_TRANSIENT_BACKOFF_SEC = 5.0
+AV_TRANSIENT_BACKOFF_SEC = 10.0
 
 
 # Module-level counter incremented inside ``fetch_av_json`` once per HTTP
@@ -121,7 +121,7 @@ async def fetch_av_json(
     url: str,
     session: aiohttp.ClientSession,
     rate_limiter: RateLimiter,
-    max_retries: int = 3,
+    max_retries: int = 5,
 ) -> dict:
     """Fetch JSON from Alpha Vantage with rate limiting and retry.
 

@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from historical_data_setup import _common as hc
 from historical_data_setup._common import (
+    AV_THROTTLE_BACKOFF_SEC,
+    AV_TRANSIENT_BACKOFF_SEC,
     AVResponseError,
     IssueTracker,
     RateLimiter,
@@ -38,6 +40,8 @@ from historical_data_setup._common import (
     symbol_parquet_name,
     validate_meta_data,
 )
+
+_DEFAULT_MAX_RETRIES = 5
 from historical_data_setup.ensure_folders import HISTORICAL_TREE, ensure_historical_folders
 
 
@@ -564,13 +568,9 @@ def test_fetch_av_json_retries_on_throttle_then_succeeds():
 
 
 def test_fetch_av_json_raises_after_exhausting_retries():
-    """3 throttles in a row -> AVResponseError. Default ``max_retries=3``."""
+    """``max_retries`` throttles in a row -> AVResponseError."""
     reset_av_call_count()
-    sess = _ScriptedSession([
-        {"Note": "Throttled"},
-        {"Information": "Throttled again"},
-        {"Note": "Still throttled"},
-    ])
+    sess = _ScriptedSession([{"Note": f"Throttled {i}"} for i in range(_DEFAULT_MAX_RETRIES)])
     rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
 
     real_sleep = asyncio.sleep
@@ -582,8 +582,8 @@ def test_fetch_av_json_raises_after_exhausting_retries():
         with pytest.raises(AVResponseError, match="AV throttle"):
             _run(fetch_av_json("https://fake", sess, rl))
 
-    assert len(sess.requests) == 3
-    assert get_av_call_count() == 3
+    assert len(sess.requests) == _DEFAULT_MAX_RETRIES
+    assert get_av_call_count() == _DEFAULT_MAX_RETRIES
 
 
 def test_fetch_av_json_information_key_also_treated_as_throttle():
@@ -678,8 +678,8 @@ def test_fetch_av_json_retries_on_503_then_succeeds():
 
     assert out == {"Time Series (Daily)": {"2026-04-15": {}}}
     assert len(sess.requests) == 2
-    # Short transient backoff was used (not the 60s throttle backoff).
-    assert 5 in sleeps and 60 not in sleeps
+    # Short transient backoff was used (not the throttle backoff).
+    assert AV_TRANSIENT_BACKOFF_SEC in sleeps and AV_THROTTLE_BACKOFF_SEC not in sleeps
     assert get_av_call_count() == 2
 
 
@@ -688,7 +688,10 @@ def test_fetch_av_json_5xx_exhaustion_does_not_leak_api_key():
     message must mention the status code but MUST NOT contain the API key
     or the full URL -- this is the leak that prompted the fix."""
     reset_av_call_count()
-    sess = _StatusSession([(503, None), (502, None), (500, None)])
+    # Mix of 5xx codes; the final attempt's status is what surfaces in the error.
+    statuses = [503, 502, 500, 503, 500]
+    assert len(statuses) == _DEFAULT_MAX_RETRIES
+    sess = _StatusSession([(s, None) for s in statuses])
     rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
 
     real_sleep = asyncio.sleep
@@ -708,8 +711,8 @@ def test_fetch_av_json_5xx_exhaustion_does_not_leak_api_key():
     assert "apikey" not in msg
     assert "alphavantage.co" not in msg
     # The status code from the last attempt should still be useful for triage.
-    assert "500" in msg
-    assert get_av_call_count() == 3
+    assert str(statuses[-1]) in msg
+    assert get_av_call_count() == _DEFAULT_MAX_RETRIES
 
 
 def test_fetch_av_json_4xx_is_non_retryable_and_does_not_leak_api_key():
@@ -768,9 +771,7 @@ def test_fetch_av_json_retries_on_aiohttp_client_error_then_raises_sanitized():
     reset_av_call_count()
     leaky_msg = "https://www.alphavantage.co/query?apikey=SECRET_KEY_42"
     sess = _RaisingSession([
-        _aiohttp.ClientConnectionError(leaky_msg),
-        _aiohttp.ClientConnectionError(leaky_msg),
-        _aiohttp.ClientConnectionError(leaky_msg),
+        _aiohttp.ClientConnectionError(leaky_msg) for _ in range(_DEFAULT_MAX_RETRIES)
     ])
     rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
 
@@ -788,7 +789,7 @@ def test_fetch_av_json_retries_on_aiohttp_client_error_then_raises_sanitized():
     assert "apikey" not in msg
     assert "alphavantage.co" not in msg
     assert "ClientConnectionError" in msg
-    assert len(sess.requests) == 3
+    assert len(sess.requests) == _DEFAULT_MAX_RETRIES
 
 
 # ---------------------------------------------------------------------------
