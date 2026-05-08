@@ -1,9 +1,10 @@
 """Tests for Phase 4: shareprice_intraday for stocks and etfs.
 
 Covers source-column rename, concat of historical + multiple daily folders,
-dedup discrepancy logging, orphan-date drop, factor join math, null-Adj
-field counting (no row drop), schema exactness, and the combined
-orchestrator (``transform_stocks_or_etfs``) wiring for intraday.
+dedup discrepancy logging, orphan-date drop against the
+``shareprice_daily.Date`` axis, null-OHLCV field counting (no row drop),
+schema exactness, and the combined orchestrator
+(``transform_stocks_or_etfs``) wiring for intraday.
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ from data_transformation._common import (
 )
 from data_transformation.AssetData import StockData
 from data_transformation.AssetDataService import SCHEMAS
-from data_transformation.frames.price_daily import FACTOR_FRAME_SCHEMA
 from data_transformation.frames.price_intraday import (
     build_shareprice_intraday,
     _normalize_intraday_source,
@@ -91,16 +91,8 @@ def _write_daily_source(path: Path, rows: list[tuple]) -> None:
     ).write_parquet(path)
 
 
-def _make_factor(rows: list[tuple[date, float, float]]) -> pl.DataFrame:
-    """rows: (Date, adj_factor, cum_split)."""
-    return pl.DataFrame(
-        {
-            "Date": [r[0] for r in rows],
-            "adj_factor": [r[1] for r in rows],
-            "cum_split": [r[2] for r in rows],
-        },
-        schema=FACTOR_FRAME_SCHEMA,
-    )
+def _daily_dates(rows: list[date]) -> pl.Series:
+    return pl.Series("Date", rows, dtype=pl.Date)
 
 
 def _make_overview(rows: list[tuple[str, str, str, str]]) -> pl.DataFrame:
@@ -174,13 +166,10 @@ def test_concat_historical_plus_multiple_daily(tmp_path):
     _write_intraday_source(d1, [(datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101, 600)])
     _write_intraday_source(d2, [(datetime(2020, 1, 3, 9, 30), 102, 102, 102, 102, 700)])
 
-    factor = _make_factor([
-        (date(2020, 1, 1), 1.0, 1.0),
-        (date(2020, 1, 2), 1.0, 1.0),
-        (date(2020, 1, 3), 1.0, 1.0),
-    ])
     out = build_shareprice_intraday(
-        "stocks", "AAPL", [h, d1, d2], factor, TransformationReport(),
+        "stocks", "AAPL", [h, d1, d2],
+        _daily_dates([date(2020, 1, 1), date(2020, 1, 2), date(2020, 1, 3)]),
+        TransformationReport(),
     )
     assert out.height == 3
     assert out["Datetime"].to_list() == [
@@ -197,11 +186,12 @@ def test_dedup_under_1pct_logged_and_daily_wins(tmp_path):
     d = tmp_path / "d.parquet"
     _write_intraday_source(h, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0,  1000)])
     _write_intraday_source(d, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.5,  1000)])  # 0.5%
-    factor = _make_factor([(date(2020, 1, 1), 1.0, 1.0)])
     report = TransformationReport()
-    out = build_shareprice_intraday("stocks", "AAPL", [h, d], factor, report)
+    out = build_shareprice_intraday(
+        "stocks", "AAPL", [h, d], _daily_dates([date(2020, 1, 1)]), report,
+    )
     assert out.height == 1
-    assert pytest.approx(100.5, rel=1e-4) == out["AdjClose"][0]
+    assert pytest.approx(100.5, rel=1e-4) == out["Close"][0]
     rep = report.to_frame()
     assert rep.filter(
         pl.col("issue_type") == "dedup_value_discrepancy_under_1pct"
@@ -213,10 +203,11 @@ def test_dedup_over_1pct_logged_and_daily_wins(tmp_path):
     d = tmp_path / "d.parquet"
     _write_intraday_source(h, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0, 1000)])
     _write_intraday_source(d, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 110.0, 1000)])  # 10%
-    factor = _make_factor([(date(2020, 1, 1), 1.0, 1.0)])
     report = TransformationReport()
-    out = build_shareprice_intraday("stocks", "AAPL", [h, d], factor, report)
-    assert pytest.approx(110.0, rel=1e-4) == out["AdjClose"][0]
+    out = build_shareprice_intraday(
+        "stocks", "AAPL", [h, d], _daily_dates([date(2020, 1, 1)]), report,
+    )
+    assert pytest.approx(110.0, rel=1e-4) == out["Close"][0]
     assert report.to_frame().filter(
         pl.col("issue_type") == "dedup_value_discrepancy_over_1pct"
     ).height == 1
@@ -232,12 +223,12 @@ def test_orphan_date_dropped_and_logged(tmp_path):
         (datetime(2020, 1, 3, 9, 30), 102, 102, 102, 102, 700),  # orphan
         (datetime(2020, 1, 4, 9, 30), 103, 103, 103, 103, 800),  # orphan
     ])
-    factor = _make_factor([
-        (date(2020, 1, 1), 1.0, 1.0),
-        (date(2020, 1, 2), 1.0, 1.0),
-    ])
     report = TransformationReport()
-    out = build_shareprice_intraday("stocks", "AAPL", [p], factor, report)
+    out = build_shareprice_intraday(
+        "stocks", "AAPL", [p],
+        _daily_dates([date(2020, 1, 1), date(2020, 1, 2)]),
+        report,
+    )
     assert out.height == 2
     rep = report.to_frame().filter(
         pl.col("issue_type") == "intraday_orphan_date_dropped"
@@ -247,62 +238,51 @@ def test_orphan_date_dropped_and_logged(tmp_path):
     assert pytest.approx(0.5, rel=1e-6) == rep["relative"][0]
 
 
-# ── 5. Factor join math ───────────────────────────────────────────────────────
+# ── 5. Raw OHLCV preserved ────────────────────────────────────────────────────
 
-def test_factor_join_produces_correct_adj_columns(tmp_path):
-    """Hand-built factor frame with non-trivial adj_factor and cum_split.
-    Verify each Adj* equals raw * factor / cum_split as appropriate.
-    """
+def test_output_carries_raw_ohlcv(tmp_path):
+    """No adjustment is applied; OHLCV survives verbatim."""
     p = tmp_path / "p.parquet"
     _write_intraday_source(p, [
         (datetime(2020, 1, 1, 9, 30), 400.0, 410.0, 395.0, 405.0, 500.0),
         (datetime(2020, 1, 2, 9, 30), 100.0, 102.5, 99.0, 101.0, 4000.0),
     ])
-    factor = _make_factor([
-        (date(2020, 1, 1), 0.99, 4.0),  # pre-split + future div
-        (date(2020, 1, 2), 1.0,  1.0),
-    ])
     out = build_shareprice_intraday(
-        "stocks", "AAPL", [p], factor, TransformationReport(),
+        "stocks", "AAPL", [p],
+        _daily_dates([date(2020, 1, 1), date(2020, 1, 2)]),
+        TransformationReport(),
     )
     assert out.height == 2
-    # Day 1: AdjClose = 405 * 0.99 = 400.95; AdjVolume = 500 * 4 = 2000
-    assert pytest.approx(400.95, rel=1e-3) == out.filter(
-        pl.col("Datetime") == datetime(2020, 1, 1, 9, 30)
-    )["AdjClose"][0]
-    assert pytest.approx(2000.0, rel=1e-4) == out.filter(
-        pl.col("Datetime") == datetime(2020, 1, 1, 9, 30)
-    )["AdjVolume"][0]
-    # Day 2: AdjClose = 101 * 1 = 101; AdjVolume = 4000
-    assert pytest.approx(101.0, rel=1e-4) == out.filter(
-        pl.col("Datetime") == datetime(2020, 1, 2, 9, 30)
-    )["AdjClose"][0]
-    assert pytest.approx(4000.0, rel=1e-4) == out.filter(
-        pl.col("Datetime") == datetime(2020, 1, 2, 9, 30)
-    )["AdjVolume"][0]
+    day1 = out.filter(pl.col("Datetime") == datetime(2020, 1, 1, 9, 30))
+    assert pytest.approx(405.0, rel=1e-4) == day1["Close"][0]
+    assert pytest.approx(500.0, rel=1e-4) == day1["Volume"][0]
+    day2 = out.filter(pl.col("Datetime") == datetime(2020, 1, 2, 9, 30))
+    assert pytest.approx(101.0, rel=1e-4) == day2["Close"][0]
+    assert pytest.approx(4000.0, rel=1e-4) == day2["Volume"][0]
 
 
-# ── 6. Null Adj fields preserved & logged ─────────────────────────────────────
+# ── 6. Null OHLCV fields preserved & logged ───────────────────────────────────
 
-def test_null_adj_fields_not_dropped_only_logged(tmp_path):
-    """A row with null source Open survives; null is propagated into AdjOpen
-    and the null-field count is recorded. Row is NOT dropped.
+def test_null_ohlcv_fields_not_dropped_only_logged(tmp_path):
+    """A row with null source Open survives and is reported. Row is NOT
+    dropped.
     """
     p = tmp_path / "p.parquet"
     _write_intraday_source(p, [
         (datetime(2020, 1, 1, 9, 30), 100.0, 100.0, 100.0, 100.0, 1000.0),
         (datetime(2020, 1, 1, 9, 31), None,  100.0, 100.0, 100.0, 1000.0),  # null Open
     ])
-    factor = _make_factor([(date(2020, 1, 1), 1.0, 1.0)])
     report = TransformationReport()
-    out = build_shareprice_intraday("stocks", "AAPL", [p], factor, report)
+    out = build_shareprice_intraday(
+        "stocks", "AAPL", [p], _daily_dates([date(2020, 1, 1)]), report,
+    )
     assert out.height == 2  # row preserved
     null_open_row = out.filter(pl.col("Datetime") == datetime(2020, 1, 1, 9, 31))
-    assert null_open_row["AdjOpen"][0] is None
+    assert null_open_row["Open"][0] is None
     rep = report.to_frame().filter(pl.col("issue_type") == "intraday_null_field")
     assert rep.height == 1
     assert rep["count"][0] == 1  # one null field
-    # 2 rows * 5 Adj cols = 10 fields; 1 null -> relative = 1/10
+    # 2 rows * 5 OHLCV cols = 10 fields; 1 null -> relative = 1/10
     assert pytest.approx(0.1, rel=1e-6) == rep["relative"][0]
 
 
@@ -313,14 +293,13 @@ def test_output_schema_exact(tmp_path):
     _write_intraday_source(p, [
         (datetime(2020, 1, 1, 9, 30), 100.0, 101.0, 99.0, 100.5, 1000.0),
     ])
-    factor = _make_factor([(date(2020, 1, 1), 1.0, 1.0)])
     out = build_shareprice_intraday(
-        "stocks", "AAPL", [p], factor, TransformationReport(),
+        "stocks", "AAPL", [p], _daily_dates([date(2020, 1, 1)]),
+        TransformationReport(),
     )
     assert dict(out.schema) == SCHEMAS["shareprice_intraday"]
-    # Raw OHLCV stripped; only Adj* + Datetime survive.
     assert set(out.columns) == {
-        "Datetime", "AdjOpen", "AdjHigh", "AdjLow", "AdjClose", "AdjVolume",
+        "Datetime", "Open", "High", "Low", "Close", "Volume",
     }
 
 
@@ -329,24 +308,25 @@ def test_output_schema_exact(tmp_path):
 def test_empty_paths():
     out = build_shareprice_intraday(
         "stocks", "AAPL", [],
-        _make_factor([(date(2020, 1, 1), 1.0, 1.0)]),
+        _daily_dates([date(2020, 1, 1)]),
         TransformationReport(),
     )
     assert out.height == 0
     assert dict(out.schema) == SCHEMAS["shareprice_intraday"]
 
 
-# ── 9. Empty factor frame ─────────────────────────────────────────────────────
+# ── 9. Empty daily-dates set ──────────────────────────────────────────────────
 
-def test_empty_factor_frame_drops_every_intraday_row(tmp_path):
+def test_empty_daily_dates_drops_every_intraday_row(tmp_path):
     p = tmp_path / "p.parquet"
     _write_intraday_source(p, [
         (datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100, 1000),
         (datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101, 1000),
     ])
-    factor = pl.DataFrame(schema=FACTOR_FRAME_SCHEMA)
     report = TransformationReport()
-    out = build_shareprice_intraday("stocks", "AAPL", [p], factor, report)
+    out = build_shareprice_intraday(
+        "stocks", "AAPL", [p], _daily_dates([]), report,
+    )
     assert out.height == 0
     assert dict(out.schema) == SCHEMAS["shareprice_intraday"]
     rep = report.to_frame().filter(
@@ -438,4 +418,4 @@ def test_orchestrator_resume_skips_existing_with_intraday(tmp_path):
         "stocks", historical, daily, dest, overview, TransformationReport(),
     )
     inst = StockData.load_from(symbol_dest_dir(dest, "stocks", "AAPL"))
-    assert pytest.approx(100.0, rel=1e-3) == inst.shareprice_intraday["AdjClose"][0]
+    assert pytest.approx(100.0, rel=1e-3) == inst.shareprice_intraday["Close"][0]

@@ -72,32 +72,78 @@ assume any uniform "no nulls" guarantee.
 | `sentiment_df` | No null-driven drops. |
 | `financials_*` | Defensive nulling on out-of-range positions and >10-day fiscalDateEnding mismatches. |
 
-`shareprice_intraday` may contain rows with null Adj* values, gaps in
+`shareprice_intraday` may contain rows with null OHLCV values, gaps in
 time coverage, and uneven bar density. Imputing missing values, removing
 rows around big gaps, and otherwise cleaning the time grid is the
 **responsibility of feature generation**, not transformation. Nulls are
 surfaced via `transformation_report.parquet` but not mutated.
 
-## 6. Adjusted prices and lookahead bias
+## 6. Adjusted prices: single-day `AdjFactor`
 
-- **Adjusted prices on the historical span are computed with full
-  hindsight.** `cum_split` and `div_factor` at any past date `t` use
-  every split and dividend that occurs **after** `t` in the source file
-  (identical to Yahoo Finance / CRSP "adjusted close").
-- This is **unavoidable lookahead bias on the historical period** while
-  the schema retains a single `AdjClose` column.
-- `shareprice_intraday` inherits the same bias via the daily factor it
-  applies (`AdjOpen/High/Low/Close = OHLC * (AdjClose_daily / Close_daily)`,
-  `AdjVolume = Volume * cum_split_daily`), joined on calendar date.
+The frames carry **raw, unadjusted OHLCV** in both `shareprice_daily`
+and `shareprice_intraday`. Adjusted prices are not stored. Instead,
+`shareprice_daily` exposes a single-day multiplier `AdjFactor`
+that consumers can fold into adjusted series on demand.
 
-TODO: For prediction there might be a problem because on the day to predict the intraday prices need AdjClose_daily and Close_daily and they might not be given.
+### Definition
 
-### Cum-split convention (avoiding the off-by-one)
+For each row `i` of `shareprice_daily` (sorted ascending by `Date`),
 
-`cum_split[t] = product of SplitCoefficient[i] for i > t` — strictly
-**future** splits, `SC[t]` itself excluded. On the ex-split date, source
-Volume is already in post-split units, so multiplying by the split-day
-coefficient would over-multiply. Symmetric for `div_factor`.
+```
+AdjFactor[i] = SplitCoefficient[i] * Close[i-1] / (Close[i-1] - DividendAmount[i])     for i >= 1
+AdjFactor[0] = 1.0
+```
+
+Conventions:
+
+- `SplitCoefficient[i]` is the split coefficient on day `i` as
+  reported by the source (`1.0` on non-split days, `2.0` on a 2-for-1
+  ex-split day, etc.).
+- `DividendAmount[i]` is the dividend paid on day `i` (the ex-date),
+  in the same currency / split units as `Close[i]` (USD, post-split).
+  `0.0` on non-dividend days.
+- `Close[i-1]` is the previous row's close. The first row has no
+  prior close to anchor on, so `AdjFactor[0]` is fixed at `1.0`.
+- On a row with no split and no dividend, `AdjFactor[i] = 1.0`
+  exactly (`SplitCoefficient = 1`, `DividendAmount = 0`).
+
+The factor is constructed so that
+
+```
+Close[i] * AdjFactor[i] / Close[i-1]  -  1   ≈   gross total return on day i
+```
+
+(splits and dividends absorbed). It is the CRSP / Yahoo "adjustment
+factor" anchored on the previous close.
+
+### What this is NOT
+
+- **Not cumulative.** `AdjFactor` is a per-day multiplier;
+  reconstructing an `AdjClose` series requires a cumulative product
+  done downstream. This deliberate split keeps lookahead bias out of
+  the stored frame: any future-looking adjustment is the consumer's
+  decision, not a property of the dataset.
+- **Not provided on the intraday frame.** `shareprice_intraday` holds
+  raw OHLCV only. Consumers that want adjusted intraday returns
+  should join `shareprice_daily.AdjFactor` on the calendar date of
+  `shareprice_intraday.Datetime`.
+
+### Lookahead-bias implications
+
+Because `AdjFactor[i]` depends only on row `i`'s
+`SplitCoefficient` / `DividendAmount` and the **prior** row's
+`Close`, it carries no future information. A consumer that builds a
+PIT-correct adjusted close as
+
+```
+AdjClose_PIT[i; as_of=t] = Close[i] * prod_{k = i+1..t} AdjFactor[k]
+```
+
+introduces lookahead only as far as `t` (the as-of date), which is
+the choice the consumer is already making. The Yahoo / CRSP-style
+"divide all history by the latest cumulative factor" series is one
+such choice (with `t = last row`); other consumers can pick a
+different `t`.
 
 ## 7. Intraday orphan rule
 
@@ -156,6 +202,38 @@ Each row at date `d` reflects the financials view as known at `d`.
 Restatements filed after `d` do **not** leak backward into
 pre-restatement rows; retroactive amendments are visible only on rows
 whose `d` is on or after the amendment.
+
+### Historical baseline carries restatements
+
+PIT correctness only protects rows whose `d` falls inside the
+**daily-snapshot** era. Earlier rows fall back to the historical bulk
+download, which the source had already restated by the time we
+fetched it. As a result:
+
+- **Every financials cell at a row date `d` older than the first
+  daily snapshot may reflect post-`d` restatements** (the source's
+  best-known number at the historical run date, not what was actually
+  filed at `d`). These rows look PIT-correct in the schema but are
+  not provider-PIT.
+- Once daily snapshots have accumulated, rows whose `d` falls in the
+  daily era are protected: the per-row snapshot resolution picks up
+  the file as it stood at `d`, and any later amendment shows up only
+  on `d' >= amendment_date`.
+
+**Identifying the boundary.** There is no dedicated "PIT start" field
+in the dataset. A practical proxy is the **earliest `Date` in
+`etf_profile`**: the historical bulk contributes a single row dated
+to the historical run's data-complete date, and daily folders
+contribute one row per snapshot. So
+`min(etf_profile.Date)` is the historical run's data-complete date,
+and rows in `financials_*` with `d < min(etf_profile.Date)` should be
+treated as historical-baseline (restatements possibly baked in)
+rather than truly PIT. This proxy is only available on etfs; for a
+universe-wide marker, take the smallest `min(etf_profile.Date)`
+across the etf catalog. Equivalently, the smallest daily-folder date
+in the raw layer is the same boundary, but consumers in the next
+repo do not have access to that layer and must rely on
+`etf_profile`.
 
 ### m-axis ordering by reportedDate
 
@@ -298,8 +376,12 @@ no-op cases described above and the `--skip-financials` CLI flag).
 
 ## 14. Things feature generation MUST NOT assume
 
-- **No PIT-correct `AdjClose` on the historical span.** 
-- **No imputation of intraday gaps or null Adj* values.** Do it yourself.
+- **No pre-computed `AdjClose` / `AdjVolume` anywhere.** OHLCV is raw;
+  build adjusted series from `shareprice_daily.AdjFactor` (see
+  section 6) or skip the adjustment.
+- **No `AdjFactor` on `shareprice_intraday`.** Join from
+  `shareprice_daily` on calendar date if needed.
+- **No imputation of intraday gaps or null fields.** Do it yourself.
 - **No per-trading-date snapshot of insider activity.** It's a
   transaction list; project forward without leaking.
 - **No retroactive amendment tracking in `insider_df` or
@@ -321,6 +403,8 @@ no-op cases described above and the `--skip-financials` CLI flag).
 - Schema-exact frames: dtypes and column names match
   `AssetData_specifications.md` byte-for-byte, or the load fails.
 - `shareprice_daily` has **no nulls** in any Float32 column.
+  `AdjFactor` in particular is always populated; on no-event rows it
+  is exactly `1.0`, and the first row is `1.0` by convention.
 - Every `shareprice_intraday` row's calendar date appears in
   `shareprice_daily.Date` for the same symbol.
 - Every symbol in any catalog appears exactly once in

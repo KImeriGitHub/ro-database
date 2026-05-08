@@ -2,8 +2,8 @@
 
 Drives Phase 3 (shareprice_daily) and Phase 4 (shareprice_intraday) - and,
 once landed, Phase 5 (etf_profile) - in a single per-symbol pass so the
-factor frame produced by Phase 3 stays in memory for Phase 4 without
-touching disk.
+``shareprice_daily.Date`` axis produced by Phase 3 flows directly into
+Phase 4's orphan-date check and Phase 6c without touching disk.
 
 For the simpler asset types (forex, indices, cryptocurrencies, commodities,
 economic), see ``frames/price_daily.py``'s
@@ -157,14 +157,14 @@ def transform_stocks_or_etfs(
             if asset_type == "stocks":
                 inst.sector = sector_to_index(sector_lookup.get(symbol, ""))
 
-            sp_daily, factor_frame = build_shareprice_daily(
+            sp_daily = build_shareprice_daily(
                 asset_type, symbol, daily_idx.get(symbol, []), report,
             )
             inst.shareprice_daily = sp_daily
 
             sp_intraday = build_shareprice_intraday(
                 asset_type, symbol, intraday_idx.get(symbol, []),
-                factor_frame, report,
+                sp_daily["Date"], report,
             )
             inst.shareprice_intraday = sp_intraday
 
@@ -193,7 +193,7 @@ def transform_stocks_or_etfs(
                     inst.financials_annually = fin_a
 
             inst.save_to(symbol_dest_dir(dest_dir, asset_type, symbol))
-            del factor_frame, sp_daily, sp_intraday, inst
+            del sp_daily, sp_intraday, inst
             n_processed += 1
         except Exception as exc:
             logger.exception(

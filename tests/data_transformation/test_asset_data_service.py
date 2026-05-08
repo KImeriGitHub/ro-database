@@ -173,8 +173,8 @@ def test_copy_clones_dataframes():
     s = StockData.default_instance()
     s.shareprice_daily = pl.DataFrame(
         [{"Date": None, "Open": 1.0, "High": 1.0, "Low": 1.0, "Close": 1.0,
-          "AdjClose": 1.0, "Volume": 1.0, "AdjVolume": 1.0,
-          "DividendAmount": 0.0, "SplitCoefficient": 1.0}],
+          "Volume": 1.0, "DividendAmount": 0.0, "SplitCoefficient": 1.0,
+          "AdjFactor": 1.0}],
         schema=SCHEMAS["shareprice_daily"],
     )
     s_copy = s.copy()

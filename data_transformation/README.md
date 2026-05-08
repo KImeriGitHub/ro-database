@@ -110,14 +110,16 @@ The transformation is streamed symbol by symbol:
 1. Look up the symbol's source paths in the prebuilt dict.
 2. Read, concat, dedup, transform, cast to `SCHEMAS[name]`.
 3. Build the `AssetData` instance, `save_to(<dest>/<asset_type>/data_<SYMBOL>/)`.
-4. Drop every intermediate (source frames, factor frame, instance) before
-   the next iteration. No accumulation of per-symbol state across the loop.
+4. Drop every intermediate (source frames, instance) before the next
+   iteration. No accumulation of per-symbol state across the loop.
 
-The factor frame produced in the `shareprice_daily` step is held in
-memory through the rest of that symbol's pipeline (Phase 4 consumes it,
-Phases 5-6c ignore it) and dropped at the end of the per-symbol
-iteration along with every other intermediate. It is never written to
-disk.
+`AdjFactor` is computed inline on `shareprice_daily` from each row's
+`Close`, the prior `Close`, `SplitCoefficient`, and `DividendAmount`,
+and is materialised as a column on the saved frame; no separate
+factor frame is held across phases. Phase 4 (`shareprice_intraday`)
+no longer needs it - the intraday frame keeps raw OHLCV and
+downstream consumers join on calendar date if they want adjusted
+returns.
 
 ### Source overlap and dedup (non-optional)
 
@@ -174,20 +176,20 @@ Source: `historical/<a>/prices_daily/` + `daily/*/<a>/prices_daily/` for
    - `issue_type = "dedup_value_discrepancy_over_1pct"` if any field differs
      by `>=1%` (the row is still kept, daily snapshot wins, but the symbol
      is flagged for review).
-4. Compute `AdjClose` and `AdjVolume`:
-   - `cum_split[t] = product of SplitCoefficient[i] for i > t` (strictly
-     future splits; ``SC[t]`` itself is excluded so the split day is not
-     over-multiplied - on the ex-split date the Volume is already in
-     post-split units).
-   - `div_factor[t] = product over i>t of (Close[i-1] - DividendAmount[i]) / Close[i-1]`.
-   - `AdjClose[t] = Close[t] * div_factor[t] / cum_split[t]` (CRSP/Yahoo
-     convention - both dividends and splits removed).
-   - `AdjVolume[t] = Volume[t] * cum_split[t]`.
-   - Both formulas walk backward from the latest available row (``np.flip
-     -> cumprod -> np.flip``), so the historical AdjClose/AdjVolume
-     incorporate every future split and dividend present in the file.
-     **This is unavoidable lookahead bias on the historical period; see
-     "Lookahead bias" below.**
+4. Compute the **single-day** `AdjFactor` column. OHLCV stays raw -
+   no `AdjClose` / `AdjVolume` is written. The formula (CRSP-style,
+   anchored on the prior close):
+   - `AdjFactor[i] = SplitCoefficient[i] * Close[i-1] / (Close[i-1] - DividendAmount[i])`
+     for `i >= 1`.
+   - `AdjFactor[0] = 1.0` (no prior close to anchor on).
+   - On rows with no split and no dividend (`SplitCoefficient = 1`,
+     `DividendAmount = 0`), the formula reduces to `AdjFactor = 1.0`.
+   - The factor is per-day - **no cumulative product** is taken here.
+     Reconstructing `AdjClose` (or any other cumulative adjustment) is
+     deliberately left to downstream consumers, who can choose their
+     own as-of date and so control the lookahead trade-off. See
+     [AssetData_design_choices.md](AssetData_design_choices.md)
+     section 6 and "Lookahead bias" below.
 5. Drop rows where any Float32 column is null after the above. Record the
    per-symbol drop count in `transformation_report` (`issue_type =
    "dedup_dropped_null_row"`).
@@ -214,19 +216,16 @@ Source: `historical/<a>/prices/` + `daily/*/<a>/prices/` for `a in
      `relative = dropped / total`.
    The opposite case (a `Date` in shareprice_daily with no matching
    intraday) is normal and not logged.
-5. Apply the daily adjustment factor (cached in memory from the
-   `shareprice_daily` step):
-   - `AdjOpen/High/Low/Close = Open/High/Low/Close * (AdjClose_daily / Close_daily)`
-     joined on calendar date.
-   - `AdjVolume = Volume * cum_split_daily` joined on calendar date.
-6. **Do not drop null Float32 rows.** Record per-symbol the count and
+5. **Do not drop null Float32 rows.** Record per-symbol the count and
    ratio of null fields (`issue_type = "intraday_null_field"`).
-7. Cast to `SCHEMAS["shareprice_intraday"]` (raw `Open/High/Low/Close/Volume`
-   are dropped at this point - the schema only retains the Adj* columns)
-   and write.
+6. Cast to `SCHEMAS["shareprice_intraday"]` (raw `Datetime`,
+   `Open/High/Low/Close/Volume`) and write. **No adjustment is
+   applied.** Consumers that need adjusted intraday returns join
+   `shareprice_daily.AdjFactor` on the calendar date of `Datetime`
+   themselves.
 
 > **Note for downstream consumers.** The intraday frame may contain rows
- with null Adj* values, gaps in time coverage, and uneven bar density.
+ with null OHLCV values, gaps in time coverage, and uneven bar density.
  Imputing missing values, removing rows around big gaps, and otherwise
  cleaning the time grid is the responsibility of the feature-engineering
  step that consumes `AssetData`, not this transformation. We surface the
@@ -569,21 +568,23 @@ landed. Useful for fast iteration during development.
 
 ## Lookahead bias on the historical period
 
-Adjusted prices on the historical span are computed with full hindsight:
-the `cum_split` and `div_factor` series at any past date `t` use every
-split and dividend that occurs after `t` in the source file. This is
-identical to how Yahoo Finance / CRSP "adjusted close" is published and
-is unavoidable while the schema retains a single `AdjClose` column.
+OHLCV in `shareprice_daily` and `shareprice_intraday` is **raw and
+unadjusted**, and `AdjFactor` is a single-day multiplier (no
+cumulative product). That keeps any future-looking adjustment out of
+the stored frame: a consumer that wants a Yahoo / CRSP-style
+`AdjClose` must take a cumulative product, and is therefore the one
+choosing the as-of date that bounds the lookahead. See
+[AssetData_design_choices.md](AssetData_design_choices.md) section 6
+for the formula and a worked PIT-correct reconstruction.
 
-Daily snapshots accumulated under `daily/<date>/` *do* allow a
-PIT-correct AdjClose - on snapshot date `d` only splits and dividends with
-`Date <= d` are knowable. Producing a per-snapshot-date AdjClose would
-require a different schema (e.g. an `(Date, snapshot_date)` keyed frame)
-and is deliberately out of scope here. The current frame is the best
-practical approximation; consumers that care about PIT-correct adjusted
-prices should reconstruct them on demand from the raw
-`daily/*/<a>/prices_daily/` files once enough daily folders have
-accumulated (see "PIT readiness" below).
+Two practical consequences:
+
+- **Adjusted intraday returns require a join.** `shareprice_intraday`
+  carries no Adj* and no `AdjFactor`; consumers join
+  `shareprice_daily.AdjFactor` on the calendar date of `Datetime`.
+- **Fundamentals still depend on PIT-snapshot accumulation.** See
+  "PIT readiness" below; this is unrelated to the price-adjustment
+  story.
 
 ### PIT readiness
 
@@ -598,12 +599,16 @@ will silently behave as if the data had always been "latest available."
 There is no programmatic gate on this; it is a calendar-time prerequisite
 for users of the output.
 
-`shareprice_intraday` inherits the same bias via the daily factor it
-applies.
+For consumers in the next repo, the boundary between historical-baseline
+financials (restatements possibly baked in) and PIT-honest financials
+is approximated by `min(etf_profile.Date)` taken across the etf
+catalog - see
+[AssetData_design_choices.md](AssetData_design_choices.md) section 10
+"Historical baseline carries restatements".
 
-`etf_profile`, `price_daily`, and the catalog-derived overview do not have
-this issue: those frames are populated directly from observed values
-without any retroactive multiplication.
+`etf_profile`, `price_daily`, and the catalog-derived overview do not
+have a lookahead-bias issue: those frames are populated directly from
+observed values without any retroactive multiplication.
 
 ## Logging
 
@@ -727,9 +732,9 @@ data_transformation/
     │                       #  mapping, annual-estimate extension
     └── stocks_etfs.py      # combined per-symbol orchestrator running
                             #  Phases 3, 4, 5, 6a, 6b, 6c in one pass so
-                            #  the factor frame stays in memory between
-                            #  Phases 3 and 4 and the shareprice_daily
-                            #  Date axis flows into Phase 6c
+                            #  the shareprice_daily.Date axis flows
+                            #  directly into Phase 6c without
+                            #  round-tripping through disk
 ```
 
 The per-frame builders live under `frames/` to mirror the
@@ -737,9 +742,8 @@ The per-frame builders live under `frames/` to mirror the
 layout: one file per output frame, all sharing helpers from `_common.py`
 and `frames/_dedup.py`, all driven by the orchestrator in `transform.py`.
 Stocks and etfs additionally route through `frames/stocks_etfs.py`'s
-combined orchestrator so the in-memory factor frame produced by Phase 3
-flows directly into Phase 4 and the `shareprice_daily.Date` axis flows
-into Phase 6c without touching disk.
+combined orchestrator so the `shareprice_daily.Date` axis produced by
+Phase 3 flows directly into Phase 6c without touching disk.
 
 Tests live in `tests/data_transformation/` (the existing
 `test_asset_data_service.py` covers the dataclasses themselves).

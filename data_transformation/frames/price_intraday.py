@@ -1,9 +1,12 @@
 """Phase 4: shareprice_intraday for stocks and etfs.
 
 Driven from ``frames/stocks_etfs.py``'s combined orchestrator so the
-in-memory factor frame produced by Phase 3 (``build_shareprice_daily``)
-flows directly into ``build_shareprice_intraday`` without round-tripping
-through disk.
+``shareprice_daily.Date`` axis produced by Phase 3 flows directly into
+the orphan-date check without round-tripping through disk.
+
+OHLCV is kept raw and unadjusted; consumers that need adjusted intraday
+returns join ``shareprice_daily.AdjFactor`` on the calendar date of
+``Datetime`` themselves.
 """
 
 from __future__ import annotations
@@ -30,36 +33,27 @@ _INTRADAY_DEDUP_COLS: tuple[str, ...] = (
     "Open", "High", "Low", "Close", "Volume",
 )
 
-_INTRADAY_ADJ_COLS: tuple[str, ...] = (
-    "AdjOpen", "AdjHigh", "AdjLow", "AdjClose", "AdjVolume",
-)
-
 
 def build_shareprice_intraday(
     asset_type: str,
     symbol: str,
     paths: list[Path],
-    factor_frame: pl.DataFrame,
+    daily_dates: pl.Series,
     report: TransformationReport,
 ) -> pl.DataFrame:
     """Build the ``shareprice_intraday`` frame for one stocks/etfs symbol.
 
-    *factor_frame* must be the per-date factor frame returned by
-    :func:`data_transformation.frames.price_daily.build_shareprice_daily`
-    for the same symbol; its rows enumerate every Date that survived the
-    Phase 3 null-row drop. Intraday rows whose calendar date is not in
-    that frame are dropped as orphans.
+    *daily_dates* is the ``shareprice_daily.Date`` column for the same
+    symbol (post null-row drop). Intraday rows whose calendar date is
+    not in this set are dropped as orphans.
 
     *paths* is the symbol's prices/ source list (historical + every daily
     folder). Returns an empty schema-correct frame when no usable data is
     available.
 
-    Adjustment math:
-      AdjOpen/High/Low/Close = OHLC * adj_factor (joined on calendar date)
-      AdjVolume              = Volume * cum_split (joined on calendar date)
-
-    Null Adj* fields are *not* dropped (per spec); the count is recorded
-    in ``transformation_report`` as ``intraday_null_field``.
+    Output is raw OHLCV; no adjustment is applied here. Null OHLCV
+    fields are *not* dropped (per spec); the count is recorded in
+    ``transformation_report`` as ``intraday_null_field``.
     """
     empty = pl.DataFrame(schema=SCHEMAS["shareprice_intraday"])
     if not paths:
@@ -93,26 +87,14 @@ def build_shareprice_intraday(
     )
 
     merged = _drop_orphan_dates(
-        merged, factor_frame, symbol, asset_type, report,
+        merged, daily_dates, symbol, asset_type, report,
     )
     if merged.height == 0:
         return empty
 
-    joined = merged.join(
-        factor_frame.rename({"Date": "_date"}),
-        on="_date", how="left",
-    )
-    joined = joined.with_columns(
-        (pl.col("Open") * pl.col("adj_factor")).cast(pl.Float32).alias("AdjOpen"),
-        (pl.col("High") * pl.col("adj_factor")).cast(pl.Float32).alias("AdjHigh"),
-        (pl.col("Low") * pl.col("adj_factor")).cast(pl.Float32).alias("AdjLow"),
-        (pl.col("Close") * pl.col("adj_factor")).cast(pl.Float32).alias("AdjClose"),
-        (pl.col("Volume") * pl.col("cum_split")).cast(pl.Float32).alias("AdjVolume"),
-    )
+    _log_null_ohlcv_fields(merged, symbol, asset_type, report)
 
-    _log_null_adj_fields(joined, symbol, asset_type, report)
-
-    return cast_to_schema(joined, SCHEMAS["shareprice_intraday"], "shareprice_intraday")
+    return cast_to_schema(merged, SCHEMAS["shareprice_intraday"], "shareprice_intraday")
 
 
 def _normalize_intraday_source(df: pl.DataFrame) -> pl.DataFrame:
@@ -141,23 +123,21 @@ def _normalize_intraday_source(df: pl.DataFrame) -> pl.DataFrame:
 
 def _drop_orphan_dates(
     df: pl.DataFrame,
-    factor_frame: pl.DataFrame,
+    daily_dates: pl.Series,
     symbol: str,
     asset_type: str,
     report: TransformationReport,
 ) -> pl.DataFrame:
-    """Drop intraday rows whose calendar date is not in the daily factor
-    frame. Records the orphan count and ratio.
-
-    Adds a ``_date`` (pl.Date) column on the surviving rows for the
-    downstream factor join.
+    """Drop intraday rows whose calendar date is not in *daily_dates*
+    (the ``shareprice_daily.Date`` column for the same symbol). Records
+    the orphan count and ratio.
     """
     if df.height == 0:
-        return df.with_columns(pl.lit(None, dtype=pl.Date).alias("_date"))
+        return df
 
     df = df.with_columns(pl.col("Datetime").dt.date().alias("_date"))
     total = df.height
-    if factor_frame.height == 0:
+    if daily_dates.len() == 0:
         # No valid dates at all -> every intraday row is an orphan.
         report.record(
             symbol, asset_type, "shareprice_intraday",
@@ -165,10 +145,10 @@ def _drop_orphan_dates(
             count=total, relative=1.0,
             detail="shareprice_daily had no rows; every intraday bar is orphan",
         )
-        return df.head(0)
+        return df.head(0).drop("_date")
 
     kept = df.join(
-        factor_frame.select(pl.col("Date").alias("_date")),
+        daily_dates.to_frame().rename({daily_dates.name: "_date"}),
         on="_date", how="semi",
     )
     dropped = total - kept.height
@@ -183,10 +163,13 @@ def _drop_orphan_dates(
                 "whose date was not present in shareprice_daily"
             ),
         )
-    return kept
+    return kept.drop("_date")
 
 
-def _log_null_adj_fields(
+_OHLCV_COLS: tuple[str, ...] = ("Open", "High", "Low", "Close", "Volume")
+
+
+def _log_null_ohlcv_fields(
     df: pl.DataFrame,
     symbol: str,
     asset_type: str,
@@ -195,17 +178,17 @@ def _log_null_adj_fields(
     n_rows = df.height
     if n_rows == 0:
         return
-    null_count = sum(int(df[c].null_count()) for c in _INTRADAY_ADJ_COLS)
+    null_count = sum(int(df[c].null_count()) for c in _OHLCV_COLS)
     if null_count == 0:
         return
-    total_fields = n_rows * len(_INTRADAY_ADJ_COLS)
+    total_fields = n_rows * len(_OHLCV_COLS)
     report.record(
         symbol, asset_type, "shareprice_intraday",
         "intraday_null_field",
         count=null_count,
         relative=null_count / total_fields,
         detail=(
-            f"{null_count} of {total_fields} Adj* fields were null "
+            f"{null_count} of {total_fields} OHLCV fields were null "
             "(rows preserved per spec)"
         ),
     )

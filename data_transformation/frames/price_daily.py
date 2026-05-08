@@ -4,8 +4,7 @@ Phase 2: the simple ``price_daily`` frame for the five flat asset types
 (forex, indices, cryptocurrencies, commodities, economic).
 
 Phase 3: the richer ``shareprice_daily`` frame for stocks and etfs
-(adds AdjClose / AdjVolume) plus the in-memory per-date factor frame
-that Phase 4 consumes for intraday adjustment.
+(adds the single-day ``AdjFactor`` multiplier alongside raw OHLCV).
 """
 
 from __future__ import annotations
@@ -60,7 +59,7 @@ _OHLC_COLS: tuple[str, ...] = ("Open", "High", "Low", "Close")
 _PRICE_FLOAT_COLS: tuple[str, ...] = ("Open", "High", "Low", "Close", "Volume")
 
 # Float columns considered for dedup discrepancy logging on shareprice_daily.
-# Source columns only (the derived AdjClose/AdjVolume are computed AFTER dedup).
+# Source columns only (the derived AdjFactor is computed AFTER dedup).
 _SP_DAILY_DEDUP_COLS: tuple[str, ...] = (
     "Open", "High", "Low", "Close", "Volume",
     "DividendAmount", "SplitCoefficient",
@@ -69,16 +68,9 @@ _SP_DAILY_DEDUP_COLS: tuple[str, ...] = (
 # Schema-Float32 columns of shareprice_daily that must all be non-null in
 # the saved frame. Rows with any null among these are dropped.
 _SP_DAILY_REQUIRED_FLOAT_COLS: tuple[str, ...] = (
-    "Open", "High", "Low", "Close", "AdjClose",
-    "Volume", "AdjVolume",
-    "DividendAmount", "SplitCoefficient",
+    "Open", "High", "Low", "Close", "Volume",
+    "DividendAmount", "SplitCoefficient", "AdjFactor",
 )
-
-FACTOR_FRAME_SCHEMA: dict = {
-    "Date": pl.Date,
-    "adj_factor": pl.Float32,
-    "cum_split": pl.Float32,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -280,23 +272,17 @@ def build_shareprice_daily(
     symbol: str,
     paths: list[Path],
     report: TransformationReport,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Build the ``shareprice_daily`` frame and the per-date factor frame
-    for one stocks/etfs symbol.
+) -> pl.DataFrame:
+    """Build the ``shareprice_daily`` frame for one stocks/etfs symbol.
 
-    Returns ``(shareprice_daily, factor_frame)``.
-
-    ``factor_frame`` schema: ``{Date, adj_factor, cum_split}``. ``adj_factor``
-    is ``AdjClose / Close`` (the combined split + dividend multiplier
-    applied to OHLC, i.e. ``div_factor / cum_split``); ``cum_split`` is
-    the volume-side multiplier. Both are aligned to the dates that
-    survived to ``shareprice_daily`` (rows dropped due to null Float32s
-    do not appear).
+    OHLCV columns are kept raw and unadjusted. A single-day
+    ``AdjFactor`` column is added; consumers compute any cumulative
+    adjusted series themselves. See ``AssetData_design_choices.md``
+    section 6 for the formula.
     """
     empty_sp = pl.DataFrame(schema=SCHEMAS["shareprice_daily"])
-    empty_factor = pl.DataFrame(schema=FACTOR_FRAME_SCHEMA)
     if not paths:
-        return empty_sp, empty_factor
+        return empty_sp
 
     frames: list[pl.DataFrame] = []
     for p in paths:
@@ -316,7 +302,7 @@ def build_shareprice_daily(
             )
 
     if not frames:
-        return empty_sp, empty_factor
+        return empty_sp
 
     merged = attach_source_order(frames)
     merged = dedup_with_discrepancy_log(
@@ -324,16 +310,9 @@ def build_shareprice_daily(
         symbol, asset_type, "shareprice_daily",
     )
 
-    cum_split, div_factor = _compute_adjustment_factors(merged)
+    adj_factor = _compute_adj_factor(merged)
     merged = merged.with_columns(
-        pl.Series("_cum_split", cum_split, dtype=pl.Float32),
-        pl.Series("_div_factor", div_factor, dtype=pl.Float32),
-    )
-    merged = merged.with_columns(
-        (pl.col("Close") * pl.col("_div_factor") / pl.col("_cum_split"))
-            .cast(pl.Float32).alias("AdjClose"),
-        (pl.col("Volume") * pl.col("_cum_split"))
-            .cast(pl.Float32).alias("AdjVolume"),
+        pl.Series("AdjFactor", adj_factor, dtype=pl.Float32),
     )
 
     null_mask = pl.any_horizontal(
@@ -354,16 +333,7 @@ def build_shareprice_daily(
             ),
         )
 
-    factor_frame = merged.select(
-        pl.col("Date"),
-        (pl.col("_div_factor") / pl.col("_cum_split"))
-            .cast(pl.Float32).alias("adj_factor"),
-        pl.col("_cum_split").cast(pl.Float32).alias("cum_split"),
-    )
-
-    sp_daily = merged.drop("_cum_split", "_div_factor")
-    sp_daily = cast_to_schema(sp_daily, SCHEMAS["shareprice_daily"], "shareprice_daily")
-    return sp_daily, factor_frame
+    return cast_to_schema(merged, SCHEMAS["shareprice_daily"], "shareprice_daily")
 
 
 def _normalize_stock_etf_source(df: pl.DataFrame) -> pl.DataFrame:
@@ -382,46 +352,40 @@ def _normalize_stock_etf_source(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _compute_adjustment_factors(
-    df: pl.DataFrame,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute ``(cum_split, div_factor)`` as 1-D ``np.float64`` arrays of
-    length ``df.height``. *df* must be sorted ascending by ``Date`` and
-    contain ``Close``, ``DividendAmount``, ``SplitCoefficient`` columns.
+def _compute_adj_factor(df: pl.DataFrame) -> np.ndarray:
+    """Compute the single-day ``AdjFactor`` series as a 1-D ``np.float64``
+    array of length ``df.height``. *df* must be sorted ascending by
+    ``Date`` and contain ``Close``, ``DividendAmount``,
+    ``SplitCoefficient`` columns.
 
-    Conventions (matching the README's Phase 3 spec):
-      cum_split[t]  = product of SplitCoefficient[i] for i > t   (FUTURE splits)
-      div_step[t]   = (Close[t] - DividendAmount[t+1]) / Close[t]   for t < n-1
-                      1.0                                            for t = n-1
-      div_factor[t] = product of div_step[i] for i in [t, n-1]   (FUTURE divs)
+    Formula (CRSP-style, anchored on the prior close):
+      AdjFactor[i] = SplitCoefficient[i] * Close[i-1] / (Close[i-1] - DividendAmount[i])
+                                                                     for i >= 1
+      AdjFactor[0] = 1.0
 
-    Null SplitCoefficient is treated as 1.0 (no split); null DividendAmount
-    as 0.0 (no dividend); a null or non-positive Close skips the dividend
-    adjustment for that step (factor 1.0). The schema-level null-row drop
-    runs *after* this function, so any null-Close row is removed before
-    output regardless.
+    Null SplitCoefficient is treated as 1.0 (no split); null
+    DividendAmount as 0.0 (no dividend). A null or non-positive prior
+    Close, or a denominator that collapses to <= 0, falls back to the
+    split coefficient alone (no dividend correction for that step).
+    The schema-level null-row drop in ``build_shareprice_daily`` runs
+    *after* this function.
     """
     n = df.height
     if n == 0:
-        return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
+        return np.array([], dtype=np.float64)
 
     closes = df["Close"].to_numpy().astype(np.float64, copy=False)
     divs = df["DividendAmount"].fill_null(0.0).to_numpy().astype(np.float64, copy=False)
     scs = df["SplitCoefficient"].fill_null(1.0).to_numpy().astype(np.float64, copy=False)
 
-    sc_step = np.empty(n, dtype=np.float64)
-    sc_step[:-1] = scs[1:]
-    sc_step[-1] = 1.0
-    cum_split = np.flip(np.cumprod(np.flip(sc_step)))
-
-    div_step = np.ones(n, dtype=np.float64)
+    out = np.ones(n, dtype=np.float64)
     if n >= 2:
-        denom = closes[:-1]
-        nxt_div = divs[1:]
+        prev_close = closes[:-1]
+        cur_div = divs[1:]
+        cur_sc = scs[1:]
+        denom = prev_close - cur_div
         with np.errstate(divide="ignore", invalid="ignore"):
-            step = (denom - nxt_div) / denom
-        step = np.where(np.isfinite(step) & (denom > 0), step, 1.0)
-        div_step[:-1] = step
-    div_factor = np.flip(np.cumprod(np.flip(div_step)))
-
-    return cum_split, div_factor
+            ratio = prev_close / denom
+        valid = np.isfinite(ratio) & np.isfinite(prev_close) & (prev_close > 0) & (denom > 0)
+        out[1:] = cur_sc * np.where(valid, ratio, 1.0)
+    return out

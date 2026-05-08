@@ -1,6 +1,107 @@
 ## StockData specifications
 
-### General
+## Conventions
+
+These apply to every `AssetData` instance and every frame below. They
+are part of the contract; downstream code in the next repo should not
+re-derive them.
+
+### Currency
+
+**All amounts are denominated in USD.** Prices, dividends,
+fundamentals (income statement / balance sheet / cash flow), sentiment
+inputs, etf net assets, commodity values, and economic indicator
+values are USD only. Forex pairs are catalogued as `XXXUSD` (USD as
+the quote currency); `USDUSD` is excluded. Multi-currency assets are
+out of scope and would need a follow-up phase.
+
+### Timezone
+
+The schema does **not** carry timezone information per column. The
+following conventions hold instead:
+
+| Frame | Time column | dtype | Wall-clock convention |
+|---|---|---|---|
+| `shareprice_daily`, `price_daily` (stocks, etfs, indices, commodities, economic) | `Date` | `pl.Date` | US/Eastern trading day |
+| `price_daily` (forex, cryptocurrencies) | `Date` | `pl.Date` | UTC trading day |
+| `shareprice_intraday` | `Datetime` | `pl.Datetime` (tz-naive) | US/Eastern wall-clock; tz stripped at transformation |
+| `sentiment_df` | `Datetime` | `pl.Datetime` (tz-naive) | UTC wall-clock |
+| `etf_profile`, `insider_df` | `Date` | `pl.Date` | calendar date as reported (no intraday context) |
+| `financials_*` | `Date` | `pl.Date` | row axis = `shareprice_daily.Date`; same convention as that frame |
+
+Source-side, Alpha Vantage's stocks / etfs intraday + daily endpoints
+are validated against `Time Zone == "US/Eastern"`, and forex / crypto
+against `Time Zone == "UTC"` (a mismatch logs `timezone_mismatch` in
+the ingest report). Indices / commodities / economic responses do not
+expose a `Time Zone` field and are not validated; they are treated as
+US/Eastern by convention. Consumers that need true UTC for
+`shareprice_intraday` must localise the tz-naive `Datetime` to
+`US/Eastern` themselves before converting.
+
+### Listing / delisting
+
+- **Stocks and ETFs support delisted symbols.** A delisted ticker
+  remains in the catalog and produces an `AssetData` instance, but
+  `shareprice_daily.Date` ends at (or near) the delisting date. As a
+  rule of thumb a symbol with `max(shareprice_daily.Date) < today` is
+  delisted; rare exceptions are stale data feeds. There is no
+  dedicated `delisted` boolean — consumers infer it from the date
+  axis.
+- **Forex, indices, cryptocurrencies, commodities, economic do not
+  carry listing / delisting metadata.** A stale `price_daily` series
+  for these asset types typically indicates an API gap rather than a
+  delisting, and the date-based heuristic above does not apply.
+
+### Known asset cadence (sub-daily symbols on the daily axis)
+
+Several `commodities` and `economic` symbols are exposed through the
+daily-shaped `price_daily` frame but their **source cadence is
+sub-daily** (monthly, quarterly, or annual). The frame's
+`Date : pl.Date` still holds, but the series contains far fewer rows
+than a daily series and the `Date` values are the AV-published
+period-end dates (typically a month start). Consumers must not assume
+one row per trading day for these symbols.
+
+#### commodities
+
+| Symbol | Source cadence | AV function |
+|---|---|---|
+| `WTI` | daily | `WTI` |
+| `BRENT` | daily | `BRENT` |
+| `NATURAL_GAS` | daily | `NATURAL_GAS` |
+| `XAU` | daily | `GOLD_SILVER_HISTORY` (symbol=XAU) |
+| `XAG` | daily | `GOLD_SILVER_HISTORY` (symbol=XAG) |
+| `COPPER` | monthly | `COPPER` |
+| `ALUMINUM` | monthly | `ALUMINUM` |
+| `WHEAT` | monthly | `WHEAT` |
+| `CORN` | monthly | `CORN` |
+| `COTTON` | monthly | `COTTON` |
+| `SUGAR` | monthly | `SUGAR` |
+| `COFFEE` | monthly | `COFFEE` |
+| `ALL_COMMODITIES` | monthly | `ALL_COMMODITIES` |
+
+#### economic
+
+| Symbol | Source cadence | AV function |
+|---|---|---|
+| `TREASURY_YIELD_30Y` | daily | `TREASURY_YIELD` (maturity=30year) |
+| `TREASURY_YIELD_10Y` | daily | `TREASURY_YIELD` (maturity=10year) |
+| `TREASURY_YIELD_7Y`  | daily | `TREASURY_YIELD` (maturity=7year) |
+| `TREASURY_YIELD_5Y`  | daily | `TREASURY_YIELD` (maturity=5year) |
+| `TREASURY_YIELD_2Y`  | daily | `TREASURY_YIELD` (maturity=2year) |
+| `TREASURY_YIELD_3M`  | daily | `TREASURY_YIELD` (maturity=3month) |
+| `FEDERAL_FUNDS_RATE` | daily | `FEDERAL_FUNDS_RATE` |
+| `CPI` | monthly | `CPI` |
+| `RETAIL_SALES` | monthly | `RETAIL_SALES` |
+| `DURABLES` | monthly | `DURABLES` |
+| `UNEMPLOYMENT` | monthly | `UNEMPLOYMENT` |
+| `NONFARM_PAYROLL` | monthly | `NONFARM_PAYROLL` |
+| `REAL_GDP` | quarterly | `REAL_GDP` |
+| `REAL_GDP_PER_CAPITA` | quarterly | `REAL_GDP_PER_CAPITA` |
+| `INFLATION` | annual | `INFLATION` |
+
+### Scalars
+
 ticker: str
 The symbol associated with the asset.
 
@@ -20,20 +121,38 @@ Columns
  'High'              : pl.Float32
  'Low'               : pl.Float32
  'Close'             : pl.Float32
- 'AdjClose'          : pl.Float32
  'Volume'            : pl.Float32
- 'AdjVolume'         : pl.Float32
  'DividendAmount'    : pl.Float32
  'SplitCoefficient'  : pl.Float32
+ 'AdjFactor'         : pl.Float32
+
+`AdjFactor` is a **single-day** multiplier (no cumulative product).
+For row `i >= 1`,
+`Close[i] * AdjFactor[i] / Close[i-1] - 1` is the gross total return
+across the `i-1 -> i` transition (splits and dividends absorbed). On
+days with no split and no dividend, `AdjFactor[i] = 1.0`. The
+formula is documented in `AssetData_design_choices.md` section 6;
+cumulative use (e.g. an `AdjClose` series) is the consumer's
+responsibility.
+
+`AdjFactor[0] = 1.0` by convention (no preceding `Close` to anchor
+against).
+
+OHLCV columns are the **raw, unadjusted** values from the source.
 
 ### shareprice_intraday: pl.DataFrame
 Columns 
- 'Datetime'     : pl.Datetime
- 'AdjOpen'      : pl.Float32
- 'AdjHigh'      : pl.Float32
- 'AdjLow'       : pl.Float32
- 'AdjClose'     : pl.Float32
- 'AdjVolume'    : pl.Float32
+ 'Datetime'  : pl.Datetime
+ 'Open'      : pl.Float32
+ 'High'      : pl.Float32
+ 'Low'       : pl.Float32
+ 'Close'     : pl.Float32
+ 'Volume'    : pl.Float32
+
+OHLCV are the **raw, unadjusted** intraday bars. There is no
+intraday-side adjustment column; consumers that need adjusted
+intraday returns join `shareprice_daily.AdjFactor` on the calendar
+date of `Datetime`.
 
 ### price_daily: pl.DataFrame
 Columns 
