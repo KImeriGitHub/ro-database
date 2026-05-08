@@ -66,6 +66,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
+from config.settings import AV_RATE_LIMIT_PER_MIN
 from daily_data_service._common import ET
 from daily_data_service.ensure_folders import ensure_daily_folders
 from daily_data_service.setup_daily import (
@@ -355,7 +356,7 @@ async def adjust_weekly(
         )
 
     api_key = get_alpha_vantage_key(api_tier)
-    rate_limiter = RateLimiter(74.0)
+    rate_limiter = RateLimiter(float(AV_RATE_LIMIT_PER_MIN))
     issue_tracker = IssueTracker()
 
     tasks_plan: list[tuple[str, object, str, str, set[str]]] = []

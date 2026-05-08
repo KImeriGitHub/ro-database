@@ -31,6 +31,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
+from config.settings import AV_RATE_LIMIT_PER_MIN
 from daily_data_service._common import (
     read_previous_date,
     resolve_start_marker,
@@ -159,7 +160,7 @@ async def run_daily_pull(
     day_root = ensure_daily_folders(daily_dir, folder_date)
 
     api_key = get_alpha_vantage_key(api_tier)
-    rate_limiter = RateLimiter(74.0)
+    rate_limiter = RateLimiter(float(AV_RATE_LIMIT_PER_MIN))
     issue_tracker = IssueTracker()
 
     plan: list[tuple[str, object, str, str]] = []

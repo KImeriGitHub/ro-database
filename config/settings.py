@@ -27,7 +27,7 @@ PIT_COLLECTION_START_DATE = date(2026, 1, 1)
 REPORTING_LAG_DAYS = 90
 
 # Alpha Vantage hard cap is 75 calls/min on the premium plan; we configure the
-# sliding window to 74 and leave 1 call as a safety margin for retries and
+# sliding window to 70 and leave 5 calls as a safety margin for retries and
 # catalog-side sweeps running in parallel.
-AV_RATE_LIMIT_PER_MIN = 74
+AV_RATE_LIMIT_PER_MIN = 70
 AV_HARD_CAP_PER_MIN = 75

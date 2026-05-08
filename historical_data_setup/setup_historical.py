@@ -30,6 +30,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
+from config.settings import AV_RATE_LIMIT_PER_MIN
 from historical_data_setup.ensure_folders import ensure_historical_folders
 from historical_data_setup._common import (
     IssueTracker,
@@ -146,7 +147,7 @@ async def run_historical_setup(
     )
 
     api_key = get_alpha_vantage_key(api_tier)
-    rate_limiter = RateLimiter(74.0)
+    rate_limiter = RateLimiter(float(AV_RATE_LIMIT_PER_MIN))
     issue_tracker = IssueTracker()
     reset_av_call_count()
 

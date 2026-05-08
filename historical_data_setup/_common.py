@@ -12,6 +12,8 @@ from pathlib import Path
 import aiohttp
 import polars as pl
 
+from config.settings import AV_RATE_LIMIT_PER_MIN
+
 logger = logging.getLogger(__name__)
 
 AV_BASE = "https://www.alphavantage.co"
@@ -36,7 +38,7 @@ class RateLimiter:
 
     def __init__(
         self,
-        calls_per_minute: float = 74.0,
+        calls_per_minute: float = float(AV_RATE_LIMIT_PER_MIN),
         window: float = 60.0,
         min_gap: float = 0.6,
     ):
