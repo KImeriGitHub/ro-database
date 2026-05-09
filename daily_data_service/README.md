@@ -64,6 +64,8 @@ On every run, `setup_daily.py` checks for `daily/.setup_started_at`. If present,
 
 This keeps folder-date stable across crashes and across calendar-day rollovers during a long resumed run.
 
+> **24/7 markets.** `cryptocurrencies`, `forex`, `commodities`, `indices`, and `economic` follow AV's daily candle, which seals at **UTC 00:00** (= 19:00 EST in winter, 20:00 EDT in summer). The 20:00 ET cutoff is at or past UTC rollover in both seasons, so the candle for `folder_date` is complete. A run that starts before UTC 00:00 captures a partial candle and the next pull will disagree on Volume / Close (surfacing as `price_daily` `dedup_value_discrepancy_over_1pct`).
+
 ### previous-date
 
 Read from `catalog/yield_status.parquet`'s `date` column (all rows share the same value; read any one). This is the folder-date of the prior successful full run.

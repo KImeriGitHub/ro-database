@@ -20,6 +20,12 @@ def compute_folder_date(started_at_et: datetime) -> date:
     Weekend -> start date.
     Weekday, time >= 20:00 ET -> start date.
     Weekday, time <  20:00 ET -> start date minus one day.
+
+    The 20:00 ET cutoff also clears UTC 00:00 in both seasons (UTC
+    rollover = 19:00 EST in winter, 20:00 EDT in summer), so the AV
+    daily candle for cryptocurrencies / forex / commodities /
+    indices / economic is sealed by then. Loosening the cutoff
+    risks partial candles and price_daily dedup discrepancies.
     """
     start_date = started_at_et.date()
     if started_at_et.weekday() >= 5:
