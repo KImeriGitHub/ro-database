@@ -132,7 +132,7 @@ async def fetch_sentiment(
             )
 
             if new_time_to >= time_to:
-                logger.warning(
+                logger.info(
                     f"sentiment: no progress at time_to={time_to}, "
                     f"forcing step back"
                 )
