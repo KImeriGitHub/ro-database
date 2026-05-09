@@ -62,6 +62,15 @@ SUFFIXES: tuple[str, ...] = ("_quarterly", "_annual")
 # IS / BS / CF / E and between report_table anchors and estimates.
 FISCAL_MATCH_DAYS: int = 10
 
+# Tolerance for the "no upcoming reportedDate" case: when d is past every
+# known reportedDate but within this many days of the latest one, treat
+# m_anchor as past-the-end of the known prefix (so qm0 nulls but qm{m>=1}
+# still walks back through past quarters and qp_{n} can use future-extension
+# rows). Beyond this, fall back to the all-null defensive case. assets_overview
+# does not always supply an upcoming reportedDate (see int_test_transform.py),
+# so this tolerance keeps recent rows usable.
+NO_ANCHOR_TOLERANCE_DAYS: int = 60
+
 # Statement endpoints whose rows feed the _qm{m>=1} / _am{m>=1} cells.
 # Order matters: when a field appears in multiple endpoints (netIncome
 # lives in both INCOME_STATEMENT and CASH_FLOW), the FIRST endpoint in
@@ -693,7 +702,13 @@ def _lookup_data_at_fde(
             continue
         row, _diff = lookup.find_within(target_fde, FISCAL_MATCH_DAYS)
         if row is None:
-            fde_offcycle.add((ep, suffix, target_fde))
+            # Only flag as off-cycle when target_fde sits inside the
+            # endpoint's covered fde range. If it's older than the
+            # earliest fde or newer than the latest, it's plain data
+            # absence (e.g. an old quarter that never existed in the
+            # endpoint's history), not a restatement.
+            if lookup.sorted_fdes[0] <= target_fde <= lookup.sorted_fdes[-1]:
+                fde_offcycle.add((ep, suffix, target_fde))
             continue
         for k, v in row.items():
             if k in ("fiscalDateEnding", "reportedDate", "reportTime",
@@ -810,8 +825,18 @@ def build_financials(
     fde_offcycle_a: set[tuple[str, str, date]] = set()
     estimate_offcycle_q: set[date] = set()
     estimate_offcycle_a: set[date] = set()
-    no_anchor_q_count = 0
-    no_anchor_a_count = 0
+    # "Soft" no-anchor: d is past the last known reportedDate but within
+    # NO_ANCHOR_TOLERANCE_DAYS, so we keep qm{m>=1} / qp_{n} populated and
+    # only the qm0 anchor cells null. "Hard" no-anchor: d is well past
+    # everything (or there are no known reportedDates at all), so the row
+    # is fully nulled defensively.
+    soft_no_anchor_q_count = 0
+    soft_no_anchor_a_count = 0
+    hard_no_anchor_q_count = 0
+    hard_no_anchor_a_count = 0
+
+    latest_known_rd_q = rt_known_rd[-1] if rt_known_rd else None
+    latest_known_rd_a = rt_a_known_rd[-1] if rt_a_known_rd else None
 
     for d in dates:
         snap_date, is_fallback = _resolve_snapshot_date(d, snapshot_dates_sorted)
@@ -825,14 +850,28 @@ def build_financials(
         if is_fallback and snap_date is not None:
             snapshot_fallback.add(snap_date)
 
-        # Quarterly row. When no reportedDate >= d exists in
-        # report_table, m_anchor is past-the-end; defensively null
-        # every financials column for this row (per spec, this state
-        # is not expected to occur in practice).
+        # Quarterly row. When no reportedDate > d exists in report_table:
+        # - if d is within NO_ANCHOR_TOLERANCE_DAYS of the latest known
+        #   reportedDate, fall through with m_anchor = n_known_q so qm0
+        #   nulls but qm{m>=1} walks past quarters and qp_{n} can use
+        #   future-extension rows;
+        # - otherwise null every financials column defensively.
         m_anchor = bisect_right(rt_known_rd, d) if rt_known_rd else 0
         if m_anchor >= n_known_q:
-            no_anchor_q_count += 1
-            quarterly_rows.append(_build_empty_quarterly_row(d))
+            within_tol = (
+                latest_known_rd_q is not None
+                and (d - latest_known_rd_q).days < NO_ANCHOR_TOLERANCE_DAYS
+            )
+            if within_tol:
+                soft_no_anchor_q_count += 1
+                quarterly_rows.append(_build_quarterly_row(
+                    d, n_known_q, n_known_q, rt_rows, len(rt_rows),
+                    cached_snap_lookups, est_q_lookup,
+                    fde_offcycle_q, estimate_offcycle_q,
+                ))
+            else:
+                hard_no_anchor_q_count += 1
+                quarterly_rows.append(_build_empty_quarterly_row(d))
         else:
             quarterly_rows.append(_build_quarterly_row(
                 d, m_anchor, n_known_q, rt_rows, len(rt_rows),
@@ -840,11 +879,23 @@ def build_financials(
                 fde_offcycle_q, estimate_offcycle_q,
             ))
 
-        # Annual row. Same defensive rule on the annual axis.
+        # Annual row. Same two-tier rule on the annual axis.
         m_anchor_a = bisect_right(rt_a_known_rd, d) if rt_a_known_rd else 0
         if m_anchor_a >= n_known_a:
-            no_anchor_a_count += 1
-            annual_rows.append(_build_empty_annual_row(d))
+            within_tol_a = (
+                latest_known_rd_a is not None
+                and (d - latest_known_rd_a).days < NO_ANCHOR_TOLERANCE_DAYS
+            )
+            if within_tol_a:
+                soft_no_anchor_a_count += 1
+                annual_rows.append(_build_annual_row(
+                    d, n_known_a, n_known_a, rt_a_rows, len(rt_a_rows),
+                    cached_snap_lookups, est_a_lookup,
+                    fde_offcycle_a, estimate_offcycle_a,
+                ))
+            else:
+                hard_no_anchor_a_count += 1
+                annual_rows.append(_build_empty_annual_row(d))
         else:
             annual_rows.append(_build_annual_row(
                 d, m_anchor_a, n_known_a, rt_a_rows, len(rt_a_rows),
@@ -852,13 +903,24 @@ def build_financials(
                 fde_offcycle_a, estimate_offcycle_a,
             ))
 
-    # Flush accumulated issue logs.
-    if no_anchor_q_count or no_anchor_a_count:
+    # Flush accumulated issue logs. Soft no-anchor rows are common when
+    # assets_overview lacks an upcoming reportedDate, so they go to info;
+    # hard no-anchor rows still warn (d is genuinely stale).
+    if soft_no_anchor_q_count or soft_no_anchor_a_count:
+        logger.info(
+            "stocks/%s: %d quarterly / %d annual row(s) had no upcoming "
+            "reportedDate within %d days; qm0/am0 nulled, past quarters "
+            "and estimates kept.",
+            symbol, soft_no_anchor_q_count, soft_no_anchor_a_count,
+            NO_ANCHOR_TOLERANCE_DAYS,
+        )
+    if hard_no_anchor_q_count or hard_no_anchor_a_count:
         logger.warning(
             "stocks/%s: %d quarterly / %d annual row(s) had no m_anchor "
-            "(d > all known reportedDates); financials columns nulled "
-            "defensively. This state is not expected in practice.",
-            symbol, no_anchor_q_count, no_anchor_a_count,
+            "and d was beyond the %d-day tolerance from the latest known "
+            "reportedDate; financials columns nulled defensively.",
+            symbol, hard_no_anchor_q_count, hard_no_anchor_a_count,
+            NO_ANCHOR_TOLERANCE_DAYS,
         )
     if snapshot_fallback:
         report.record(
@@ -1008,7 +1070,10 @@ def _build_quarterly_row(
                 for fld_name, _t in _QP_DATA_FIELDS:
                     row[f"{fld_name}_qp_{suffix}"] = est_row.get(fld_name)
             else:
-                if est_q_lookup.sorted_fdes:
+                if (
+                    est_q_lookup.sorted_fdes
+                    and est_q_lookup.sorted_fdes[0] <= f_n <= est_q_lookup.sorted_fdes[-1]
+                ):
                     estimate_offcycle.add(f_n)
                 row[f"earnings_estimate_days_diff_qp_{suffix}"] = None
                 for fld_name, _t in _QP_DATA_FIELDS:
@@ -1076,7 +1141,10 @@ def _build_annual_row(
                 for fld_name, _t in _AP_DATA_FIELDS:
                     row[f"{fld_name}_ap_{suffix}"] = est_row.get(fld_name)
             else:
-                if est_a_lookup.sorted_fdes:
+                if (
+                    est_a_lookup.sorted_fdes
+                    and est_a_lookup.sorted_fdes[0] <= f_n <= est_a_lookup.sorted_fdes[-1]
+                ):
                     estimate_offcycle.add(f_n)
                 row[f"earnings_estimate_days_diff_ap_{suffix}"] = None
                 for fld_name, _t in _AP_DATA_FIELDS:

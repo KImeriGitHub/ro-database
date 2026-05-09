@@ -113,7 +113,10 @@ def test_concat_historical_plus_multiple_daily(tmp_path):
 
 # ── 3. Composite-key dedup with discrepancy logging ───────────────────────────
 
-def test_composite_key_dedup_discrepancy_under_and_over_1pct(tmp_path):
+def test_composite_key_dedup_discrepancy_over_only(tmp_path):
+    """insider_df suppresses under_1pct (small drift between snapshots
+    is normal noise). Only over_1pct logs survive; Alice's 0.5% drift
+    is dropped, Bob's 10% drift surfaces."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     _write_insider(h, [
@@ -123,7 +126,7 @@ def test_composite_key_dedup_discrepancy_under_and_over_1pct(tmp_path):
              security_type="Common Stock", shares=200.0, price=100.0),
     ])
     _write_insider(d, [
-        # 0.5% diff -> under_1pct.
+        # 0.5% diff -> under_1pct (suppressed).
         _row(date(2026, 4, 10), executive="Alice", title="CEO",
              security_type="Common Stock", shares=100.0, price=50.25),
         # 10% diff -> over_1pct.
@@ -135,11 +138,14 @@ def test_composite_key_dedup_discrepancy_under_and_over_1pct(tmp_path):
     assert out.height == 2
     rep = report.to_frame()
     issues = set(rep["issue_type"].to_list())
-    assert "dedup_value_discrepancy_under_1pct" in issues
+    assert "dedup_value_discrepancy_under_1pct" not in issues
     assert "dedup_value_discrepancy_over_1pct" in issues
 
 
-def test_composite_key_dedup_keeps_most_recent_source(tmp_path):
+def test_composite_key_dedup_keeps_earliest_source(tmp_path):
+    """insider_df dedup is PIT-correct: the earliest snapshot to capture
+    a (transactionDate, executive, security_type) row wins. Restated
+    shares/price values from later snapshots are dropped."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     _write_insider(h, [
@@ -152,7 +158,7 @@ def test_composite_key_dedup_keeps_most_recent_source(tmp_path):
     ])
     out = build_insider_df("AAPL", [h, d], TransformationReport())
     assert out.height == 1
-    assert pytest.approx(200.0, rel=1e-4) == out["Shares"][0]
+    assert pytest.approx(100.0, rel=1e-4) == out["Shares"][0]
 
 
 # ── 4. Composite-key dedup keeps distinct security types ──────────────────────

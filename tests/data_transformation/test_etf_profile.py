@@ -225,7 +225,9 @@ def test_concat_one_historical_plus_multiple_daily_no_dups(tmp_path):
 
 def test_duplicate_date_triggers_dedup_log(tmp_path):
     """Two source files contribute the same Date with mismatched
-    information_technology weights. The shared dedup helper fires."""
+    information_technology weights. The shared dedup helper fires.
+    etf_profile uses keep='first' (PIT-correct) so the historical
+    snapshot wins; the daily restatement is dropped."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     _write_profile(h, [_profile_row(date(2026, 4, 15), it=0.30, net_assets=1.0e11)])
@@ -233,8 +235,8 @@ def test_duplicate_date_triggers_dedup_log(tmp_path):
     report = TransformationReport()
     df = build_etf_profile("SPY", [h, d], report)
     assert df.height == 1
-    # Daily wins.
-    assert pytest.approx(0.40, rel=1e-3) == df["information_technology"][0]
+    # Historical wins.
+    assert pytest.approx(0.30, rel=1e-3) == df["information_technology"][0]
     rep = report.to_frame()
     assert rep.filter(pl.col("frame") == "etf_profile").height >= 1
 

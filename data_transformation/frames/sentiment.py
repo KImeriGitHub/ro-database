@@ -84,6 +84,7 @@ def build_sentiment_df(
     merged = dedup_with_discrepancy_log(
         merged, _SENTIMENT_DEDUP_KEYS, _SENTIMENT_FLOAT_COLS, report,
         symbol, "stocks", "sentiment_df",
+        flag_under_1pct=False,
     )
     merged = merged.sort("Datetime")
     return cast_to_schema(merged, SCHEMAS["sentiment_df"], "sentiment_df")

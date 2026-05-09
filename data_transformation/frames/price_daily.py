@@ -179,6 +179,7 @@ def _build_one_symbol(
         merged = dedup_with_discrepancy_log(
             merged, "Date", _PRICE_FLOAT_COLS, report,
             symbol, asset_type, "price_daily",
+            keep="last",
         )
         df = _drop_null_ohlc(merged, symbol, asset_type, report)
         df = cast_to_schema(df, SCHEMAS["price_daily"], "price_daily")
@@ -308,6 +309,7 @@ def build_shareprice_daily(
     merged = dedup_with_discrepancy_log(
         merged, "Date", _SP_DAILY_DEDUP_COLS, report,
         symbol, asset_type, "shareprice_daily",
+        keep="last",
     )
 
     adj_factor = _compute_adj_factor(merged)

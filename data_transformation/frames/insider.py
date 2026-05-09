@@ -106,6 +106,7 @@ def build_insider_df(
     merged = dedup_with_discrepancy_log(
         merged, _INSIDER_DEDUP_KEYS, _INSIDER_FLOAT_COLS, report,
         symbol, "stocks", "insider_df",
+        flag_under_1pct=False,
     )
 
     merged = merged.with_columns(

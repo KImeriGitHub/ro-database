@@ -327,16 +327,17 @@ def test_single_past_quarter_populates_qm1(tmp_path):
 # ── 3. m_anchor walking ───────────────────────────────────────────────────────
 
 def test_no_anchor_nulls_every_financials_cell(tmp_path):
-    """When d is past every known reportedDate and there is no upcoming
-    entry, m_anchor is past-the-end -> every _qm{m} and _qp_{n} cell is
-    null (defensive). Same for the annual frame."""
+    """Hard no-anchor: d is far past every known reportedDate (well beyond
+    the 60-day tolerance) and there is no upcoming entry -> m_anchor past-
+    the-end -> every _qm{m} and _qp_{n} cell is null (defensive). Same for
+    the annual frame."""
     past_fde = date(2024, 6, 30)
     past_rd  = date(2024, 8, 1)
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
     # No estimates -> no upcoming entry can be added.
 
-    d = date(2026, 4, 15)  # well past everything
+    d = date(2026, 4, 15)  # 622 days past past_rd, well beyond tolerance
     sd = _sd_frame([d])
     fin_q, fin_a = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
@@ -356,6 +357,69 @@ def test_no_anchor_nulls_every_financials_cell(tmp_path):
             if col == "Date":
                 continue
             assert row_a[col] is None, f"annual {col!r} should be null"
+
+
+def test_soft_no_anchor_within_tolerance_keeps_past_quarters(tmp_path):
+    """Soft no-anchor: d is past the latest known reportedDate but within
+    NO_ANCHOR_TOLERANCE_DAYS, AND there is no upcoming entry from
+    assets_overview / estimates. Per the spec we set
+    m_anchor = n_known_q so qm0 anchor cells null, but qm{m>=1} walks back
+    through past quarters and qp_{n} can still resolve where estimates
+    exist. Earnings present + estimates empty must NOT abandon the past-
+    quarter mapping.
+    """
+    past_fde = date(2026, 3, 31)
+    past_rd  = date(2026, 5, 1)
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd, rt="post-market")],
+           _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "income_statement", "_quarterly"),
+           [_is_row(past_fde, past_rd, total_revenue=3.3e9)], _IS_SCHEMA)
+    _write(_hist_path(tmp_path, "balance_sheet", "_quarterly"),
+           [_bs_row(past_fde, past_rd, total_assets=9.0e9)], _BS_SCHEMA)
+    _write(_hist_path(tmp_path, "cash_flow", "_quarterly"),
+           [_cf_row(past_fde, past_rd, operating_cashflow=7.0e8)], _CF_SCHEMA)
+    # No estimates_q file at all -> empty estimates frame, no upcoming.
+    # No overview_row either -> assets_overview supplies no upcoming rd.
+
+    d = date(2026, 5, 31)  # 30 days past past_rd, well within 60-day tol
+    sd = _sd_frame([d])
+    report = TransformationReport()
+    fin_q, fin_a = build_financials(
+        "AAPL", sd, None, _gather_source_paths(tmp_path), report,
+    )
+    assert fin_q.height == 1
+    row = fin_q.row(0, named=True)
+
+    # qm0 anchor cells null (no upcoming reportedDate).
+    assert row["days_to_fiscalDateEnding_qm0"] is None
+    assert row["days_to_reportedDate_qm0"] is None
+    assert row["reportTime_qm0"] is None
+
+    # qm1 must carry the past quarter, NOT be nulled.
+    assert row["days_to_fiscalDateEnding_qm1"] == pytest.approx(
+        (d - past_fde).days, rel=1e-6
+    )
+    assert row["days_to_reportedDate_qm1"] == pytest.approx(
+        (d - past_rd).days, rel=1e-6
+    )
+    assert row["reportTime_qm1"] == "post-market"
+    assert row["reportedEPS_qm1"] == pytest.approx(1.0, rel=1e-3)
+    assert row["totalRevenue_qm1"] == pytest.approx(3.3e9, rel=1e-3)
+    assert row["totalAssets_qm1"] == pytest.approx(9.0e9, rel=1e-3)
+    assert row["operatingCashflow_qm1"] == pytest.approx(7.0e8, rel=1e-3)
+
+    # qp_{n} all null because estimates frame is empty (no offcycle log
+    # because there's nothing to compare against).
+    assert row["earnings_estimate_days_diff_qp_0"] is None
+    assert row["eps_estimate_average_qp_0"] is None
+    assert row["earnings_estimate_days_diff_qp_m1"] is None
+
+    # Soft case must NOT trigger the empty-frame defensive path.
+    assert fin_q.height == 1
+    # Hard no-anchor was not triggered, so no warning-level financials_*
+    # row is recorded; the soft case is logger.info only, not in the
+    # transformation report.
 
 
 def test_d_before_every_reporteddate_qm0_fills_from_earliest(tmp_path):
@@ -678,15 +742,23 @@ def test_fiscaldateending_5d_offset_matches_within_margin(tmp_path):
 
 
 def test_fiscaldateending_15d_offset_unmatched_logged(tmp_path):
+    """anchor_fde=2025-12-31 sits between two IS rows (2025-12-16 and
+    2026-03-31), so the anchor is *inside* the IS coverage range but no
+    IS row is within +/- 10 days of it. Off-cycle is logged. The second
+    IS row is required so the anchor isn't filtered out as plain
+    out-of-coverage absence."""
     anchor_fde = date(2025, 12, 31)
     rd = date(2026, 2, 1)
-    is_fde = date(2025, 12, 16)  # 15 days early -> outside margin
+    is_fde_early = date(2025, 12, 16)  # 15 days early -> outside +/- 10d
+    is_fde_far   = date(2026, 3, 31)   # gives the IS lookup a range that
+                                       # straddles anchor_fde
     upcoming_fde = date(2026, 3, 31)
     upcoming_rd  = date(2026, 5, 1)
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(anchor_fde, rd)], _EARNINGS_Q_SCHEMA)
     _write(_hist_path(tmp_path, "income_statement", "_quarterly"),
-           [_is_row(is_fde, total_revenue=4.4e9)], _IS_SCHEMA)
+           [_is_row(is_fde_early, total_revenue=4.4e9),
+            _is_row(is_fde_far,   total_revenue=5.5e9)], _IS_SCHEMA)
     _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
            [_ee_row(anchor_fde), _ee_row(upcoming_fde)], _EE_Q_SCHEMA)
 

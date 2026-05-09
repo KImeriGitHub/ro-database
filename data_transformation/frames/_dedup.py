@@ -44,10 +44,24 @@ def dedup_with_discrepancy_log(
     symbol: str,
     asset_type: str,
     frame_name: str,
+    *,
+    keep: str = "first",
+    flag_under_1pct: bool = True,
 ) -> pl.DataFrame:
     """Sort *df* by ``(key..., _source_order)``, log per-key value
-    discrepancies in *float_cols*, then dedup keeping the last occurrence
-    per key (i.e. the most recent source).
+    discrepancies in *float_cols*, then dedup keeping one row per key.
+
+    *keep* selects which source wins on collisions:
+    ``"first"`` = earliest source order (PIT-correct: the snapshot that
+    first captured the row wins, restatements are dropped). ``"last"`` =
+    most recent source order (latest restated value wins). Price frames
+    use ``"last"``; everything else uses the default ``"first"``.
+
+    *flag_under_1pct* set to False suppresses
+    ``dedup_value_discrepancy_under_1pct`` records. Insider/sentiment
+    use this: small (<1%) drift between snapshots is normal noise on
+    those frames and is not worth a report row. Over-1pct entries
+    still fire and represent the actual signal worth reviewing.
 
     *key* may be a single column name or a list of column names for
     composite keys (e.g. insider rows keyed on
@@ -56,6 +70,9 @@ def dedup_with_discrepancy_log(
     *df* must already carry the ``_source_order`` column attached by
     :func:`attach_source_order`. Output drops that column.
     """
+    if keep not in ("first", "last"):
+        raise ValueError(f"keep must be 'first' or 'last', got {keep!r}")
+
     keys: list[str] = [key] if isinstance(key, str) else list(key)
     if df.height == 0:
         return df.drop(SOURCE_ORDER_COL) if SOURCE_ORDER_COL in df.columns else df
@@ -70,7 +87,7 @@ def dedup_with_discrepancy_log(
         n_under, n_over, samples_under, samples_over = _classify_discrepancies(
             dup_rows, keys, float_cols
         )
-        if n_under:
+        if n_under and flag_under_1pct:
             report.record(
                 symbol, asset_type, frame_name,
                 "dedup_value_discrepancy_under_1pct",
@@ -87,7 +104,7 @@ def dedup_with_discrepancy_log(
                 detail=("; ".join(samples_over))[:500],
             )
 
-    deduped = df.unique(subset=keys, keep="last", maintain_order=False)
+    deduped = df.unique(subset=keys, keep=keep, maintain_order=False)
     return deduped.drop(SOURCE_ORDER_COL).sort(keys)
 
 

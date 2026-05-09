@@ -150,9 +150,10 @@ def test_same_minute_different_urls_kept_as_two_rows(tmp_path):
     assert out.height == 2
 
 
-def test_same_datetime_url_collapses_with_recent_winning(tmp_path):
-    """Repeated (Datetime, url) across sources collapses to one; daily
-    snapshot wins on field values."""
+def test_same_datetime_url_collapses_with_first_winning(tmp_path):
+    """Repeated (Datetime, url) across sources collapses to one; the
+    earliest source (historical) wins because sentiment dedup is
+    PIT-correct: the score first published persists, restatements drop."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     dt = datetime(2026, 4, 15, 9, 30)
@@ -160,16 +161,16 @@ def test_same_datetime_url_collapses_with_recent_winning(tmp_path):
     _write_sentiment(d, [_row(dt, url="u-shared", overall=0.50)])
     out = build_sentiment_df("AAPL", [h, d], TransformationReport())
     assert out.height == 1
-    assert pytest.approx(0.50, rel=1e-4) == out["overall_sentiment_score"][0]
+    assert pytest.approx(0.10, rel=1e-4) == out["overall_sentiment_score"][0]
 
 
 # ── 5. Discrepancy logging across score columns ───────────────────────────────
 
-def test_discrepancy_logging_under_and_over_1pct(tmp_path):
-    """Two sources collide on (Datetime, url): ticker_sentiment_score
-    differs by <1% (under) and technology differs by >=1% (over).
-    Per the dedup helper's per-key max-relative classification, the
-    larger discrepancy wins -> a single over_1pct log row."""
+def test_discrepancy_under_1pct_suppressed_for_sentiment(tmp_path):
+    """Sentiment scores routinely drift by <1% between snapshots
+    (model rescores already-published articles). That noise is
+    suppressed; only over_1pct entries make it into the report,
+    surfacing genuine large rescores."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     dt = datetime(2026, 4, 15, 9, 30)
@@ -179,12 +180,16 @@ def test_discrepancy_logging_under_and_over_1pct(tmp_path):
     build_sentiment_df("AAPL", [h, d], report)
     rep = report.to_frame()
     issues = set(rep["issue_type"].to_list())
+    # Per-key max-relative bucketing: technology shifts 60% so the row
+    # lands in over_1pct, which is kept. There is no under_1pct entry.
     assert "dedup_value_discrepancy_over_1pct" in issues
+    assert "dedup_value_discrepancy_under_1pct" not in issues
 
 
-def test_discrepancy_under_1pct_when_only_small_diffs(tmp_path):
-    """Two sources collide on (Datetime, url) with all numeric differences
-    strictly under 1% -> exactly one under_1pct log row."""
+def test_discrepancy_no_log_when_only_small_diffs(tmp_path):
+    """All numeric differences strictly under 1% -> no log row at all
+    for sentiment_df, since the under-1pct bucket is suppressed and the
+    over-1pct bucket is empty."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
     dt = datetime(2026, 4, 15, 9, 30)
@@ -195,7 +200,7 @@ def test_discrepancy_under_1pct_when_only_small_diffs(tmp_path):
     rep = report.to_frame()
     assert rep.filter(
         pl.col("issue_type") == "dedup_value_discrepancy_under_1pct"
-    ).height == 1
+    ).height == 0
     assert rep.filter(
         pl.col("issue_type") == "dedup_value_discrepancy_over_1pct"
     ).height == 0

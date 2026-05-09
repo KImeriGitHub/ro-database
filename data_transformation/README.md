@@ -144,6 +144,27 @@ logs `dedup_value_discrepancy_under_1pct` / `over_1pct` rows to
 Float32 field. Skipping or replacing this step with a naive concat is a
 correctness bug; cross-folder overlap will reach downstream consumers.
 
+The dedup helper takes a `keep` argument that selects the winner on
+collisions:
+
+* **`keep="last"`** (price frames -- `price_daily`, `shareprice_daily`,
+  `shareprice_intraday`): the most recent daily snapshot wins.
+  Restatements of OHLCV (split / dividend backfills, exchange replays)
+  overwrite the older value. This trades PIT integrity for data quality
+  on the assumption that recent OHLCV revisions are corrections.
+* **`keep="first"`** (everything else -- `insider_df`, `sentiment_df`,
+  `etf_profile`): the earliest snapshot to capture the row wins. PIT-
+  correct: the value first observed at time `T` is what a strategy would
+  have seen at `T`; later restatements are dropped (still logged).
+
+`insider_df` and `sentiment_df` additionally pass `flag_under_1pct=False`
+to the helper. Their Float32 fields drift between snapshots by sub-1%
+as a normal matter of operation (rewritten share counts, AV's
+sentiment model rescoring already-published articles by tiny
+amounts); the under-1pct classification on these frames is noise, so
+it is never recorded. Over-1pct entries still fire and represent real
+restatements worth reviewing.
+
 The remaining endpoints (fundamentals, `insider`, `sentiment`,
 `etf_profile`, monthly `commodities`, non-daily `economic`) do not use
 the 7-day floor, but their builders still dedup -- historical and daily
@@ -284,13 +305,16 @@ keeps only the modelling-relevant columns (see
 [AssetData_specifications.md](AssetData_specifications.md) section
 `### insider_df`): `Date`, `Executive_role`, `AcqDis`, `Shares`.
 
-1. Read every source file. Concat with `attach_source_order` so
-   later daily folders overwrite the historical baseline.
+1. Read every source file. Concat with `attach_source_order`.
 2. Deduplicate on the composite key
-   `(transactionDate, executive, security_type)` keeping the most
-   recent source. Discrepancy logging on the Float32 fields
-   (`shares`, `share_price`) reuses
-   `dedup_value_discrepancy_under_1pct` / `over_1pct`. Dedup happens
+   `(transactionDate, executive, security_type)` with
+   `keep="first"` (earliest source wins -- the snapshot that first
+   captured the row keeps its values; later restatements are
+   dropped). Discrepancy logging on the Float32 fields
+   (`shares`, `share_price`) emits only
+   `dedup_value_discrepancy_over_1pct` -- under-1pct is suppressed
+   because tiny drifts between snapshots are normal noise on this
+   frame; only large restatements are worth surfacing. Dedup happens
    **before** the role mapping so two source titles that collapse to
    the same role for the same executive are still surfaced as a
    discrepancy if the underlying values differ.
@@ -316,13 +340,14 @@ responsibility of the feature-generation step that consumes
 `StockData`.
 
 > **Note on retroactive amendments.** Late retroactive changes to
-> already-observed insider rows are not modelled - the dedup helper
-> keeps the most recent source row per
-> `(transactionDate, executive, security_type)`, so an amendment that
-> changes only `shares` or `share_price` will overwrite silently
-> (with discrepancy logged). If you suspect this is happening at
-> scale, raw `daily/*/stocks/insider/` retains every snapshot and PIT
-> replay is possible offline.
+> already-observed insider rows are dropped: the dedup helper uses
+> `keep="first"` per `(transactionDate, executive, security_type)`,
+> so an amendment that changes only `shares` or `share_price`
+> retains the earliest captured value. Amendments that move a value
+> by >=1% surface as `dedup_value_discrepancy_over_1pct` in the
+> transformation report; sub-1% drift is suppressed as noise. If you
+> need to inspect amendments, raw `daily/*/stocks/insider/` retains
+> every snapshot and PIT replay is possible offline.
 
 ### sentiment_df (stocks)
 
@@ -342,12 +367,16 @@ dropped at the cast step.
    on every file).
 2. Rename `time_published` -> `Datetime`.
 3. Concat via `attach_source_order` and deduplicate on
-   `(Datetime, url)` keeping the most recent source. Discrepancy
-   logging covers every Float32 column
-   (`ticker_relevance_score`, `ticker_sentiment_score`,
-   `overall_sentiment_score`, plus the 15 topic relevance columns).
-   Two articles published in the same minute with different urls
-   survive as distinct rows.
+   `(Datetime, url)` with `keep="first"` (earliest source wins -- the
+   sentiment scores first published for an article persist; later
+   model rescores are dropped). Discrepancy logging covers every
+   Float32 column (`ticker_relevance_score`,
+   `ticker_sentiment_score`, `overall_sentiment_score`, plus the 15
+   topic relevance columns), but only the over-1pct bucket is
+   recorded -- AV's sentiment model regularly nudges scores by sub-1pct
+   between snapshots and that drift is suppressed as noise. Two
+   articles published in the same minute with different urls survive
+   as distinct rows.
 4. Sort by `Datetime` ascending.
 5. Cast to `SCHEMAS["sentiment_df"]`. The cast drops the source
    columns absent from the target schema (`url`, `title`, `summary`,
@@ -437,12 +466,22 @@ asymmetric by m:
 For each row date `d` in `shareprice_daily.Date`:
 
 - `m_anchor = smallest position i in report_table with
-  reportedDate[i] > d`. If no such position exists, `m_anchor` is
-  past-the-end and the entire row's financials columns (every
-  `_qm{m>=0}` and every `_qp_{n}` cell) are nulled defensively.
-  This state is not expected to occur in practice (assets_overview
-  should always supply an upcoming reportedDate); it is logged via
-  Python `logger.warning` per symbol.
+  reportedDate[i] > d`. If no such position exists, fall back to
+  one of two cases keyed on `(d - max(reportedDate)).days` against
+  `NO_ANCHOR_TOLERANCE_DAYS` (60):
+  - **Soft no-anchor** (`d - max(reportedDate) < 60 days`):
+    `m_anchor = n_known_q` (the count of known reportedDate
+    entries; past-the-end of the known prefix). Position `pos0`
+    for `qm0` is out of range so the qm0 anchor cells null, but
+    `qm{m>=1}` walks back through past quarters from the latest
+    known reportedDate and `qp_{n}` can use future-extension rows.
+    This is the common case when `assets_overview` does not
+    supply an upcoming reportedDate (which the integration tests
+    show happens in practice). Logged at `logger.info`.
+  - **Hard no-anchor** (`d - max(reportedDate) >= 60 days`, or no
+    known reportedDate exists at all): the entire row's financials
+    columns (every `_qm{m>=0}` and every `_qp_{n}` cell) are nulled
+    defensively. Logged at `logger.warning`.
 - For each `m in 1..16`, position `i = m_anchor - m`. Out-of-range
   positions null all `_qm{m}` columns for that m.
 - `days_to_fiscalDateEnding_qm{m} = (d - report_table.fiscalDateEnding[i]).days`
@@ -505,13 +544,15 @@ follows the same signed-offset convention as its quarterly
 counterpart:
  `(report_table_annual.fiscalDateEnding[i] - d).days`
 as Float32, null when no estimate matches within the +/-10-day
-margin or the position is out of range. The same defensive
-no-anchor rule applies: when no annual `reportedDate > d` exists
-in `report_table_annual`, every `_am{m>=0}` and every `_ap_{n}`
-cell on this row is nulled. Annual EARNINGS does not provide
-`reportTime`, `estimatedEPS`, `surprise`, or `surprisePercentage`
-(those are quarterly-only and absent from
-`SCHEMAS["financials_annually"]`).
+margin or the position is out of range. The same two-tier
+no-anchor rule applies on the annual axis: when no annual
+`reportedDate > d` exists in `report_table_annual`, the soft case
+(`d - max(reportedDate) < 60 days`) sets `am_anchor = n_known_a`
+so `am0` nulls but `am{m>=1}` and `ap_{n}` stay populated; the
+hard case nulls every `_am{m>=0}` and `_ap_{n}` cell. Annual
+EARNINGS does not provide `reportTime`, `estimatedEPS`,
+`surprise`, or `surprisePercentage` (those are quarterly-only and
+absent from `SCHEMAS["financials_annually"]`).
 
 #### Annual estimate extension
 
@@ -549,6 +590,16 @@ single `financials_reportedDate_mismatch` row is logged.
 `financials_fiscalDateEnding_offcycle` and do not trigger the
 no-op.
 
+In practice this check only ever fires on the quarterly path:
+Alpha Vantage's annual EARNINGS payload contains only
+`fiscalDateEnding` and `reportedEPS`, so every annual row's
+`reportedDate` is null and the consistency comparison is skipped
+(rows with null `reportedDate` are tolerated and never trigger
+the no-op). Mixed null-vs-non-null `reportedDate` values for the
+same `fiscalDateEnding` across snapshots are also tolerated for
+the same reason: a snapshot that simply has not yet picked up the
+filing date does not look like a rewrite.
+
 #### CLI
 
 `--skip-financials` skips this builder for stocks; the frames are
@@ -560,9 +611,9 @@ landed. Useful for fast iteration during development.
 | Issue type | Trigger |
 |---|---|
 | `financials_reportedDate_mismatch` | retroactive change in reportedDate for an already-known fiscalDateEnding; triggers a full no-op for the symbol |
-| `financials_fiscalDateEnding_offcycle` | quarterly fiscalDateEnding in IS / BS / CF / E differs from the report_table anchor by >10 days |
+| `financials_fiscalDateEnding_offcycle` | quarterly fiscalDateEnding in IS / BS / CF / E differs from the report_table anchor by >10 days, while still inside the endpoint file's covered fde range (anchors older or newer than the file's coverage are plain absence, not off-cycle, and are suppressed) |
 | `financials_snapshot_fallback` | no `daily/<d>/` for a row date d; fell back to most recent earlier daily snapshot |
-| `financials_estimate_offcycle` | earnings_estimates fiscalDateEnding differs from the anchor's by >10 days |
+| `financials_estimate_offcycle` | earnings_estimates fiscalDateEnding differs from the anchor's by >10 days, while still inside the estimates file's covered fde range |
 | `financials_no_earnings_file` | no `earnings/SYMBOL_quarterly.parquet` anywhere; both financials frames empty |
 | `financials_annual_no_quarterly_match` | annual fiscalDateEnding has no quarterly match within 10 days; annual entry dropped |
 

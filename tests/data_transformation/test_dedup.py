@@ -103,26 +103,70 @@ def test_dedup_over_1pct_discrepancy_logged():
 
 
 def test_dedup_keep_last_means_most_recent_source_wins():
-    """When concatenated in source order, dedup keeps the row from the
-    highest source order (the most recent daily snapshot)."""
+    """keep='last' keeps the row from the highest source order (the most
+    recent daily snapshot). This is what the price frames request."""
     f_hist = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
     f_daily = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 110.0, 100.0)])
     df = attach_source_order([f_hist, f_daily])
     report = TransformationReport()
-    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily")
+    out = dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "shareprice_daily",
+        keep="last",
+    )
     assert out.height == 1
     assert out["Close"][0] == 110.0
 
 
+def test_dedup_keep_first_default_means_earliest_source_wins():
+    """Default keep='first' keeps the row from the earliest source order
+    (the first snapshot to capture it). PIT-correct: insider/sentiment
+    and other non-price frames use this so restatements are dropped."""
+    f_hist = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
+    f_daily = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 110.0, 100.0)])
+    df = attach_source_order([f_hist, f_daily])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "sentiment_df",
+    )
+    assert out.height == 1
+    assert out["Close"][0] == 100.0
+
+
+def test_dedup_flag_under_1pct_false_suppresses_under_log():
+    """flag_under_1pct=False (insider/sentiment) skips under_1pct
+    logging entirely; over_1pct still fires on real >=1% drift, which
+    is the signal worth reviewing."""
+    f1 = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 200.0, 100.0),
+    ])
+    f2 = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.5, 100.0),  # 0.5%
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 220.0, 100.0),  # 10%
+    ])
+    df = attach_source_order([f1, f2])
+    report = TransformationReport()
+    dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "AAPL", "stocks", "sentiment_df",
+        flag_under_1pct=False,
+    )
+    rep = report.to_frame()
+    assert set(rep["issue_type"].to_list()) == {"dedup_value_discrepancy_over_1pct"}
+
+
 def test_dedup_null_in_one_source_no_discrepancy():
-    """A duplicate where one source has null does not flag a discrepancy."""
+    """A duplicate where one source has null does not flag a discrepancy.
+    keep='last' is requested (price-frame behavior) so the kept row is
+    from the second source, whose Close is null."""
     f1 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0)])
     f2 = _make_frame([(date(2020, 1, 1), 1.0, 1.0, 1.0, None, 100.0)])
     df = attach_source_order([f1, f2])
     report = TransformationReport()
-    out = dedup_with_discrepancy_log(df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily")
+    out = dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "X", "forex", "price_daily",
+        keep="last",
+    )
     assert out.height == 1
-    # Last source had null Close, so the kept row's Close is null.
     assert out["Close"][0] is None
     assert report.to_frame().height == 0
 
