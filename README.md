@@ -269,12 +269,12 @@ catalog/
 ├── cryptocurrencies.parquet
 ├── commodities.parquet
 ├── economic.parquet
-├── yield_status.parquet
-└── earnings_calendar.parquet
+└── yield_status.parquet
 
 historical/
 ├── .setup_started_at            # mtime = original start time; preserved across resumes
 ├── ingestion_report.parquet     # per-run issue log (overwritten each run)
+├── earnings_calendar.parquet    # EARNINGS_CALENDAR (6-month horizon, one global file)
 ├── monitoring_report.json       # end-of-run database snapshot (machine-readable)
 ├── monitoring_report.md         # end-of-run database snapshot (human-readable)
 ├── stocks/
@@ -301,6 +301,7 @@ daily/
 ├── .setup_started_at            # mtime = folder-date anchor; preserved across resumes
 └── YYYY-MM-DD/
     ├── ingestion_report.parquet # per-run issue log for this date
+    ├── earnings_calendar.parquet # EARNINGS_CALENDAR (6-month horizon, one global file)
     ├── monitoring_report.json   # end-of-run database snapshot (machine-readable)
     ├── monitoring_report.md     # end-of-run database snapshot (human-readable)
     ├── stocks/
@@ -329,7 +330,6 @@ daily/
 **`catalog/`** — Asset catalog data, managed by `asset_catalog_service`. Each `.parquet` file tracks tickers/symbols with status, start date, and end date for its asset class (stocks, ETFs, indices, forex, cryptocurrencies, commodities, economic indicators).
 
 - `yield_status.parquet` — Per-ticker, per-endpoint API yield tracking (has data / empty / stopped returning data).
-- `earnings_calendar.parquet` — Future earnings dates.
 
 **`historical/`** — Historical load, ideally append-only. Every row corresponds to one day and/or one minute, sorted. Best possible approximation of what people would have seen on that day. Files are compressed `.parquet`. Price endpoints (`prices`, `prices_daily`), `insider`, `sentiment`, and `etf_profile` use one file per ticker (e.g., `AAPL.parquet`). Fundamental endpoints (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`) use two files per ticker: `SYMBOL_annual.parquet` and `SYMBOL_quarterly.parquet`.
 
@@ -391,8 +391,9 @@ for the full breakdown.
      `indices`, `forex`, `cryptocurrencies`: breakdown by status (Active /
      Delisted / Corrupted). For `commodities`, `economic`: row count. For
      `yield_status`: per-endpoint True / False / Null counts and the True /
-     False ratios over True+False. For `earnings_calendar`: row count, cast
-     issue count, average days until the next reportedDate.
+     False ratios over True+False. For `earnings_calendar` (read from the
+     run's `historical/` or `daily/<date>/` folder, not from `catalog/`):
+     row count, cast issue count, average days until the next reportedDate.
   2. **Ingestion report.** From the run's `ingestion_report.parquet`: total
      `timezone_mismatch` and `av_throttle` (ideally zero, warning if not);
      `structure_error`, `empty_content`, `cast_failure` totals plus a
