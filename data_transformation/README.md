@@ -73,8 +73,8 @@ Schema:
 | symbol        | Utf8  | `catalog/{asset_type}.parquet:symbol` |
 | assetType     | Utf8  | one of stocks, etfs, forex, indices, cryptocurrencies, commodities, economic |
 | about         | Utf8  | `catalog/{asset_type}.parquet:name` (empty string if absent) |
-| reportedDate  | Date  | `catalog/earnings_calendar.parquet:reportedDate` (next upcoming row per symbol; null if absent) |
-| timeOfTheDay  | Utf8  | `catalog/earnings_calendar.parquet:timeOfTheDay` (empty string if absent) |
+| reportedDate  | Date  | `earnings_calendar.parquet:reportedDate` (next upcoming row per symbol; null if absent). Resolved from the newest `daily/<YYYY-MM-DD>/earnings_calendar.parquet`, falling back to `historical/earnings_calendar.parquet`. |
+| timeOfTheDay  | Utf8  | `earnings_calendar.parquet:timeOfTheDay` (empty string if absent). Same resolver as `reportedDate`. |
 | sector        | Utf8  | `catalog/stocks.parquet:sector` verbatim (empty string for non-stocks). The catalog is the canonicalization point: downstream code (e.g. `sector_to_index` for `StockData.sector`) maps these strings against `CANONICAL_SECTORS` in AssetData.py and falls through to `Other` on unknown values, so any non-canonical strings stored here silently degrade to `Other` later. |
 
 Every symbol from every asset catalog appears exactly once. `about`,

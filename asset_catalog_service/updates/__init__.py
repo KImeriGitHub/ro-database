@@ -8,4 +8,3 @@ from asset_catalog_service.updates.commodities import update_commodities
 from asset_catalog_service.updates.economic import update_economic
 from asset_catalog_service.updates.yield_status import update_yield_status
 from asset_catalog_service.updates.yield_status import finalize_yield_status
-from asset_catalog_service.updates.earnings_calendar import update_earnings_calendar

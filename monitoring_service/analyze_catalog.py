@@ -114,11 +114,20 @@ def _earnings_calendar_summary(path: Path, today: date) -> dict:
     }
 
 
-def analyze_catalog(catalog_dir: Path, today: date | None = None) -> dict:
+def analyze_catalog(
+    catalog_dir: Path,
+    today: date | None = None,
+    folder_dir: Path | None = None,
+) -> dict:
     """Build the ``catalog`` section of a monitoring report.
 
     *today* defaults to ``date.today()`` and is only used to compute the
     earnings_calendar's ``avg_days_to_next_reportedDate``.
+
+    *folder_dir* is the historical/daily folder being analysed; it is the
+    source of ``earnings_calendar.parquet`` (the file moved out of
+    ``catalog/`` in favour of one copy per data-pull folder). When omitted,
+    earnings_calendar is reported as missing.
     """
     today = today or date.today()
     out: dict = {}
@@ -131,7 +140,14 @@ def analyze_catalog(catalog_dir: Path, today: date | None = None) -> dict:
     out["yield_status"] = _yield_status_summary(
         catalog_dir / "yield_status.parquet"
     )
-    out["earnings_calendar"] = _earnings_calendar_summary(
-        catalog_dir / "earnings_calendar.parquet", today
+    ec_path = (
+        folder_dir / "earnings_calendar.parquet"
+        if folder_dir is not None
+        else None
+    )
+    out["earnings_calendar"] = (
+        _earnings_calendar_summary(ec_path, today)
+        if ec_path is not None
+        else {"missing": True}
     )
     return out

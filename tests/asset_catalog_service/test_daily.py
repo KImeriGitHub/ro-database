@@ -19,7 +19,6 @@ from asset_catalog_service.updates import (
     update_commodities,
     update_economic,
     update_yield_status,
-    update_earnings_calendar,
 )
 
 MOCK_DIR = Path(__file__).parent / "mock_catalog"
@@ -408,28 +407,3 @@ def test_daily_yield_status_noop(mock_fetch_text, mock_fetch_json):
     assert df1.equals(df2)
 
 
-# ── earnings_calendar always overwrites ───────────────────────────────
-
-
-@patch("asset_catalog_service.updates.earnings_calendar.fetch_text")
-def test_daily_earnings_calendar_overwrites(mock_fetch):
-    csv1 = (
-        "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
-        "AAPL,Apple Inc,2026-04-25,2026-03-31,1.62,USD,AMC\n"
-    )
-    csv2 = (
-        "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
-        "MSFT,Microsoft,2026-04-22,2026-03-31,3.22,USD,AMC\n"
-    )
-
-    mock_fetch.return_value = csv1
-    update_earnings_calendar("fake-key", MOCK_DIR)
-    df1 = pl.read_parquet(MOCK_DIR / "earnings_calendar.parquet")
-    assert df1.height == 1
-    assert df1["symbol"].to_list() == ["AAPL"]
-
-    mock_fetch.return_value = csv2
-    update_earnings_calendar("fake-key", MOCK_DIR)
-    df2 = pl.read_parquet(MOCK_DIR / "earnings_calendar.parquet")
-    assert df2.height == 1
-    assert df2["symbol"].to_list() == ["MSFT"]  # fully replaced

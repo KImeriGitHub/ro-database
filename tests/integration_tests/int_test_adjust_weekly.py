@@ -34,6 +34,7 @@ from monitoring_service.report import (
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     DAILY_DIR,
+    HISTORICAL_DIR,
     configure_int_test_logging,
     reduce_catalogs,
 )
@@ -154,7 +155,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_reduce:
         logger.info("--no-reduce passed: skipping catalog trim.")
     else:
-        kept_stocks, kept_etfs = reduce_catalogs(CATALOG_DIR)
+        kept_stocks, kept_etfs = reduce_catalogs(
+            CATALOG_DIR,
+            historical_dir=HISTORICAL_DIR,
+            daily_dir=DAILY_DIR,
+        )
         logger.info(
             f"Reduced catalog post-run: {len(kept_stocks)} stocks, "
             f"{len(kept_etfs)} etfs"

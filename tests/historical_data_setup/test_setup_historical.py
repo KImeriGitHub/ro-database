@@ -62,6 +62,7 @@ def test_full_run_schedules_every_asset_endpoint_pair(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -86,6 +87,7 @@ def test_subset_by_endpoints_filters_plan(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -135,6 +137,7 @@ def test_frd_dirs_routed_only_to_prices_endpoints(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -180,6 +183,7 @@ def test_finalize_runs_only_on_full_run(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status") as finalize_mock, \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -193,6 +197,7 @@ def test_finalize_runs_only_on_full_run(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status") as finalize_mock, \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -214,6 +219,7 @@ def test_run_monitor_flag_controls_persist(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist") as monitor_mock:
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -225,6 +231,7 @@ def test_run_monitor_flag_controls_persist(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist", side_effect=RuntimeError("boom")) as monitor_mock:
         # Must not propagate -- setup is unaffected by monitor failure.
         _run(sh.run_historical_setup(
@@ -257,6 +264,7 @@ def test_start_marker_persists_across_resumed_runs(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar"), \
          patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -266,3 +274,75 @@ def test_start_marker_persists_across_resumed_runs(workdir: Path):
 
     # Full run ran finalize successfully, so the marker must be gone.
     assert not marker.exists()
+
+
+# ---------------------------------------------------------------------------
+# earnings_calendar gating
+# ---------------------------------------------------------------------------
+
+
+def test_earnings_calendar_runs_on_full_run(workdir: Path):
+    historical = workdir / "historical"
+    catalog = workdir / "catalog"
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sh.ENDPOINT_MAP}
+
+    with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
+         patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sh, "run_report_and_persist"):
+        _run(sh.run_historical_setup(
+            catalog_dir=catalog,
+            historical_dir=historical,
+            run_monitor=False,
+        ))
+    ec_mock.assert_called_once_with("fake-key", historical)
+
+
+def test_earnings_calendar_runs_when_named_in_endpoints(workdir: Path):
+    """Passing ``--endpoints earnings_calendar`` (alone or alongside other
+    endpoints) triggers the sync fetch even though it isn't in
+    ``ENDPOINT_MAP``."""
+    historical = workdir / "historical"
+    catalog = workdir / "catalog"
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sh.ENDPOINT_MAP}
+
+    with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
+         patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sh, "run_report_and_persist"):
+        _run(sh.run_historical_setup(
+            catalog_dir=catalog,
+            historical_dir=historical,
+            endpoints=["prices_daily", "earnings_calendar"],
+            run_monitor=False,
+        ))
+    ec_mock.assert_called_once_with("fake-key", historical)
+
+
+def test_earnings_calendar_skipped_on_partial_endpoints(workdir: Path):
+    """A partial run that does not name ``earnings_calendar`` must not
+    trigger the fetch."""
+    historical = workdir / "historical"
+    catalog = workdir / "catalog"
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sh.ENDPOINT_MAP}
+
+    with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
+         patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sh, "finalize_yield_status"), \
+         patch.object(sh, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sh, "run_report_and_persist"):
+        _run(sh.run_historical_setup(
+            catalog_dir=catalog,
+            historical_dir=historical,
+            endpoints=["prices_daily"],
+            run_monitor=False,
+        ))
+    ec_mock.assert_not_called()

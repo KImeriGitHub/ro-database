@@ -129,6 +129,7 @@ def test_run_daily_pull_plans_full_cross_product_on_full_run(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(catalog_dir=catalog, daily_dir=daily))
 
@@ -151,6 +152,7 @@ def test_run_daily_pull_subsets_by_asset_types(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(
             catalog_dir=catalog, daily_dir=daily,
@@ -177,6 +179,7 @@ def test_run_daily_pull_subsets_by_endpoints(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(
             catalog_dir=catalog, daily_dir=daily,
@@ -206,6 +209,7 @@ def test_finalize_yield_status_runs_only_on_full_run(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status") as finalize_mock, \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(
             catalog_dir=catalog, daily_dir=daily,
@@ -216,6 +220,7 @@ def test_finalize_yield_status_runs_only_on_full_run(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status") as finalize_mock, \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(catalog_dir=catalog, daily_dir=daily))
     finalize_mock.assert_called_once()
@@ -241,6 +246,7 @@ def test_skip_empty_yield_only_passed_to_yield_skip_endpoints(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(
             catalog_dir=catalog, daily_dir=daily,
@@ -281,6 +287,7 @@ def test_ingestion_report_written_under_folder_date(workdir: Path):
     with _patch_resolve_marker(daily, folder_date), \
          patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
          patch.object(sd, "ENDPOINT_MAP", endpoint_map):
         _run(sd.run_daily_pull(catalog_dir=catalog, daily_dir=daily))
 
@@ -288,3 +295,73 @@ def test_ingestion_report_written_under_folder_date(workdir: Path):
     assert day_root.exists()
     # No issues -> save() returns early; report file does not exist.
     assert not (day_root / "ingestion_report.parquet").exists()
+
+
+# ---------------------------------------------------------------------------
+# earnings_calendar gating
+# ---------------------------------------------------------------------------
+
+
+def test_earnings_calendar_runs_on_full_run(workdir: Path):
+    folder_date = date(2026, 4, 17)
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_yield_status(catalog, date(2026, 4, 14))
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sd.ENDPOINT_MAP}
+
+    with _patch_resolve_marker(daily, folder_date), \
+         patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sd, "ENDPOINT_MAP", endpoint_map):
+        _run(sd.run_daily_pull(catalog_dir=catalog, daily_dir=daily))
+
+    day_root = daily / folder_date.isoformat()
+    ec_mock.assert_called_once_with("fake-key", day_root)
+
+
+def test_earnings_calendar_runs_when_named_in_endpoints(workdir: Path):
+    folder_date = date(2026, 4, 17)
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_yield_status(catalog, date(2026, 4, 14))
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sd.ENDPOINT_MAP}
+
+    with _patch_resolve_marker(daily, folder_date), \
+         patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sd, "ENDPOINT_MAP", endpoint_map):
+        _run(sd.run_daily_pull(
+            catalog_dir=catalog, daily_dir=daily,
+            endpoints=["prices_daily", "earnings_calendar"],
+        ))
+
+    day_root = daily / folder_date.isoformat()
+    ec_mock.assert_called_once_with("fake-key", day_root)
+
+
+def test_earnings_calendar_skipped_on_partial_endpoints(workdir: Path):
+    folder_date = date(2026, 4, 17)
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_yield_status(catalog, date(2026, 4, 14))
+
+    stub = _make_recording_stub([])
+    endpoint_map = {ep: stub for ep in sd.ENDPOINT_MAP}
+
+    with _patch_resolve_marker(daily, folder_date), \
+         patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(sd, "ENDPOINT_MAP", endpoint_map):
+        _run(sd.run_daily_pull(
+            catalog_dir=catalog, daily_dir=daily,
+            endpoints=["prices_daily"],
+        ))
+
+    ec_mock.assert_not_called()

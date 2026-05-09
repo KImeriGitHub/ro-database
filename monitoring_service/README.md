@@ -32,7 +32,10 @@ Per file under `catalog/`:
   ratios `true / (true + false)` and `false / (true + false)`. Null cells
   (the inapplicable pairs) are reported but excluded from the ratios.
 - `earnings_calendar.parquet`: total row count, `cast_issues` row count, and
-  the average days between `today` and the next `reportedDate`.
+  the average days between `today` and the next `reportedDate`. Read from
+  the run's own `folder_dir` (`historical/` or `daily/<date>/`), not from
+  `catalog/` -- the file moved with the historical/daily pull. When the
+  monitoring caller passes no `folder_dir`, this entry is reported missing.
 
 ### Ingestion report (`monitoring_service/analyze_ingestion.py`)
 

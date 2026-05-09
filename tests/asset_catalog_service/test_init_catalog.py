@@ -28,7 +28,6 @@ EXPECTED_ORDER = [
     "update_commodities",
     "update_economic",
     "update_yield_status",
-    "update_earnings_calendar",
 ]
 
 
@@ -49,7 +48,6 @@ def _patch_all_steps(call_log: list[str]):
         patch.object(ic, "update_commodities", side_effect=make_recorder("update_commodities")),
         patch.object(ic, "update_economic", side_effect=make_recorder("update_economic")),
         patch.object(ic, "update_yield_status", side_effect=make_recorder("update_yield_status")),
-        patch.object(ic, "update_earnings_calendar", side_effect=make_recorder("update_earnings_calendar")),
         patch.object(ic, "get_alpha_vantage_key", return_value="fake-key"),
     ]
 
@@ -109,7 +107,6 @@ def test_init_all_continues_when_one_step_raises(tmp_path):
          patch.object(ic, "update_commodities", side_effect=make_rec("update_commodities")), \
          patch.object(ic, "update_economic", side_effect=make_rec("update_economic")), \
          patch.object(ic, "update_yield_status", side_effect=make_rec("update_yield_status")), \
-         patch.object(ic, "update_earnings_calendar", side_effect=make_rec("update_earnings_calendar")), \
          patch.object(ic, "get_alpha_vantage_key", return_value="fake-key"):
         ic.init_all(catalog_dir=tmp_path / "catalog")
 
@@ -159,7 +156,6 @@ def test_init_all_passes_frd_dirs_to_init_stocks_etfs(tmp_path):
          patch.object(ic, "update_commodities"), \
          patch.object(ic, "update_economic"), \
          patch.object(ic, "update_yield_status"), \
-         patch.object(ic, "update_earnings_calendar"), \
          patch.object(ic, "get_alpha_vantage_key", return_value="fake-key"):
         ic.init_all(
             catalog_dir=tmp_path / "catalog",

@@ -21,7 +21,6 @@ from asset_catalog_service.updates import (
     update_commodities,
     update_economic,
     update_yield_status,
-    update_earnings_calendar,
 )
 from asset_catalog_service.updates._common import normalize_sector
 
@@ -55,13 +54,6 @@ CRYPTO_CSV = (
     "BTC,USD\n"
     "ETH,USD\n"
     "BTC,EUR\n"
-)
-
-EARNINGS_CSV = (
-    "symbol,name,reportDate,fiscalDateEnding,estimate,currency,timeOfTheDay\n"
-    "AAPL,Apple Inc,2026-04-25,2026-03-31,1.62,USD,AMC\n"
-    "MSFT,Microsoft,2026-04-22,2026-03-31,3.22,USD,AMC\n"
-    "BAD,Bad Corp,not-a-date,2026-03-31,xyz,USD,BMS\n"
 )
 
 # OVERVIEW responses keyed by symbol
@@ -386,27 +378,3 @@ def test_yield_status_skips_without_stocks():
     # No stocks.parquet -> should return without error
     update_yield_status(MOCK_DIR)
     assert not (MOCK_DIR / "yield_status.parquet").exists()
-
-
-@patch("asset_catalog_service.updates.earnings_calendar.fetch_text")
-def test_init_earnings_calendar(mock_fetch):
-    mock_fetch.return_value = EARNINGS_CSV
-
-    update_earnings_calendar("fake-key", MOCK_DIR)
-
-    df = pl.read_parquet(MOCK_DIR / "earnings_calendar.parquet")
-    assert df.height == 3
-    assert set(df.columns) == {
-        "symbol", "name", "reportedDate", "fiscalDateEnding",
-        "estimate", "currency", "timeOfTheDay", "cast_issues",
-    }
-    # BAD row should have cast issues
-    bad_row = df.filter(pl.col("symbol") == "BAD")
-    assert bad_row["cast_issues"].to_list()[0] is not None
-    assert "reportedDate" in bad_row["cast_issues"].to_list()[0]
-    assert "estimate" in bad_row["cast_issues"].to_list()[0]
-
-    # Good rows should have no cast issues
-    good = df.filter(pl.col("symbol") == "AAPL")
-    assert good["cast_issues"].to_list()[0] is None
-    assert good["estimate"].to_list()[0] == pytest.approx(1.62)

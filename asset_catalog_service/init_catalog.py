@@ -29,7 +29,6 @@ from asset_catalog_service.updates import (
     update_commodities,
     update_economic,
     update_yield_status,
-    update_earnings_calendar,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,10 +61,6 @@ def init_all(
         ("commodities", lambda: update_commodities(catalog_dir)),
         ("economic", lambda: update_economic(catalog_dir)),
         ("yield status", lambda: update_yield_status(catalog_dir)),
-        (
-            "earnings calendar",
-            lambda: update_earnings_calendar(api_key, catalog_dir),
-        ),
     ]
 
     for name, func in steps:

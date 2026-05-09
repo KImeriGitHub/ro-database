@@ -38,6 +38,7 @@ from daily_data_service._common import (
 )
 from daily_data_service.ensure_folders import ensure_daily_folders
 from historical_data_setup._common import RateLimiter, IssueTracker
+from historical_data_setup.earnings_calendar import fetch_earnings_calendar
 from daily_data_service.endpoints.prices import fetch_intraday_prices
 from daily_data_service.endpoints.prices_daily import fetch_daily_prices
 from daily_data_service.endpoints.income_statement import fetch_income_statement
@@ -136,10 +137,17 @@ async def run_daily_pull(
         daily_dir = project_root / "daily"
 
     full_run = asset_types is None and endpoints is None
+    # earnings_calendar is a single sync AV call producing one global parquet
+    # in the folder-date directory, not a per-symbol asyncio task. Run it on
+    # a full run, or when explicitly named via --endpoints earnings_calendar.
+    run_earnings_calendar = endpoints is None or "earnings_calendar" in endpoints
     if asset_types is None:
         asset_types = list(ASSET_ENDPOINTS.keys())
     if endpoints is None:
         endpoints = list(ENDPOINT_MAP.keys())
+    else:
+        # Strip the synthetic name so it doesn't leak into the asyncio plan.
+        endpoints = [ep for ep in endpoints if ep != "earnings_calendar"]
 
     started_at, folder_date, marker = resolve_start_marker(daily_dir)
     previous_date = read_previous_date(catalog_dir)
@@ -162,6 +170,15 @@ async def run_daily_pull(
     api_key = get_alpha_vantage_key(api_tier)
     rate_limiter = RateLimiter(float(AV_RATE_LIMIT_PER_MIN))
     issue_tracker = IssueTracker()
+
+    # Single sync AV call; runs before the asyncio plan so the rate limiter
+    # window is clean. Skip-if-exists guard inside the function makes this
+    # cheap on resume.
+    if run_earnings_calendar:
+        try:
+            fetch_earnings_calendar(api_key, day_root)
+        except Exception:
+            logger.exception("earnings_calendar fetch failed; continuing")
 
     plan: list[tuple[str, object, str, str]] = []
     for asset_type in asset_types:
@@ -254,7 +271,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--endpoints", nargs="+", default=None,
-        choices=list(ENDPOINT_MAP.keys()),
+        choices=list(ENDPOINT_MAP.keys()) + ["earnings_calendar"],
         help="Endpoints to fetch (default: all)",
     )
     parser.add_argument(

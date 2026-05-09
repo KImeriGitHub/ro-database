@@ -43,6 +43,7 @@ daily/
     ├── cryptocurrencies/
     ├── commodities/
     ├── economic/
+    ├── earnings_calendar.parquet # EARNINGS_CALENDAR (6-month horizon, one global file)
     ├── ingestion_report.parquet
     ├── monitoring_report.json   # written by monitoring_service at end of daily/weekend run
     └── monitoring_report.md     # human-readable rendering of the JSON
@@ -106,7 +107,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 - **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to the start of previous-date, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `stocks_SYMBOL.parquet` files for active symbols (same logic as historical).
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly / non-daily rows get a 1-year window because `(previous-date, folder-date]` would usually be empty.
-- **earnings `reportedDate`**: the `EARNINGS` endpoint exposes the column as `reportedDate` (with "ed") and our daily parquets preserve that name. The unrelated `EARNINGS_CALENDAR` endpoint (used only by `catalog/earnings_calendar.parquet`) calls it `reportDate` in its CSV; that one is renamed to `reportedDate` at ingest so downstream code only ever sees `reportedDate`.
+- **earnings `reportedDate`**: the `EARNINGS` endpoint exposes the column as `reportedDate` (with "ed") and our daily parquets preserve that name. The unrelated `EARNINGS_CALENDAR` endpoint (used only by `daily/<date>/earnings_calendar.parquet` and `historical/earnings_calendar.parquet`) calls it `reportDate` in its CSV; that one is renamed to `reportedDate` at ingest so downstream code only ever sees `reportedDate`.
 
 ### Empty-after-truncation outcomes
 
@@ -184,6 +185,21 @@ Because the existing finalize rule for fundamental endpoints resolves `empty_con
 - A ticker that starts returning fundamentals mid-week will not be picked up until the next weekend run flips its yield_status back to True.
 - `structure_error` and `av_throttle` cells are also False but are not special-cased here -- they get skipped too. If one of those False values was transient (throttle) the weekend run re-queries it.
 - Non-fundamental endpoints (`prices`, `prices_daily`, `insider`, `sentiment`, `etf_profile`, `forex`, `cryptocurrencies`, `commodities`, `economic`, `indices`) ignore the flag.
+
+## earnings_calendar
+
+One global parquet at `daily/<folder_date>/earnings_calendar.parquet`, fetched via Alpha Vantage's `EARNINGS_CALENDAR` endpoint with `horizon=6month`. Single sync AV call, run **before** the asyncio plan in `setup_daily.py`. Reuses [historical_data_setup/earnings_calendar.py](../historical_data_setup/earnings_calendar.py) -- same fetch, cast, and rename logic; the only difference is the destination folder.
+
+Schema is identical to historical's `earnings_calendar.parquet`; see [historical_data_setup/README.md](../historical_data_setup/README.md#earnings_calendar) for the column list and the `reportedDate` rename caveat.
+
+**Behaviour:**
+
+- **Skip-if-exists.** If `daily/<folder_date>/earnings_calendar.parquet` already exists, the function returns without an HTTP call. A `setup_daily` resume therefore costs zero extra calls.
+- **Gating.** Runs on a full daily pull (no `--endpoints` flag) and when explicitly named via `--endpoints earnings_calendar`. A partial run that does not include `earnings_calendar` skips it.
+- **Weekend refresh.** [`adjust_weekly.py`](adjust_weekly.py) checks `daily/<folder_date>/earnings_calendar.parquet` after resolving the folder-date and calls `fetch_earnings_calendar` only when the file is **missing** -- a weekday failure to produce the calendar gets a Saturday retry, but a healthy file is left alone.
+- **Same-day no-op.** When `setup_daily` early-exits because `previous_date >= folder_date`, no calendar fetch is performed (the early return happens before the call site).
+
+**API calls:** at most 1 per setup_daily run, and at most 1 per adjust_weekly run.
 
 ## Recovery and resume
 

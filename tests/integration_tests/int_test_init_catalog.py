@@ -7,9 +7,12 @@ to the integration-test subset so the downstream int_test scripts (historical,
 daily, weekly, transform) only operate on a small number of symbols.
 
 Real Alpha Vantage calls are made (LISTING_STATUS, OVERVIEW for new stock
-sectors, indices/forex/crypto/commodities/economic catalogs, earnings
-calendar). The catalog is left in place after the run for manual inspection
-and for the next int_test in the chain.
+sectors, indices/forex/crypto/commodities/economic catalogs). The
+``earnings_calendar.parquet`` no longer belongs to ``catalog/`` -- it is
+fetched by ``historical_data_setup`` / ``daily_data_service`` into the
+data-pull folders, so this script does not produce it. The catalog is left
+in place after the run for manual inspection and for the next int_test in
+the chain.
 
 Usage:
     python tests/integration_tests/int_test_init_catalog.py [--wipe] [--no-reduce]
@@ -30,7 +33,9 @@ from monitoring_service.analyze_catalog import analyze_catalog
 
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
+    DAILY_DIR,
     FRD_DIR,
+    HISTORICAL_DIR,
     configure_int_test_logging,
     reduce_catalogs,
 )
@@ -48,10 +53,9 @@ EXPECTED_FILES = {
     "cryptocurrencies.parquet":  ("total", 5),
     "commodities.parquet":       ("total", 5),
     "economic.parquet":          ("total", 5),
-    # yield_status & earnings_calendar are required to exist but their row
-    # counts are derived from the catalogs above; checking presence is enough.
+    # yield_status is required to exist but its row count is derived from
+    # the catalogs above; checking presence is enough.
     "yield_status.parquet":      None,
-    "earnings_calendar.parquet": None,
 }
 
 
@@ -139,7 +143,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_reduce:
         logger.info("--no-reduce passed: skipping catalog trim.")
     else:
-        kept_stocks, kept_etfs = reduce_catalogs(catalog_dir)
+        kept_stocks, kept_etfs = reduce_catalogs(
+            catalog_dir,
+            historical_dir=HISTORICAL_DIR,
+            daily_dir=DAILY_DIR,
+        )
         logger.info(
             f"Reduced catalog: {len(kept_stocks)} stocks, {len(kept_etfs)} etfs"
         )

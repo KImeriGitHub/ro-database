@@ -473,6 +473,7 @@ def test_adjust_weekly_retries_reported_cells_and_merges_fresh_issues(workdir: P
 
     with patch.object(aw, "ENDPOINT_MAP", {"prices_daily": stub}), \
          patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
          patch.object(aw, "finalize_yield_status", side_effect=fake_finalize):
         _run(aw.adjust_weekly(
             catalog_dir=workdir / "catalog",
@@ -524,6 +525,7 @@ def test_adjust_weekly_preserves_rows_for_endpoints_that_never_dispatch(workdir:
 
     with patch.object(aw, "ENDPOINT_MAP", {"prices_daily": stub}), \
          patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
          patch.object(aw, "finalize_yield_status"):
         _run(aw.adjust_weekly(
             catalog_dir=workdir / "catalog",
@@ -565,6 +567,7 @@ def test_adjust_weekly_sentiment_triggers_rename_and_full_rerun(workdir: Path):
 
     with patch.object(aw, "ENDPOINT_MAP", {"sentiment": stub}), \
          patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
          patch.object(aw, "finalize_yield_status") as finalize_mock:
         _run(aw.adjust_weekly(
             catalog_dir=workdir / "catalog",
@@ -611,6 +614,7 @@ def test_adjust_weekly_fundamentals_retry_with_skip_empty_yield_false(workdir: P
 
     with patch.object(aw, "ENDPOINT_MAP", {"income_statement": stub}), \
          patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
          patch.object(aw, "finalize_yield_status"):
         _run(aw.adjust_weekly(
             catalog_dir=workdir / "catalog",
@@ -635,6 +639,7 @@ def test_adjust_weekly_no_report_is_noop(workdir: Path):
 
     with patch.object(aw, "ENDPOINT_MAP", {"prices_daily": stub}), \
          patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
          patch.object(aw, "finalize_yield_status") as finalize_mock:
         _run(aw.adjust_weekly(
             catalog_dir=workdir / "catalog",
@@ -644,3 +649,52 @@ def test_adjust_weekly_no_report_is_noop(workdir: Path):
 
     assert calls == []
     finalize_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# earnings_calendar refresh
+# ---------------------------------------------------------------------------
+
+
+def test_adjust_weekly_fetches_earnings_calendar_when_missing(workdir: Path):
+    """When ``daily/<folder_date>/earnings_calendar.parquet`` is absent the
+    weekend pass triggers ``fetch_earnings_calendar`` for the folder."""
+    daily = workdir / "daily"
+    _make_date_dirs(daily, ["2026-04-18"])
+    day_root = daily / "2026-04-18"
+    assert not (day_root / "earnings_calendar.parquet").exists()
+
+    with patch.object(aw, "ENDPOINT_MAP", {}), \
+         patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(aw, "finalize_yield_status"):
+        _run(aw.adjust_weekly(
+            catalog_dir=workdir / "catalog",
+            daily_dir=daily,
+            look_back_days=6,
+        ))
+
+    ec_mock.assert_called_once_with("fake-key", day_root)
+
+
+def test_adjust_weekly_skips_earnings_calendar_when_present(workdir: Path):
+    """An existing ``earnings_calendar.parquet`` in the folder-date dir
+    blocks the weekend refresh -- the daily run already produced one."""
+    daily = workdir / "daily"
+    _make_date_dirs(daily, ["2026-04-18"])
+    day_root = daily / "2026-04-18"
+    pl.DataFrame({"symbol": ["AAPL"]}).write_parquet(
+        day_root / "earnings_calendar.parquet"
+    )
+
+    with patch.object(aw, "ENDPOINT_MAP", {}), \
+         patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar") as ec_mock, \
+         patch.object(aw, "finalize_yield_status"):
+        _run(aw.adjust_weekly(
+            catalog_dir=workdir / "catalog",
+            daily_dir=daily,
+            look_back_days=6,
+        ))
+
+    ec_mock.assert_not_called()

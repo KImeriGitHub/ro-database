@@ -24,7 +24,6 @@ EXPECTED_ORDER = [
     "update_commodities",
     "update_economic",
     "update_yield_status",
-    "update_earnings_calendar",
 ]
 
 
@@ -42,7 +41,6 @@ def test_update_all_runs_every_step_in_order(tmp_path):
          patch.object(uc, "update_commodities", side_effect=rec("update_commodities")), \
          patch.object(uc, "update_economic", side_effect=rec("update_economic")), \
          patch.object(uc, "update_yield_status", side_effect=rec("update_yield_status")), \
-         patch.object(uc, "update_earnings_calendar", side_effect=rec("update_earnings_calendar")), \
          patch.object(uc, "get_alpha_vantage_key", return_value="fake-key"):
         uc.update_all(catalog_dir=tmp_path / "catalog")
 
@@ -68,7 +66,6 @@ def test_update_all_continues_when_step_raises(tmp_path):
          patch.object(uc, "update_commodities", side_effect=rec("update_commodities")), \
          patch.object(uc, "update_economic", side_effect=rec("update_economic")), \
          patch.object(uc, "update_yield_status", side_effect=rec("update_yield_status")), \
-         patch.object(uc, "update_earnings_calendar", side_effect=rec("update_earnings_calendar")), \
          patch.object(uc, "get_alpha_vantage_key", return_value="fake-key"):
         uc.update_all(catalog_dir=tmp_path / "catalog")
 
@@ -86,7 +83,6 @@ def test_update_all_creates_catalog_dir(tmp_path):
          patch.object(uc, "update_commodities"), \
          patch.object(uc, "update_economic"), \
          patch.object(uc, "update_yield_status"), \
-         patch.object(uc, "update_earnings_calendar"), \
          patch.object(uc, "get_alpha_vantage_key", return_value="fake-key"):
         uc.update_all(catalog_dir=cat)
     assert cat.exists() and cat.is_dir()

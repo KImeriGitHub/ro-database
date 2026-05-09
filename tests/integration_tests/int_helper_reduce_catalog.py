@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
+    DAILY_DIR,
+    HISTORICAL_DIR,
     configure_int_test_logging,
     reduce_catalogs,
 )
@@ -40,7 +42,11 @@ def main(argv: list[str] | None = None) -> int:
             f"run int_test_init_catalog.py first."
         )
 
-    kept_stocks, kept_etfs = reduce_catalogs(CATALOG_DIR)
+    kept_stocks, kept_etfs = reduce_catalogs(
+        CATALOG_DIR,
+        historical_dir=HISTORICAL_DIR,
+        daily_dir=DAILY_DIR,
+    )
     logger.info(
         f"Reduced catalog: {len(kept_stocks)} stocks, {len(kept_etfs)} etfs"
     )

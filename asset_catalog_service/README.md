@@ -176,22 +176,13 @@ Finalize runs only when no `--asset-types` / `--endpoints` subset flags were pas
 
 **API calls:** 0.
 
-### earnings_calendar.parquet
-
-**Source:** Alpha Vantage `EARNINGS_CALENDAR` with `horizon=6month`.
-
-**Schema:** `symbol (Utf8), name (Utf8), reportedDate (Date), fiscalDateEnding (Date), estimate (Float32), currency (Utf8), timeOfTheDay (Utf8), cast_issues (Utf8)`.
-
-**Note on `reportedDate`:** Alpha Vantage's `EARNINGS_CALENDAR` CSV labels this column `reportDate` (no "ed"), while the `EARNINGS` endpoint labels the equivalent column `reportedDate`. We rename `reportDate` to `reportedDate` immediately after CSV ingest so downstream code sees a single name; if AV ever changes the CSV header the rename will fail loudly.
-
-**Behaviour:** Always fetched and overwritten, regardless of whether the file exists. The `cast_issues` column records which fields (if any) failed type casting for each row (e.g., `"reportedDate,estimate"`). Rows where a cast failed have null in the affected typed column and the original value is not preserved.
-
-**Logging:** Three checkpoints are logged:
-1. Whether the CSV was fetched successfully.
-2. Whether any rows had cast issues (count reported).
-3. Whether the save completed.
-
-**API calls:** 1.
+> **`earnings_calendar.parquet` moved.** This file used to live in `catalog/`
+> and was rebuilt by `init_catalog`/`update_catalog`. It now belongs to the
+> data-pull folders -- `historical/earnings_calendar.parquet` and
+> `daily/<YYYY-MM-DD>/earnings_calendar.parquet` -- and is fetched by
+> `historical_data_setup` / `daily_data_service`. The catalog flow no
+> longer touches it. See [historical_data_setup/README.md](../historical_data_setup/README.md#earnings_calendar)
+> and [daily_data_service/README.md](../daily_data_service/README.md#earnings_calendar).
 
 ## FirstRate Data requirements
 
@@ -253,8 +244,7 @@ Both `init_catalog.py` and `update_catalog.py` normalize sector values to a cano
 | LISTING_STATUS (delisted) | 1 |
 | OVERVIEW (per stock without sector) | variable (0 if FirstRate covers all, ~10k+ if no FirstRate) |
 | INDEX_CATALOG | 1 |
-| EARNINGS_CALENDAR | 1 |
-| **Total /query calls** | **4 + OVERVIEW calls** |
+| **Total /query calls** | **3 + OVERVIEW calls** |
 | physical_currency_list (static) | 1 |
 | cryptocurrency_list (static) | 1 |
 
@@ -266,8 +256,7 @@ Both `init_catalog.py` and `update_catalog.py` normalize sector values to a cano
 | LISTING_STATUS (delisted) | 1 |
 | OVERVIEW (per new stock symbol) | variable (typically 0-few) |
 | INDEX_CATALOG | 1 |
-| EARNINGS_CALENDAR | 1 |
-| **Total /query calls** | **4 + OVERVIEW calls** |
+| **Total /query calls** | **3 + OVERVIEW calls** |
 | physical_currency_list (static) | 1 |
 | cryptocurrency_list (static) | 1 |
 
@@ -288,7 +277,7 @@ Each catalog update runs independently. If one step fails (network error, API ra
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
 - **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which symbols return data for which endpoints) is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.
 - **Date columns as pl.Date for stocks/etfs:** Date strings from the LISTING_STATUS CSV are cast to `pl.Date` on ingestion. This enables the same 30-day delistingDate arithmetic used by indices/forex/crypto.
-- **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs after all asset catalogs but before `earnings_calendar`.
+- **Execution order matters:** `update_yield_status` depends on all asset catalog parquet files existing, so it runs last in the catalog pipeline.
 - **Validate before work:** When FirstRate directories are provided, both CSVs are fully validated (existence + headers) before any API calls are made or data is written. This prevents partial state from a late validation failure.
 
 ## Folder structure
@@ -308,8 +297,7 @@ asset_catalog_service/
     ├── cryptocurrencies.py        # cryptocurrencies.parquet
     ├── commodities.py             # commodities.parquet (static)
     ├── economic.py                # economic.parquet (static)
-    ├── yield_status.py            # yield_status.parquet (init only)
-    └── earnings_calendar.py       # earnings_calendar.parquet (always overwrite)
+    └── yield_status.py            # yield_status.parquet (init only)
 ```
 
 Tests live in `tests/asset_catalog_service/` (see [tests/README.md](../tests/README.md)).

@@ -42,6 +42,7 @@ historical/
 ├── cryptocurrencies/         # SYMBOL.parquet (DIGITAL_CURRENCY_DAILY, ~600 USD pairs)
 ├── commodities/              # SYMBOL.parquet (13 commodities, mixed daily/monthly)
 ├── economic/                 # SYMBOL.parquet (15 indicators, mixed intervals)
+├── earnings_calendar.parquet # EARNINGS_CALENDAR (6-month horizon, one global file)
 ├── ingestion_report.parquet  # issue tracking table
 ├── monitoring_report.json    # written by monitoring_service at end of full setup run
 └── monitoring_report.md      # human-readable rendering of the JSON
@@ -311,7 +312,7 @@ Per symbol, fetches earnings data. Unlike the other fundamental endpoints, the t
 
 **Note:** `reportedDate` and `reportTime` are provided by this endpoint and are critical for point-in-time (PIT) reconstruction -- they indicate exactly when earnings became public knowledge.
 
-**Naming caveat:** The `EARNINGS` endpoint emits `reportedDate` (with "ed"), but the separate `EARNINGS_CALENDAR` endpoint that feeds `catalog/earnings_calendar.parquet` emits `reportDate` (without "ed") in its CSV. The catalog ingest renames `reportDate` -> `reportedDate` so the column is consistent across our parquets; downstream code can assume `reportedDate` everywhere. Do not introduce `reportDate` as an alias.
+**Naming caveat:** The `EARNINGS` endpoint emits `reportedDate` (with "ed"), but the separate `EARNINGS_CALENDAR` endpoint that feeds `historical/earnings_calendar.parquet` emits `reportDate` (without "ed") in its CSV. The fetcher renames `reportDate` -> `reportedDate` so the column is consistent across our parquets; downstream code can assume `reportedDate` everywhere. Do not introduce `reportDate` as an alias.
 
 **Ingestion report issues:**
 - `structure_error` -- fetch failure, missing top-level keys (`symbol`, `annualEarnings`, `quarterlyEarnings`), or missing `fiscalDateEnding` column
@@ -635,6 +636,31 @@ No volume data is available for indices. One file per symbol. Null sentinels (`N
 - `empty_content` -- empty data list
 - `cast_failure` -- OHLC `float()` conversion or date parse failure
 - `av_throttle` -- persistent rate-limit after retries
+
+## earnings_calendar
+
+One global parquet at `historical/earnings_calendar.parquet`, fetched from Alpha Vantage's `EARNINGS_CALENDAR` endpoint with `horizon=6month`. Single AV call; not a per-symbol file, so no asset-type prefix. The fetch is a synchronous call run **before** the asyncio plan in `setup_historical.py` (`fetch_earnings_calendar` lives in [historical_data_setup/earnings_calendar.py](earnings_calendar.py)), so it never competes for the rate-limiter window.
+
+**Output schema** (`historical/earnings_calendar.parquet`):
+
+| Column | Type | Notes |
+|--------|------|-------|
+| symbol | pl.Utf8 | |
+| name | pl.Utf8 | |
+| reportedDate | pl.Date | Date the earnings are scheduled to be reported. Renamed from AV's CSV `reportDate` for consistency with the `EARNINGS` endpoint. |
+| fiscalDateEnding | pl.Date | |
+| estimate | pl.Float32 | |
+| currency | pl.Utf8 | |
+| timeOfTheDay | pl.Utf8 | e.g. `"pre-market"`, `"post-market"` |
+| cast_issues | pl.Utf8 | Comma-joined names of fields whose cast to the typed column failed (`"reportedDate"`, `"fiscalDateEnding"`, `"estimate"`); null when every cast succeeded. |
+
+**Behaviour:** Skip-if-exists guard inside `fetch_earnings_calendar` -- if `historical/earnings_calendar.parquet` already exists, the function returns without an HTTP call. This is what makes a `setup_historical` resume safe (the file is not re-fetched on every restart). To force a fresh pull, delete the file before rerunning.
+
+**Gating:** Runs on a full setup (no `--endpoints` flag) and when explicitly named via `--endpoints earnings_calendar`. A partial run that does not include `earnings_calendar` skips it.
+
+**Naming caveat:** AV's `EARNINGS_CALENDAR` CSV column is `reportDate` (no "ed"); the `EARNINGS` endpoint emits `reportedDate`. The fetcher renames `reportDate` -> `reportedDate` immediately after CSV ingest so downstream code only ever sees `reportedDate`. If AV ever changes the CSV header the rename will fail loudly.
+
+**API calls:** 1 (or 0 on resume).
 
 ## Ingestion report
 

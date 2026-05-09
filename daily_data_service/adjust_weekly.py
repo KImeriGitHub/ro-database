@@ -76,6 +76,7 @@ from daily_data_service.setup_daily import (
     _run_endpoint_task,
 )
 from historical_data_setup._common import IssueTracker, RateLimiter
+from historical_data_setup.earnings_calendar import fetch_earnings_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +329,18 @@ async def adjust_weekly(
         f"Weekly adjust: folder_date={folder_date}, "
         f"previous_date={previous_date}, look_back_days={look_back_days}"
     )
+
+    # Refresh earnings_calendar if the daily run never produced one for this
+    # folder_date (e.g. weekday fetch failed, or this folder predates the
+    # endpoint move). When the file already exists we leave it alone so the
+    # weekend pass doesn't churn over a healthy calendar.
+    ec_path = day_root / "earnings_calendar.parquet"
+    if not ec_path.exists():
+        api_key = get_alpha_vantage_key(api_tier)
+        try:
+            fetch_earnings_calendar(api_key, day_root)
+        except Exception:
+            logger.exception("earnings_calendar fetch failed; continuing")
 
     plan, old_report, sentiment_full_rerun = _build_retry_plan(
         catalog_dir, daily_dir, previous_date, folder_date,

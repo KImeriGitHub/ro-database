@@ -31,6 +31,7 @@ from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
 from config.settings import AV_RATE_LIMIT_PER_MIN
+from historical_data_setup.earnings_calendar import fetch_earnings_calendar
 from historical_data_setup.ensure_folders import ensure_historical_folders
 from historical_data_setup._common import (
     IssueTracker,
@@ -129,10 +130,17 @@ async def run_historical_setup(
     # "Full run" means no subsetting flags were passed. Only full runs
     # finalize yield_status at the end.
     full_run = asset_types is None and endpoints is None
+    # earnings_calendar is a single sync AV call producing one global parquet,
+    # not a per-symbol asyncio task. Run it on a full run, or when explicitly
+    # named via --endpoints earnings_calendar.
+    run_earnings_calendar = endpoints is None or "earnings_calendar" in endpoints
     if asset_types is None:
         asset_types = list(ASSET_ENDPOINTS.keys())
     if endpoints is None:
         endpoints = list(ENDPOINT_MAP.keys())
+    else:
+        # Strip the synthetic name so it doesn't leak into the asyncio plan.
+        endpoints = [ep for ep in endpoints if ep != "earnings_calendar"]
 
     ensure_historical_folders(historical_dir)
 
@@ -150,6 +158,15 @@ async def run_historical_setup(
     rate_limiter = RateLimiter(float(AV_RATE_LIMIT_PER_MIN))
     issue_tracker = IssueTracker()
     reset_av_call_count()
+
+    # Single sync AV call; runs before the asyncio plan so the rate limiter
+    # window is clean. Skip-if-exists guard inside the function makes this
+    # cheap on resume.
+    if run_earnings_calendar:
+        try:
+            fetch_earnings_calendar(api_key, historical_dir)
+        except Exception:
+            logger.exception("earnings_calendar fetch failed; continuing")
 
     # Build the list of (label, coroutine-factory) pairs.
     plan: list[tuple[str, object]] = []
@@ -254,7 +271,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--endpoints", nargs="+", default=None,
-        choices=list(ENDPOINT_MAP.keys()),
+        choices=list(ENDPOINT_MAP.keys()) + ["earnings_calendar"],
         help="Endpoints to fetch (default: all)",
     )
     parser.add_argument(

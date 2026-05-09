@@ -31,15 +31,17 @@ from monitoring_service.analyze_catalog import analyze_catalog
 
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
+    DAILY_DIR,
+    HISTORICAL_DIR,
     configure_int_test_logging,
     reduce_catalogs,
 )
 
 logger = logging.getLogger(__name__)
 
-# Files for which we log a before/after symbol diff. yield_status and
-# earnings_calendar have very different shapes (one row per symbol+date,
-# overwritten respectively), so we only log row counts for those.
+# Files for which we log a before/after symbol diff. yield_status has a
+# very different shape (one row per symbol+date), so we only log its row
+# count. earnings_calendar.parquet no longer belongs to catalog/.
 _DIFFED_FILES = (
     "stocks.parquet",
     "etfs.parquet",
@@ -51,7 +53,6 @@ _DIFFED_FILES = (
 )
 _COUNT_ONLY_FILES = (
     "yield_status.parquet",
-    "earnings_calendar.parquet",
 )
 
 # Loose lower bounds, matching int_test_init_catalog. Catalogs only grow
@@ -165,7 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_reduce:
         logger.info("--no-reduce passed: skipping catalog trim.")
     else:
-        kept_stocks, kept_etfs = reduce_catalogs(CATALOG_DIR)
+        kept_stocks, kept_etfs = reduce_catalogs(
+            CATALOG_DIR,
+            historical_dir=HISTORICAL_DIR,
+            daily_dir=DAILY_DIR,
+        )
         logger.info(
             f"Reduced catalog post-update: {len(kept_stocks)} stocks, "
             f"{len(kept_etfs)} etfs"

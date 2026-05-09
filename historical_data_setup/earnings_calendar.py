@@ -1,4 +1,14 @@
-"""Always fetch and overwrite earnings_calendar.parquet."""
+"""Fetch the EARNINGS_CALENDAR (6-month horizon) and write it to a folder.
+
+One AV call. Synchronous. Skips the call if the destination parquet already
+exists, which is what makes the historical/daily orchestrators safe to resume
+without re-paying the API call.
+
+The fetch + cast logic is identical to the previous catalog-side
+``update_earnings_calendar``; only the destination has moved out of
+``catalog/`` and into the per-run folders (``historical/`` and
+``daily/<date>/``).
+"""
 
 import io
 import logging
@@ -15,8 +25,13 @@ from asset_catalog_service.updates._common import (
 logger = logging.getLogger(__name__)
 
 
-def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
-    path = catalog_dir / "earnings_calendar.parquet"
+def fetch_earnings_calendar(api_key: str, out_dir: Path) -> None:
+    path = out_dir / "earnings_calendar.parquet"
+    if path.exists():
+        logger.info(f"earnings_calendar: {path} already exists, skipping")
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Fetch
     logger.info("Fetching EARNINGS_CALENDAR (6-month horizon)...")
@@ -109,4 +124,4 @@ def update_earnings_calendar(api_key: str, catalog_dir: Path) -> None:
 
     # 3. Save
     df.write_parquet(path, compression="zstd")
-    logger.info(f"earnings_calendar: saved ({df.height} rows)")
+    logger.info(f"earnings_calendar: saved {path} ({df.height} rows)")

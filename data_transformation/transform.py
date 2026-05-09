@@ -111,7 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     report = TransformationReport()
 
     # ---- Phase 1: assets_overview.parquet ---------------------------------
-    overview_path = write_assets_overview(args.catalog_dir, args.dest_dir)
+    overview_path = write_assets_overview(
+        args.catalog_dir,
+        args.dest_dir,
+        daily_dir=args.daily_dir,
+        historical_dir=args.historical_dir,
+    )
     overview = pl.read_parquet(overview_path)
 
     asset_types_filter = set(args.asset_types) if args.asset_types else None

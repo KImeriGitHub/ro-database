@@ -33,7 +33,7 @@ def build_report(
     *folder_dir* is the daily/historical folder that contains
     ``ingestion_report.parquet`` and the per-asset_type subtrees.
     """
-    catalog = analyze_catalog(catalog_dir, today=folder_date)
+    catalog = analyze_catalog(catalog_dir, today=folder_date, folder_dir=folder_dir)
     ingestion = analyze_ingestion(folder_dir / "ingestion_report.parquet")
     coverage = analyze_coverage(folder_dir)
     file_counts = analyze_files(folder_dir, catalog_dir)

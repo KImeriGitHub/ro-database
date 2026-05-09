@@ -48,6 +48,7 @@ from monitoring_service.report import (
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     DAILY_DIR,
+    HISTORICAL_DIR,
     configure_int_test_logging,
     reduce_catalogs,
 )
@@ -252,7 +253,11 @@ def main(argv: list[str] | None = None) -> int:
         # setup_daily's finalize_yield_status may have appended new symbol
         # rows (rare, but possible if AV LISTING_STATUS shifted). Trim back
         # to the int-test set so the next run stays small.
-        kept_stocks, kept_etfs = reduce_catalogs(CATALOG_DIR)
+        kept_stocks, kept_etfs = reduce_catalogs(
+            CATALOG_DIR,
+            historical_dir=HISTORICAL_DIR,
+            daily_dir=DAILY_DIR,
+        )
         logger.info(
             f"Reduced catalog post-run: {len(kept_stocks)} stocks, "
             f"{len(kept_etfs)} etfs"

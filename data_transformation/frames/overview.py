@@ -6,6 +6,7 @@ stocks-only sector.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ import polars as pl
 from data_transformation._common import ASSET_TYPES, cast_to_schema
 
 logger = logging.getLogger(__name__)
+
+_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 OVERVIEW_SCHEMA: dict[str, Any] = {
@@ -27,14 +30,49 @@ OVERVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+def _resolve_earnings_calendar_path(
+    daily_dir: Path | None, historical_dir: Path | None
+) -> Path | None:
+    """Newest ``daily/<YYYY-MM-DD>/earnings_calendar.parquet``, falling back
+    to ``historical/earnings_calendar.parquet``. ``None`` when neither dir
+    yields a file (caller logs a warning and emits null fields)."""
+    if daily_dir is not None and daily_dir.exists():
+        candidates: list[date] = []
+        for child in daily_dir.iterdir():
+            if not child.is_dir():
+                continue
+            if not _DATE_DIR_RE.match(child.name):
+                continue
+            try:
+                candidates.append(date.fromisoformat(child.name))
+            except ValueError:
+                continue
+        for d in sorted(candidates, reverse=True):
+            p = daily_dir / d.isoformat() / "earnings_calendar.parquet"
+            if p.exists():
+                return p
+    if historical_dir is not None:
+        p = historical_dir / "earnings_calendar.parquet"
+        if p.exists():
+            return p
+    return None
+
+
 def build_assets_overview(
     catalog_dir: Path,
     today: date | None = None,
+    daily_dir: Path | None = None,
+    historical_dir: Path | None = None,
 ) -> pl.DataFrame:
     """Build the overview frame from ``catalog/*.parquet``.
 
     *today* gates the "next upcoming earnings reportedDate" lookup; defaults
     to the system date. Pass an explicit value in tests for determinism.
+
+    *daily_dir* / *historical_dir* locate ``earnings_calendar.parquet`` --
+    the newest ``daily/<date>/`` copy wins, falling back to ``historical/``.
+    When both are ``None`` (or no file is found) the join is skipped and
+    ``reportedDate`` / ``timeOfTheDay`` come back null.
 
     Returns a DataFrame conforming exactly to ``OVERVIEW_SCHEMA``.
     """
@@ -69,7 +107,9 @@ def build_assets_overview(
 
     overview = pl.concat(asset_parts, how="vertical")
 
-    overview = _join_earnings_calendar(overview, catalog_dir, today)
+    overview = _join_earnings_calendar(
+        overview, daily_dir, historical_dir, today
+    )
     overview = _join_stock_sector(overview, catalog_dir)
 
     overview = overview.with_columns(
@@ -84,12 +124,17 @@ def build_assets_overview(
 
 def _join_earnings_calendar(
     overview: pl.DataFrame,
-    catalog_dir: Path,
+    daily_dir: Path | None,
+    historical_dir: Path | None,
     today: date,
 ) -> pl.DataFrame:
-    ec_path = catalog_dir / "earnings_calendar.parquet"
-    if not ec_path.exists():
-        logger.warning("earnings_calendar.parquet missing at %s", ec_path)
+    ec_path = _resolve_earnings_calendar_path(daily_dir, historical_dir)
+    if ec_path is None:
+        logger.warning(
+            "earnings_calendar.parquet not found under daily_dir=%s or "
+            "historical_dir=%s; leaving columns null",
+            daily_dir, historical_dir,
+        )
         return overview.with_columns(
             pl.lit(None, dtype=pl.Date).alias("reportedDate"),
             pl.lit(None, dtype=pl.Utf8).alias("timeOfTheDay"),
@@ -156,12 +201,19 @@ def write_assets_overview(
     catalog_dir: Path,
     dest_dir: Path,
     today: date | None = None,
+    daily_dir: Path | None = None,
+    historical_dir: Path | None = None,
 ) -> Path:
     """Compute the overview and write to ``<dest_dir>/assets_overview.parquet``.
 
     Returns the written path.
     """
-    overview = build_assets_overview(catalog_dir, today=today)
+    overview = build_assets_overview(
+        catalog_dir,
+        today=today,
+        daily_dir=daily_dir,
+        historical_dir=historical_dir,
+    )
     dest_dir.mkdir(parents=True, exist_ok=True)
     out_path = dest_dir / "assets_overview.parquet"
     overview.write_parquet(out_path)

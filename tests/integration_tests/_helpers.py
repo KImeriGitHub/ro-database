@@ -3,9 +3,10 @@
 These tests target a real, persistent ``database/`` folder and run the actual
 pipelines against Alpha Vantage, so re-runs need to keep the catalog narrowed
 to a small, reproducible subset of symbols. ``reduce_catalogs`` performs that
-narrowing and propagates the trim to ``yield_status.parquet`` and
-``earnings_calendar.parquet`` so downstream daily / weekly / transform runs
-stay consistent.
+narrowing and propagates the trim to ``yield_status.parquet`` and to every
+``earnings_calendar.parquet`` it can find under ``historical/`` and
+``daily/<YYYY-MM-DD>/`` so downstream daily / weekly / transform runs stay
+consistent.
 
 The "random" 10 extra stocks are picked with a stable hash-based scheme. The
 candidate population (active stocks not in the mandatory list) shifts as AV
@@ -116,7 +117,24 @@ def _kept_etfs(etfs_path: Path) -> list[str]:
     return sorted(set(kept))
 
 
-def reduce_catalogs(catalog_dir: Path) -> tuple[list[str], list[str]]:
+def _trim_earnings_calendar(path: Path, kept_stocks: list[str]) -> None:
+    """Filter a single ``earnings_calendar.parquet`` to *kept_stocks*."""
+    if not path.exists():
+        return
+    ec = pl.read_parquet(path)
+    before = ec.height
+    ec = ec.filter(pl.col("symbol").is_in(kept_stocks))
+    ec.write_parquet(path, compression="zstd")
+    logger.info(
+        f"reduce_catalogs: {path} {before} -> {ec.height} rows"
+    )
+
+
+def reduce_catalogs(
+    catalog_dir: Path,
+    historical_dir: Path | None = None,
+    daily_dir: Path | None = None,
+) -> tuple[list[str], list[str]]:
     """Trim ``stocks.parquet`` / ``etfs.parquet`` and propagate the trim.
 
     Returns ``(kept_stocks, kept_etfs)``. Files updated:
@@ -127,7 +145,14 @@ def reduce_catalogs(catalog_dir: Path) -> tuple[list[str], list[str]]:
       and ETF symbols not in *kept_etfs* are dropped. Symbols belonging to
       other asset types (forex / indices / crypto / commodities / economic)
       are left untouched.
-    - ``earnings_calendar.parquet`` -> filtered to *kept_stocks*.
+    - ``historical/earnings_calendar.parquet`` -> filtered to *kept_stocks*
+      when *historical_dir* is provided and the file exists.
+    - ``daily/<YYYY-MM-DD>/earnings_calendar.parquet`` -> filtered to
+      *kept_stocks* for every dated subdir under *daily_dir* when provided.
+
+    The earnings_calendar trims are no-ops when the file is absent, so
+    callers can pass *historical_dir* / *daily_dir* unconditionally even
+    when those trees haven't been populated yet (e.g. fresh init runs).
     """
     catalog_dir = Path(catalog_dir)
     stocks_path = catalog_dir / "stocks.parquet"
@@ -183,17 +208,21 @@ def reduce_catalogs(catalog_dir: Path) -> tuple[list[str], list[str]]:
             f"reduce_catalogs: yield_status.parquet {before} -> {ys.height} rows"
         )
 
-    # earnings_calendar.parquet only carries stocks.
-    ec_path = catalog_dir / "earnings_calendar.parquet"
-    if ec_path.exists():
-        ec = pl.read_parquet(ec_path)
-        before = ec.height
-        ec = ec.filter(pl.col("symbol").is_in(kept_stocks))
-        ec.write_parquet(ec_path, compression="zstd")
-        logger.info(
-            f"reduce_catalogs: earnings_calendar.parquet {before} -> "
-            f"{ec.height} rows"
+    # earnings_calendar.parquet now lives in historical/ and daily/<date>/
+    # (it moved out of catalog/). Trim every copy we can find.
+    if historical_dir is not None:
+        _trim_earnings_calendar(
+            Path(historical_dir) / "earnings_calendar.parquet", kept_stocks,
         )
+    if daily_dir is not None:
+        daily_dir = Path(daily_dir)
+        if daily_dir.exists():
+            for child in sorted(daily_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                _trim_earnings_calendar(
+                    child / "earnings_calendar.parquet", kept_stocks,
+                )
 
     return kept_stocks, kept_etfs
 

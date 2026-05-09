@@ -91,8 +91,10 @@ def test_yield_status_summary(catalog_dir):
     assert yld["false_ratio"] == pytest.approx(1 / 3, abs=1e-3)
 
 
-def test_earnings_calendar_summary(catalog_dir):
+def test_earnings_calendar_summary(catalog_dir, tmp_path):
     today = date(2026, 4, 23)
+    folder_dir = tmp_path / "historical"
+    folder_dir.mkdir()
     pl.DataFrame({
         "symbol": ["A", "B", "C"],
         "name": ["A Co", "B Co", "C Co"],
@@ -102,10 +104,17 @@ def test_earnings_calendar_summary(catalog_dir):
         "currency": ["USD", "USD", "USD"],
         "timeOfTheDay": ["pre-market", "post-market", "pre-market"],
         "cast_issues": [None, "estimate", None],
-    }).write_parquet(catalog_dir / "earnings_calendar.parquet")
+    }).write_parquet(folder_dir / "earnings_calendar.parquet")
 
-    out = analyze_catalog(catalog_dir, today=today)
+    out = analyze_catalog(catalog_dir, today=today, folder_dir=folder_dir)
     ec = out["earnings_calendar"]
     assert ec["total"] == 3
     assert ec["cast_issues"] == 1
     assert ec["avg_days_to_next_reportedDate"] == pytest.approx(15.0, abs=0.01)
+
+
+def test_earnings_calendar_missing_when_folder_dir_omitted(catalog_dir):
+    """When ``folder_dir`` is not passed, the earnings_calendar entry is
+    flagged missing (no implicit fallback to catalog_dir)."""
+    out = analyze_catalog(catalog_dir, today=date(2026, 4, 23))
+    assert out["earnings_calendar"] == {"missing": True}

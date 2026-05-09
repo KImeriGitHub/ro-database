@@ -1058,14 +1058,16 @@ def _build_minimal_stocks_universe(tmp_path: Path) -> tuple[Path, Path, Path]:
     # earnings_calendar drives the next-upcoming entry in assets_overview;
     # without it, the symbol's overview_row.reportedDate is null, m_anchor
     # is past-the-end for any d > past_rd, and every financials cell on
-    # those rows is nulled defensively.
+    # those rows is nulled defensively. Lives under historical/ now (not
+    # catalog/) since the file moved with the historical/daily pull.
+    historical.mkdir(parents=True, exist_ok=True)
     pl.DataFrame({
         "symbol": ["AAPL"],
         "reportedDate": [date(2026, 7, 25)],
         "timeOfTheDay": ["post-market"],
     }, schema={
         "symbol": pl.Utf8, "reportedDate": pl.Date, "timeOfTheDay": pl.Utf8,
-    }).write_parquet(cat / "earnings_calendar.parquet")
+    }).write_parquet(historical / "earnings_calendar.parquet")
 
     daily_schema = {
         "Date": pl.Date, "Open": pl.Float32, "High": pl.Float32,
