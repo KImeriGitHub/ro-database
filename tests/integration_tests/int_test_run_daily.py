@@ -42,7 +42,7 @@ from historical_data_setup._common import get_av_call_count, reset_av_call_count
 from monitoring_service.report import (
     REPORT_FILENAME_JSON,
     REPORT_FILENAME_MD,
-    run_and_persist,
+    run_report_and_persist,
 )
 
 from tests.integration_tests._helpers import (
@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         # Build a monitoring report for this folder. setup_daily does NOT
         # do this itself (the cloud entrypoint does), so the int_test owns it.
         previous_path = _previous_report_path(DAILY_DIR, folder_date)
-        run_and_persist(
+        run_report_and_persist(
             mode="daily",
             folder_date=folder_date,
             catalog_dir=CATALOG_DIR,

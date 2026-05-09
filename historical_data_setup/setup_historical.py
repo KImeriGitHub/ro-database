@@ -38,7 +38,7 @@ from historical_data_setup._common import (
     get_av_call_count,
     reset_av_call_count,
 )
-from monitoring_service.report import run_and_persist
+from monitoring_service.report import run_report_and_persist
 from historical_data_setup.endpoints.prices import fetch_intraday_prices
 from historical_data_setup.endpoints.prices_daily import fetch_daily_prices
 from historical_data_setup.endpoints.income_statement import fetch_income_statement
@@ -222,7 +222,7 @@ async def run_historical_setup(
 
     if run_monitor:
         try:
-            run_and_persist(
+            run_report_and_persist(
                 mode="historical",
                 folder_date=started_at.date(),
                 catalog_dir=catalog_dir,

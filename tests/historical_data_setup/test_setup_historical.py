@@ -62,7 +62,7 @@ def test_full_run_schedules_every_asset_endpoint_pair(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -86,7 +86,7 @@ def test_subset_by_endpoints_filters_plan(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -135,7 +135,7 @@ def test_frd_dirs_routed_only_to_prices_endpoints(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -180,7 +180,7 @@ def test_finalize_runs_only_on_full_run(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status") as finalize_mock, \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -193,7 +193,7 @@ def test_finalize_runs_only_on_full_run(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status") as finalize_mock, \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -203,7 +203,7 @@ def test_finalize_runs_only_on_full_run(workdir: Path):
 
 
 def test_run_monitor_flag_controls_persist(workdir: Path):
-    """``run_monitor=False`` skips ``run_and_persist``; ``True`` calls it
+    """``run_monitor=False`` skips ``run_report_and_persist``; ``True`` calls it
     (and a failure inside the monitor must NOT propagate)."""
     historical = workdir / "historical"
     catalog = workdir / "catalog"
@@ -214,7 +214,7 @@ def test_run_monitor_flag_controls_persist(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist") as monitor_mock:
+         patch.object(sh, "run_report_and_persist") as monitor_mock:
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,
@@ -225,7 +225,7 @@ def test_run_monitor_flag_controls_persist(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist", side_effect=RuntimeError("boom")) as monitor_mock:
+         patch.object(sh, "run_report_and_persist", side_effect=RuntimeError("boom")) as monitor_mock:
         # Must not propagate -- setup is unaffected by monitor failure.
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
@@ -257,7 +257,7 @@ def test_start_marker_persists_across_resumed_runs(workdir: Path):
     with patch.object(sh, "ENDPOINT_MAP", endpoint_map), \
          patch.object(sh, "get_alpha_vantage_key", return_value="fake-key"), \
          patch.object(sh, "finalize_yield_status"), \
-         patch.object(sh, "run_and_persist"):
+         patch.object(sh, "run_report_and_persist"):
         _run(sh.run_historical_setup(
             catalog_dir=catalog,
             historical_dir=historical,

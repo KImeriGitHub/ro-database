@@ -281,7 +281,7 @@ def write_report(report: dict, folder_dir: Path) -> tuple[Path, Path]:
     return json_path, md_path
 
 
-def run_and_persist(
+def run_report_and_persist(
     *,
     mode: str,
     folder_date: date,

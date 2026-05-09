@@ -1,4 +1,4 @@
-"""CLI wrapper around :func:`monitoring_service.report.run_and_persist`.
+"""CLI wrapper around :func:`monitoring_service.report.run_report_and_persist`.
 
 Usage:
     python -m monitoring_service.run_monitor
@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from maintainance_scripts.logging_setup import configure_logging
-from monitoring_service.report import run_and_persist
+from monitoring_service.report import run_report_and_persist
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def main() -> int:
         args.mode, args.folder_date, args.daily_dir, args.historical_dir,
     )
 
-    run_and_persist(
+    run_report_and_persist(
         mode=args.mode,
         folder_date=folder_date,
         catalog_dir=args.catalog_dir,

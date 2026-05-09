@@ -28,7 +28,7 @@ from historical_data_setup._common import get_av_call_count, reset_av_call_count
 from monitoring_service.report import (
     REPORT_FILENAME_JSON,
     REPORT_FILENAME_MD,
-    run_and_persist,
+    run_report_and_persist,
 )
 
 from tests.integration_tests._helpers import (
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(f"Latest daily folder intact at {day_root}")
 
     previous_path = _previous_report_path(DAILY_DIR, folder_date)
-    run_and_persist(
+    run_report_and_persist(
         mode="weekend",
         folder_date=folder_date,
         catalog_dir=CATALOG_DIR,

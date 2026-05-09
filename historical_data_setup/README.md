@@ -89,7 +89,7 @@ python historical_data_setup/setup_historical.py --no-monitor
 
 ## Monitoring report
 
-After every full run, `monitoring_service.run_and_persist` writes
+After every full run, `monitoring_service.run_report_and_persist` writes
 `historical/monitoring_report.json` and `historical/monitoring_report.md`
 summarising catalog state, ingestion-report rollups, coverage probes
 (SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ holdings), file counts, storage size, and

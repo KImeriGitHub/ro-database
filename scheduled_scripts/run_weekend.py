@@ -41,7 +41,7 @@ from maintainance_scripts.paths import (
 from monitoring_service.report import (
     REPORT_FILENAME_JSON,
     REPORT_FILENAME_MD,
-    run_and_persist,
+    run_report_and_persist,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ def _build_and_push_monitoring_report(
         logger.info(f"Pulled previous (pre-weekend) monitoring report from {blob_name}")
 
     try:
-        run_and_persist(
+        run_report_and_persist(
             mode="weekend",
             folder_date=folder_date,
             catalog_dir=catalog_local,

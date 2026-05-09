@@ -40,7 +40,7 @@ from maintainance_scripts.paths import (
 from monitoring_service.report import (
     REPORT_FILENAME_JSON,
     REPORT_FILENAME_MD,
-    run_and_persist,
+    run_report_and_persist,
 )
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ def _build_and_push_monitoring_report(
     previous_path = _try_pull_previous_monitoring_report(daily_local, folder_date)
 
     try:
-        run_and_persist(
+        run_report_and_persist(
             mode="daily",
             folder_date=folder_date,
             catalog_dir=catalog_local,
