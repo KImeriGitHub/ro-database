@@ -4,6 +4,7 @@ __pycache__/
 .env
 
 tmp/
+logs/
 
 # Integration test data: ignore contents of these folders, keep the folders
 # themselves (committed via .gitkeep) so the int_test scripts have somewhere

@@ -183,9 +183,9 @@ def test_configure_logging_idempotent_replaces_handler(monkeypatch):
     pytest collections) must replace the handler, not stack a second one,
     or every log line would be duplicated."""
     monkeypatch.delenv("K_SERVICE", raising=False)
-    configure_logging()
-    configure_logging()
-    configure_logging()
+    configure_logging(log_to_file=False)
+    configure_logging(log_to_file=False)
+    configure_logging(log_to_file=False)
     assert len(logging.getLogger().handlers) == 1
 
 
@@ -194,7 +194,7 @@ def test_configure_logging_text_mode_writes_human_format(monkeypatch):
     contain the level name and message verbatim (i.e. not JSON)."""
     monkeypatch.delenv("K_SERVICE", raising=False)
     buf = io.StringIO()
-    configure_logging(stream=buf, structured=False)
+    configure_logging(stream=buf, structured=False, log_to_file=False)
 
     logging.getLogger("trial").info("plain text message")
     out = buf.getvalue()
@@ -207,7 +207,7 @@ def test_configure_logging_text_mode_writes_human_format(monkeypatch):
 def test_configure_logging_json_mode_writes_structured_payload(monkeypatch):
     monkeypatch.delenv("K_SERVICE", raising=False)
     buf = io.StringIO()
-    configure_logging(stream=buf, structured=True)
+    configure_logging(stream=buf, structured=True, log_to_file=False)
 
     logging.getLogger("trial").info("structured", extra={"ticker": "AAPL"})
     out = buf.getvalue().strip()
@@ -235,7 +235,7 @@ def test_configure_logging_respects_level(monkeypatch):
     """A WARNING-level configure must drop INFO messages."""
     monkeypatch.delenv("K_SERVICE", raising=False)
     buf = io.StringIO()
-    configure_logging(level=logging.WARNING, stream=buf, structured=False)
+    configure_logging(level=logging.WARNING, stream=buf, structured=False, log_to_file=False)
 
     logger = logging.getLogger("trial-level")
     logger.info("dropped")
@@ -244,3 +244,40 @@ def test_configure_logging_respects_level(monkeypatch):
     out = buf.getvalue()
     assert "dropped" not in out
     assert "kept" in out
+
+
+def test_configure_logging_writes_file_when_log_to_file_true(monkeypatch, tmp_path):
+    """A file handler must be installed alongside the stream handler and
+    receive the same formatted output, so failed local runs leave a trail."""
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    buf = io.StringIO()
+    configure_logging(stream=buf, structured=False, log_to_file=True, log_dir=tmp_path)
+
+    handlers = logging.getLogger().handlers
+    assert len(handlers) == 2
+    assert any(isinstance(h, logging.FileHandler) for h in handlers)
+
+    logging.getLogger("trial-file").info("recorded to disk")
+
+    # Close handler so Windows releases the file before we read it.
+    for h in list(logging.getLogger().handlers):
+        if isinstance(h, logging.FileHandler):
+            h.close()
+
+    log_files = list(tmp_path.glob("*.log"))
+    assert len(log_files) == 1
+    contents = log_files[0].read_text(encoding="utf-8")
+    assert "recorded to disk" in contents
+
+
+def test_configure_logging_file_handler_off_on_cloud_run(monkeypatch, tmp_path):
+    """``log_to_file`` defaults to off when ``K_SERVICE`` is set, so the
+    Cloud Run container does not write to its ephemeral disk."""
+    monkeypatch.setenv("K_SERVICE", "ro-daily-ingest")
+    buf = io.StringIO()
+    configure_logging(stream=buf, log_dir=tmp_path)
+
+    handlers = logging.getLogger().handlers
+    assert len(handlers) == 1
+    assert not any(isinstance(h, logging.FileHandler) for h in handlers)
+    assert list(tmp_path.glob("*.log")) == []

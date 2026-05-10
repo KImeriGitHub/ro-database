@@ -16,6 +16,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, TextIO
 
 DEFAULT_FORMAT = "%(asctime)s  %(levelname)s %(message)s"
@@ -69,29 +70,55 @@ def configure_logging(
     datefmt: str = DEFAULT_DATEFMT,
     stream: TextIO = sys.stdout,
     structured: bool | None = None,
+    log_to_file: bool | None = None,
+    log_dir: Path | None = None,
 ) -> None:
-    """Install a single stream handler on the root logger.
+    """Install a stream handler (and optionally a file handler) on the root logger.
 
     ``structured`` defaults to :func:`detect_cloud_run`; pass ``True``/
     ``False`` to force JSON or text output (useful for local smoke tests
     of the Cloud Logging payload).
 
-    Idempotent: repeat calls replace the existing handler so tests and
-    re-entries do not accumulate duplicates.
+    ``log_to_file`` defaults to ``not detect_cloud_run()``: locally we mirror
+    each run to ``logs/<UTC-timestamp>_<script>.log`` so failed jobs leave a
+    durable trail; on Cloud Run the stream is captured by Cloud Logging and a
+    file would just bloat the ephemeral container disk. ``log_dir`` defaults
+    to ``<PROJECT_ROOT>/logs`` (the folder is gitignored).
+
+    Idempotent: repeat calls remove and close the previous handlers so tests
+    and re-entries do not accumulate duplicates or leak file descriptors.
     """
     if structured is None:
         structured = detect_cloud_run()
+    if log_to_file is None:
+        log_to_file = not detect_cloud_run()
 
     root = logging.getLogger()
     for h in list(root.handlers):
         root.removeHandler(h)
+        if isinstance(h, logging.FileHandler):
+            h.close()
+
+    if structured:
+        formatter: logging.Formatter = CloudLoggingJsonFormatter()
+    else:
+        formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
 
     handler = logging.StreamHandler(stream)
-    if structured:
-        handler.setFormatter(CloudLoggingJsonFormatter())
-    else:
-        handler.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))
+    handler.setFormatter(formatter)
     root.addHandler(handler)
+
+    if log_to_file:
+        if log_dir is None:
+            from config.settings import PROJECT_ROOT
+            log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stem = Path(sys.argv[0]).stem if sys.argv and sys.argv[0] else "session"
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        file_handler = logging.FileHandler(log_dir / f"{timestamp}_{stem}.log", encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
     root.setLevel(level)
 
 
