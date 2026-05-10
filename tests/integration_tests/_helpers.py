@@ -43,7 +43,7 @@ MANDATORY_STOCKS = [
 # plus the four monitoring_service.analyze_coverage probes (MDY, EWJ, EWU, DIA).
 MANDATORY_ETFS = ["QQQ", "SPY", "GLD", "MDY", "EWJ", "EWU", "DIA"]
 
-EXTRA_RANDOM_STOCKS = 10
+EXTRA_RANDOM_STOCKS = 25
 RANDOM_SEED = "ro-database-int-tests-41"
 
 # Catalogs whose symbols come from non-stock/non-etf asset types. Their rows

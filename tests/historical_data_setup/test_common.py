@@ -33,11 +33,13 @@ from historical_data_setup._common import (
     _build_fundamental_df,
     fetch_av_json,
     frd_csv_path,
+    fs_symbol,
     generate_months,
     get_av_call_count,
     read_catalog_symbols,
     reset_av_call_count,
     symbol_parquet_name,
+    unfs_symbol,
     validate_meta_data,
 )
 
@@ -202,6 +204,72 @@ def test_symbol_parquet_name_unknown_asset_type_raises():
 
 
 # ---------------------------------------------------------------------------
+# fs_symbol / unfs_symbol -- filesystem-safe ticker encoding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("symbol", [
+    "AAPL", "BRK-B", "BRK.B", "BF_A", "EURUSD", "WTI", "BC/PB",
+    "ABC/DEF", "FOO BAR", "X*Y",
+])
+def test_fs_symbol_roundtrip(symbol):
+    """``fs_symbol`` -> ``unfs_symbol`` must recover the original ticker for
+    every shape of symbol AV serves, including slash-class (``BC/PB``) and
+    other path-unsafe characters."""
+    assert unfs_symbol(fs_symbol(symbol)) == symbol
+
+
+@pytest.mark.parametrize("symbol", [
+    "AAPL", "BRK-B", "BRK.B", "BF_A", "EURUSD",
+])
+def test_fs_symbol_passes_through_unreserved_chars(symbol):
+    """RFC 3986 unreserved characters (``A-Z a-z 0-9 - . _ ~``) are NEVER
+    percent-encoded by ``urllib.parse.quote``, so common tickers stay
+    human-readable on disk."""
+    assert fs_symbol(symbol) == symbol
+
+
+def test_fs_symbol_encodes_slash_to_single_component():
+    """Slash-class tickers like ``BC/PB`` must collapse to a single path
+    component so they cannot accidentally split into a parent directory
+    plus a child filename. This is the exact failure mode that produced
+    the original ``stocks_BC/PB.parquet`` FileNotFoundError on Windows."""
+    encoded = fs_symbol("BC/PB")
+    assert "/" not in encoded
+    assert "\\" not in encoded
+    assert encoded == "BC%2FPB"
+
+
+def test_symbol_parquet_name_handles_slash_class_ticker():
+    """Slash-class tickers like ``BC/PB`` must produce a single filename
+    component, not a directory + file split. This is the regression that
+    motivated ``fs_symbol``."""
+    name = symbol_parquet_name("stocks", "BC/PB")
+    assert name == "stocks_BC%2FPB.parquet"
+    assert "/" not in name and "\\" not in name
+
+
+def test_symbol_parquet_name_writes_one_file_for_slash_ticker(tmp_path):
+    """End-to-end regression: a slash-class symbol must result in exactly
+    one parquet file in the output directory, not a nested
+    ``stocks_BC/PB.parquet`` path that hits a non-existent
+    ``stocks_BC/`` directory on write."""
+    out_dir = tmp_path / "historical" / "stocks" / "sentiment"
+    out_dir.mkdir(parents=True)
+    name = symbol_parquet_name("stocks", "BC/PB")
+    target = out_dir / name
+    pl.DataFrame({"x": [1, 2]}).write_parquet(target)
+    assert target.exists()
+    assert target.is_file()
+    # Only one entry under out_dir; no accidental "stocks_BC/" subdir.
+    children = list(out_dir.iterdir())
+    assert children == [target]
+    # And we can read it back via the same helper.
+    roundtrip = pl.read_parquet(out_dir / symbol_parquet_name("stocks", "BC/PB"))
+    assert roundtrip["x"].to_list() == [1, 2]
+
+
+# ---------------------------------------------------------------------------
 # frd_csv_path
 # ---------------------------------------------------------------------------
 
@@ -219,6 +287,13 @@ def test_frd_csv_path_none_dir_returns_none(tmp_path):
     """``frd_dir=None`` must short-circuit before any filesystem access -- the
     historical setup runs without FRD when the user didn't pass --stocks-dir."""
     assert frd_csv_path(None, "AAPL", "1min") is None
+
+
+def test_frd_csv_path_handles_slash_class_ticker(tmp_path):
+    """A slash-class ticker must look up a single filename component, not
+    a nested directory."""
+    (tmp_path / "BC%2FPB_1min.csv").write_text("dummy")
+    assert frd_csv_path(tmp_path, "BC/PB", "1min") == tmp_path / "BC%2FPB_1min.csv"
 
 
 # ---------------------------------------------------------------------------

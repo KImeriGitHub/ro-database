@@ -15,7 +15,11 @@ from typing import Any
 
 import polars as pl
 
-from historical_data_setup._common import ASSET_TYPE_FILE_PREFIX
+from historical_data_setup._common import (
+    ASSET_TYPE_FILE_PREFIX,
+    fs_symbol,
+    unfs_symbol,
+)
 
 from data_transformation.AssetData import CANONICAL_SECTORS
 
@@ -71,9 +75,18 @@ def symbol_dirname(symbol: str) -> str:
 
     Mirrors the per-symbol filename prefix scheme in ``historical/`` and
     ``daily/``. Without it, a ticker like ``CON``/``PRN``/``NUL`` would
-    create a directory whose name is reserved by Windows.
+    create a directory whose name is reserved by Windows. The symbol is
+    additionally routed through ``fs_symbol`` so slash-class tickers like
+    ``BC/PB`` collapse to a single component (``data_BC%2FPB``) rather
+    than splitting into a ``data_BC/`` parent and a ``PB`` child.
     """
-    return f"data_{symbol}"
+    name = f"data_{fs_symbol(symbol)}"
+    if "/" in name or "\\" in name:
+        raise ValueError(
+            f"symbol_dirname produced unsafe directory name {name!r} "
+            f"for symbol={symbol!r}"
+        )
+    return name
 
 
 def symbol_dest_dir(dest_root: Path, asset_type: str, symbol: str) -> Path:
@@ -161,8 +174,14 @@ def build_source_index(
 def _symbol_from_filename(name: str, prefix: str, suffix_with_ext: str) -> str | None:
     if not name.startswith(prefix) or not name.endswith(suffix_with_ext):
         return None
-    symbol = name[len(prefix) : -len(suffix_with_ext)]
-    return symbol or None
+    encoded = name[len(prefix) : -len(suffix_with_ext)]
+    if not encoded:
+        return None
+    # Files are written via ``symbol_parquet_name`` which percent-encodes
+    # path-unsafe characters via ``fs_symbol``. Reverse it here so callers
+    # see the canonical ticker (``BC/PB``) rather than the on-disk form
+    # (``BC%2FPB``); the result is then used as a dict key downstream.
+    return unfs_symbol(encoded)
 
 
 # ---------------------------------------------------------------------------

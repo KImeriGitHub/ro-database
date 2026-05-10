@@ -18,6 +18,10 @@ Every per-symbol parquet file is prefixed with an asset-type tag so Windows rese
 
 Fundamentals follow the same prefix and append `_annual` / `_quarterly` (e.g. `stocks_AAPL_annual.parquet`). The `sentiment/ALL_MESSAGES.parquet` master table is not prefixed (it is not a per-symbol file). The single source of truth is `historical_data_setup._common.symbol_parquet_name(asset_type, symbol, suffix="")`.
 
+### Filesystem-safe symbol encoding (`fs_symbol`)
+
+`symbol_parquet_name` and `frd_csv_path` route the symbol through `fs_symbol`, which is `urllib.parse.quote(symbol, safe="")`. RFC 3986 unreserved chars (`A-Z a-z 0-9 - . _ ~`) pass through, so `AAPL`, `BRK-B`, `BRK.B`, `EURUSD` keep their natural spelling. Path-unsafe characters are percent-encoded so a slash-class ticker like `BC/PB` (which AV accepts verbatim) lands as `stocks_BC%2FPB.parquet` - one filename component - instead of splitting into a non-existent `stocks_BC/` directory plus `PB.parquet`. The mapping is reversible via `unfs_symbol`; `build_source_index` decodes filenames back to the canonical ticker before keying its dict. Both helpers also assert no `/` or `\` survives in the constructed name, so any future regression fails loudly with the original symbol instead of as a downstream `FileNotFoundError`.
+
 ## Data folder structure
 
 ```

@@ -128,7 +128,7 @@ Because saving an empty-but-valid frame is treated as success:
 
 Every parquet file is schema-identical to its historical counterpart (same column names and dtypes, just fewer rows). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#stocks--etfs) for per-endpoint schemas.
 
-Per-symbol filenames use the same asset-type prefix scheme as the historical setup (e.g. `daily/<date>/etfs/prices/etfs_SPY.parquet`, `daily/<date>/stocks/income_statement/stocks_AAPL_annual.parquet`). See [`historical_data_setup/README.md`](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table and rationale.
+Per-symbol filenames use the same asset-type prefix scheme as the historical setup (e.g. `daily/<date>/etfs/prices/etfs_SPY.parquet`, `daily/<date>/stocks/income_statement/stocks_AAPL_annual.parquet`). Symbols are also routed through `fs_symbol`, so a slash-class ticker like `BC/PB` writes to `daily/<date>/stocks/.../stocks_BC%2FPB.parquet` rather than splitting the path. See [`historical_data_setup/README.md`](../historical_data_setup/README.md#per-symbol-filename-convention) for the prefix table, the encoding rules, and the rationale.
 
 ## Usage
 

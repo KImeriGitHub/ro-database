@@ -8,6 +8,7 @@ import time
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import aiohttp
 import polars as pl
@@ -364,14 +365,52 @@ ASSET_TYPE_FILE_PREFIX: dict[str, str] = {
 }
 
 
+def fs_symbol(symbol: str) -> str:
+    """Encode a ticker symbol into a single, filesystem-safe path component.
+
+    Uses ``urllib.parse.quote`` with ``safe=""`` so the always-safe RFC 3986
+    unreserved set (``A-Z a-z 0-9 - . _ ~``) passes through unchanged --
+    real tickers like ``BRK-B``, ``BRK.B``, ``EURUSD`` keep their natural
+    spelling on disk. Characters that would otherwise create directory
+    boundaries or hit OS-reserved punctuation (``/``, ``\\``, ``:``, ``*``,
+    ``?``, ...) are percent-encoded, so e.g. ``BC/PB`` becomes ``BC%2FPB``,
+    a single component the OS treats as one filename.
+
+    The ``%`` itself is also encoded (``%`` -> ``%25``), which keeps the
+    mapping reversible: ``unfs_symbol(fs_symbol(s)) == s`` for any string.
+    """
+    return quote(symbol, safe="")
+
+
+def unfs_symbol(encoded: str) -> str:
+    """Inverse of ``fs_symbol``: recover the canonical ticker from the
+    on-disk filename component.
+    """
+    return unquote(encoded)
+
+
 def symbol_parquet_name(asset_type: str, symbol: str, suffix: str = "") -> str:
     """Build a per-symbol parquet filename, prefixed by asset type.
 
     *suffix* is appended before the extension (e.g. ``"_annual"`` for
-    fundamental endpoints).
+    fundamental endpoints). The symbol is routed through ``fs_symbol`` so
+    slash-class tickers like ``BC/PB`` stay as a single filename component
+    on disk (``stocks_BC%2FPB.parquet``) rather than silently splitting
+    into a non-existent ``stocks_BC/`` directory plus a ``PB.parquet``
+    file -- the original Windows failure mode that surfaces only as a
+    cryptic ``FileNotFoundError`` from polars/pyarrow.
     """
     prefix = ASSET_TYPE_FILE_PREFIX[asset_type]
-    return f"{prefix}{symbol}{suffix}.parquet"
+    name = f"{prefix}{fs_symbol(symbol)}{suffix}.parquet"
+    # Defensive: any remaining path separator means fs_symbol or the
+    # prefix/suffix was bypassed. Fail loudly with the original symbol so
+    # the cause is obvious instead of a downstream FileNotFoundError.
+    if "/" in name or "\\" in name:
+        raise ValueError(
+            f"symbol_parquet_name produced unsafe filename {name!r} for "
+            f"symbol={symbol!r}, asset_type={asset_type!r}, suffix={suffix!r}"
+        )
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -384,10 +423,15 @@ def frd_csv_path(frd_dir: Path | None, symbol: str, suffix: str) -> Path | None:
 
     Lightweight per-symbol check -- no upfront directory scan.
     *suffix* is e.g. ``"1min"``, ``"1day_unadjusted"``.
+
+    The symbol component is filesystem-encoded via ``fs_symbol`` so any
+    ticker AV serves with a path-separator character (e.g. ``BC/PB``)
+    resolves to a single filename component instead of a non-existent
+    nested directory.
     """
     if frd_dir is None:
         return None
-    path = frd_dir / f"{symbol}_{suffix}.csv"
+    path = frd_dir / f"{fs_symbol(symbol)}_{suffix}.csv"
     if path.exists():
         return path
     return None

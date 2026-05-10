@@ -22,7 +22,12 @@ read again past this step.
    `historical/` and `daily/`: it prevents Windows reserved names (`CON`,
    `PRN`, `AUX`, `NUL`, `COM0-9`, `LPT0-9`) from colliding with real
    tickers like `PRN` or `CON` when the dest tree is materialised on
-   Windows.
+   Windows. The symbol component itself is routed through
+   `historical_data_setup._common.fs_symbol`, so a slash-class ticker
+   like `BC/PB` becomes `data_BC%2FPB/` (one directory) rather than
+   splitting into `data_BC/PB/`. See
+   [`historical_data_setup/README.md`](../historical_data_setup/README.md#filesystem-safe-symbol-encoding-fs_symbol)
+   for the encoding rules.
 
 The schemas of the per-frame parquet files (`shareprice_daily.parquet`,
 `shareprice_intraday.parquet`, `price_daily.parquet`, `etf_profile.parquet`,
@@ -36,7 +41,7 @@ The schemas of the per-frame parquet files (`shareprice_daily.parquet`,
 ├── assets_overview.parquet
 ├── transformation_report.parquet      # per-symbol issue log, see "Logging" below
 ├── stocks/
-│   └── data_<SYMBOL>/                 # data_ prefix for Windows-reserved-name safety
+│   └── data_<SYMBOL>/                 # data_ prefix for Windows-reserved-name safety; <SYMBOL> is fs_symbol-encoded
 │       ├── metadata.json              # {ticker, about, sector, _asset_type}
 │       ├── shareprice_daily.parquet
 │       ├── shareprice_intraday.parquet

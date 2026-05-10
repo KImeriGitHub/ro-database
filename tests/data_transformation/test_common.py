@@ -53,9 +53,31 @@ def test_symbol_dirname_prefixes_with_data(symbol):
     assert symbol_dirname(symbol) == f"data_{symbol}"
 
 
+def test_symbol_dirname_handles_slash_class_ticker():
+    """Slash-class tickers like ``BC/PB`` must collapse to a single
+    directory-name component (``data_BC%2FPB``) so they cannot split into
+    a ``data_BC/`` parent and a ``PB`` child the way an unencoded symbol
+    would."""
+    name = symbol_dirname("BC/PB")
+    assert name == "data_BC%2FPB"
+    assert "/" not in name and "\\" not in name
+
+
 def test_symbol_dest_dir_layout(tmp_path):
     p = symbol_dest_dir(tmp_path, "stocks", "AAPL")
     assert p == tmp_path / "stocks" / "data_AAPL"
+
+
+def test_symbol_dest_dir_writes_one_dir_for_slash_ticker(tmp_path):
+    """End-to-end: a slash-class symbol produces exactly one directory
+    under the asset-type root, whose ``metadata.json`` round-trips
+    through ``is_already_transformed``."""
+    sym_dir = symbol_dest_dir(tmp_path, "stocks", "BC/PB")
+    sym_dir.mkdir(parents=True)
+    (sym_dir / "metadata.json").write_text("{}")
+    children = list((tmp_path / "stocks").iterdir())
+    assert children == [sym_dir]
+    assert is_already_transformed(tmp_path, "stocks", "BC/PB")
 
 
 def test_is_already_transformed(tmp_path):
@@ -135,6 +157,23 @@ def test_build_source_index_ignores_other_asset_type_files(tmp_path):
 
     idx = build_source_index(historical, tmp_path / "daily", "stocks", "prices_daily")
     assert list(idx.keys()) == ["AAPL"]
+
+
+def test_build_source_index_decodes_slash_class_symbol(tmp_path):
+    """Files written by ``symbol_parquet_name`` for a slash-class ticker
+    are stored as ``stocks_BC%2FPB.parquet`` on disk. ``build_source_index``
+    must recover the canonical ``BC/PB`` ticker as the dict key, otherwise
+    downstream lookups (which use the original symbol from the catalog)
+    miss the file."""
+    historical = tmp_path / "historical"
+    daily = tmp_path / "daily"
+    _touch(historical / "stocks" / "prices_daily" / "stocks_BC%2FPB.parquet")
+    _touch(daily / "2026-04-01" / "stocks" / "prices_daily" / "stocks_BC%2FPB.parquet")
+
+    idx = build_source_index(historical, daily, "stocks", "prices_daily")
+
+    assert list(idx.keys()) == ["BC/PB"]
+    assert len(idx["BC/PB"]) == 2
 
 
 def test_build_source_index_suffix(tmp_path):

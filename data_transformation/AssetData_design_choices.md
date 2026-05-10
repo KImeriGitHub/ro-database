@@ -13,7 +13,12 @@ covers semantics, not schema.
 
 - **One `AssetData` instance per `(asset_type, symbol)`**, persisted as
   `<dest>/<asset_type>/data_<SYMBOL>/` (one folder per symbol, one parquet
-  per frame, plus `metadata.json`).
+  per frame, plus `metadata.json`). `<SYMBOL>` on disk is the
+  `fs_symbol`-encoded form of the canonical AV ticker, so slash-class
+  tickers like `BC/PB` materialise as a single directory
+  (`data_BC%2FPB/`) instead of splitting the path. The encoding is
+  reversible; in-memory `metadata.json:ticker` always carries the
+  canonical form.
 
 ## 2. assets_overview.parquet (the index)
 
