@@ -87,13 +87,6 @@ _ANCHOR_FIELDS_QM: frozenset[str] = frozenset({
 _ANCHOR_FIELDS_AM: frozenset[str] = frozenset({
     "days_to_fiscalDateEnding", "days_to_reportedDate",
 })
-_ANCHOR_FIELDS_QP: frozenset[str] = frozenset({
-    "earnings_estimate_days_diff",
-})
-_ANCHOR_FIELDS_AP: frozenset[str] = frozenset({
-    "earnings_estimate_days_diff",
-})
-
 # Data-only field lists (what we look up in snapshots).
 _QM_DATA_FIELDS: list[tuple[str, Any]] = [
     (n, t) for n, t in _QM_BASE_FIELDS if n not in _ANCHOR_FIELDS_QM
@@ -101,12 +94,14 @@ _QM_DATA_FIELDS: list[tuple[str, Any]] = [
 _AM_DATA_FIELDS: list[tuple[str, Any]] = [
     (n, t) for n, t in _AM_BASE_FIELDS if n not in _ANCHOR_FIELDS_AM
 ]
-_QP_DATA_FIELDS: list[tuple[str, Any]] = [
-    (n, t) for n, t in _QP_BASE_FIELDS if n not in _ANCHOR_FIELDS_QP
-]
-_AP_DATA_FIELDS: list[tuple[str, Any]] = [
-    (n, t) for n, t in _AP_BASE_FIELDS if n not in _ANCHOR_FIELDS_AP
-]
+_QP_DATA_FIELDS: list[tuple[str, Any]] = list(_QP_BASE_FIELDS)
+_AP_DATA_FIELDS: list[tuple[str, Any]] = list(_AP_BASE_FIELDS)
+
+# How many days before a reportedDate the qm0 / am0 cells stay populated
+# when no earnings_calendar snapshot is available at d (historical regime).
+# A 14-day window approximates the typical advance-notice that companies
+# publish their earnings date.
+NO_EC_PRE_REPORT_DAYS: int = 14
 
 # m / n axis ranges per the schemas.
 _QM_MS: list[int] = list(range(1, 17))   # m>=1 carries data; m=0 only anchors
@@ -274,6 +269,95 @@ class FdeLookup:
                 if abs((self.sorted_fdes[cand_idx] - target).days) <= max_days:
                     return True
         return False
+
+
+# ---------------------------------------------------------------------------
+# Earnings-calendar snapshot lookup (per-symbol, per-snapshot-date)
+# ---------------------------------------------------------------------------
+
+class EarningsCalendarSnap:
+    """Per-symbol earnings_calendar lookup for one daily snapshot date.
+
+    Two access patterns used by the qm0 / am0 gating:
+
+    * ``max_rd_row``: the row with the largest ``reportedDate`` for the
+      symbol. Used to gate qm0 (the next-upcoming quarterly).
+    * ``fde_lookup``: nearest-neighbor lookup by ``fiscalDateEnding`` for
+      gating am0 against the matched annual fde.
+    """
+
+    __slots__ = ("max_rd_row", "fde_lookup")
+
+    def __init__(self, rows: list[dict[str, Any]]):
+        self.max_rd_row: dict[str, Any] | None = None
+        df = pl.DataFrame(rows) if rows else None
+        self.fde_lookup = FdeLookup(df)
+        # Pick the row with max non-null reportedDate.
+        best: dict[str, Any] | None = None
+        for r in rows:
+            rd = r.get("reportedDate")
+            if rd is None:
+                continue
+            if best is None or rd > best["reportedDate"]:
+                best = r
+        self.max_rd_row = best
+
+
+def _build_earnings_calendar_index(
+    daily_dir: Path,
+) -> tuple[dict[date, dict[str, EarningsCalendarSnap]], list[date]]:
+    """Scan ``daily/<YYYY-MM-DD>/earnings_calendar.parquet`` once and return
+    ``(index, snap_dates_sorted)`` where ``index[snap_date][symbol]`` is the
+    per-symbol :class:`EarningsCalendarSnap` for that snapshot.
+
+    Snapshots that lack the file are absent from both the index keys and
+    the sorted-dates list. The historical ``earnings_calendar.parquet``
+    intentionally is **not** included: it carries no PIT timestamp and
+    using it for arbitrary historical row dates would leak.
+    """
+    if not daily_dir.is_dir():
+        return {}, []
+    index: dict[date, dict[str, EarningsCalendarSnap]] = {}
+    snap_dates: list[date] = []
+    for entry in daily_dir.iterdir():
+        if not entry.is_dir() or not _SNAPSHOT_DIR_RE.match(entry.name):
+            continue
+        try:
+            sd = date.fromisoformat(entry.name)
+        except ValueError:
+            continue
+        ec_path = entry / "earnings_calendar.parquet"
+        if not ec_path.exists():
+            continue
+        df = _read_parquet_or_none(ec_path)
+        if df is None or df.is_empty() or "symbol" not in df.columns:
+            continue
+        by_sym: dict[str, list[dict[str, Any]]] = {}
+        for r in df.iter_rows(named=True):
+            sym = r.get("symbol")
+            if sym is None:
+                continue
+            by_sym.setdefault(sym, []).append(r)
+        index[sd] = {s: EarningsCalendarSnap(rows) for s, rows in by_sym.items()}
+        snap_dates.append(sd)
+    snap_dates.sort()
+    return index, snap_dates
+
+
+def _resolve_ec_snap(
+    d: date, snap_dates_sorted: list[date],
+) -> date | None:
+    """Return the largest snap_date <= d, or None if no snapshot exists
+    at or before d (same fallback semantics as statement files).
+    """
+    if not snap_dates_sorted:
+        return None
+    idx = bisect_left(snap_dates_sorted, d)
+    if idx < len(snap_dates_sorted) and snap_dates_sorted[idx] == d:
+        return d
+    if idx == 0:
+        return None
+    return snap_dates_sorted[idx - 1]
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +815,8 @@ def build_financials(
     overview_row: dict | None,
     source_paths: dict[tuple[str, str], list[Path]],
     report: TransformationReport,
+    ec_index_for_symbol: dict[date, "EarningsCalendarSnap"] | None = None,
+    ec_snap_dates_sorted: list[date] | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build (financials_quarterly, financials_annually) for one stock.
 
@@ -739,7 +825,19 @@ def build_financials(
     *overview_row* is the per-symbol row from ``assets_overview.parquet``
     as a dict-like with keys ``reportedDate`` (Date or None) and
     ``timeOfTheDay`` (str). Pass ``None`` if no overview entry exists.
+
+    *ec_index_for_symbol* maps daily snapshot dates to the per-symbol
+    ``EarningsCalendarSnap`` from ``daily/<d>/earnings_calendar.parquet``;
+    *ec_snap_dates_sorted* is the sorted list of snapshot dates that had a
+    calendar file (regardless of whether the symbol had a row in it). Both
+    are produced once per run by :func:`_build_earnings_calendar_index` in
+    the orchestrator. When omitted, qm0 / am0 fall back to the 14-day
+    pre-report rule for every row date.
     """
+    if ec_index_for_symbol is None:
+        ec_index_for_symbol = {}
+    if ec_snap_dates_sorted is None:
+        ec_snap_dates_sorted = []
     empty_q = pl.DataFrame(schema=SCHEMAS["financials_quarterly"])
     empty_a = pl.DataFrame(schema=SCHEMAS["financials_annually"])
 
@@ -850,6 +948,14 @@ def build_financials(
         if is_fallback and snap_date is not None:
             snapshot_fallback.add(snap_date)
 
+        # Resolve the earnings_calendar snapshot for d (largest snap <= d).
+        ec_snap_date = _resolve_ec_snap(d, ec_snap_dates_sorted)
+        ec_snap = (
+            ec_index_for_symbol.get(ec_snap_date)
+            if ec_snap_date is not None
+            else None
+        )
+
         # Quarterly row. When no reportedDate > d exists in report_table:
         # - if d is within NO_ANCHOR_TOLERANCE_DAYS of the latest known
         #   reportedDate, fall through with m_anchor = n_known_q so qm0
@@ -868,6 +974,7 @@ def build_financials(
                     d, n_known_q, n_known_q, rt_rows, len(rt_rows),
                     cached_snap_lookups, est_q_lookup,
                     fde_offcycle_q, estimate_offcycle_q,
+                    ec_snap, ec_snap_date,
                 ))
             else:
                 hard_no_anchor_q_count += 1
@@ -877,6 +984,7 @@ def build_financials(
                 d, m_anchor, n_known_q, rt_rows, len(rt_rows),
                 cached_snap_lookups, est_q_lookup,
                 fde_offcycle_q, estimate_offcycle_q,
+                ec_snap, ec_snap_date,
             ))
 
         # Annual row. Same two-tier rule on the annual axis.
@@ -892,6 +1000,7 @@ def build_financials(
                     d, n_known_a, n_known_a, rt_a_rows, len(rt_a_rows),
                     cached_snap_lookups, est_a_lookup,
                     fde_offcycle_a, estimate_offcycle_a,
+                    ec_snap, ec_snap_date,
                 ))
             else:
                 hard_no_anchor_a_count += 1
@@ -901,6 +1010,7 @@ def build_financials(
                 d, m_anchor_a, n_known_a, rt_a_rows, len(rt_a_rows),
                 cached_snap_lookups, est_a_lookup,
                 fde_offcycle_a, estimate_offcycle_a,
+                ec_snap, ec_snap_date,
             ))
 
     # Flush accumulated issue logs. Soft no-anchor rows are common when
@@ -987,7 +1097,6 @@ def _build_empty_quarterly_row(d: date) -> dict[str, Any]:
             row[f"{fld_name}_qm{m}"] = None
     for n in _QP_NS:
         suffix = _signed_suffix(n)
-        row[f"earnings_estimate_days_diff_qp_{suffix}"] = None
         for fld_name, _t in _QP_DATA_FIELDS:
             row[f"{fld_name}_qp_{suffix}"] = None
     return row
@@ -1005,7 +1114,6 @@ def _build_empty_annual_row(d: date) -> dict[str, Any]:
             row[f"{fld_name}_am{m}"] = None
     for n in _AP_NS:
         suffix = _signed_suffix(n)
-        row[f"earnings_estimate_days_diff_ap_{suffix}"] = None
         for fld_name, _t in _AP_DATA_FIELDS:
             row[f"{fld_name}_ap_{suffix}"] = None
     return row
@@ -1021,16 +1129,50 @@ def _build_quarterly_row(
     est_q_lookup: FdeLookup,
     fde_offcycle: set[tuple[str, str, date]],
     estimate_offcycle: set[date],
+    ec_snap: "EarningsCalendarSnap | None",
+    ec_snap_date: date | None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"Date": d}
 
-    # m=0 carries only the anchor columns.
+    # m=0 anchor cells are PIT-gated. Three branches, in order:
+    # 1. earnings_calendar snapshot exists at or before d (ec_snap_date is
+    #    not None): the snapshot decides. If the symbol has a row whose
+    #    largest reportedDate > d, populate qm0 from that row's PIT-honest
+    #    values (reportedDate, fiscalDateEnding, timeOfTheDay). Otherwise
+    #    null qm0 -- at d the next earnings date was not yet announced.
+    # 2. No earnings_calendar snapshot at all for d (historical regime):
+    #    apply the 14-day pre-report rule using rt_rows[pos0]. Populate
+    #    qm0 only when the eventually-filed reportedDate is within 14 days
+    #    of d.
+    # 3. Otherwise (pos0 out of range and no calendar): null.
     pos0 = m_anchor
-    if 0 <= pos0 < n_known:
+    qm0_anchor: dict[str, Any] | None = None
+    if ec_snap_date is not None:
+        if ec_snap is not None and ec_snap.max_rd_row is not None:
+            best_rd = ec_snap.max_rd_row["reportedDate"]
+            if best_rd is not None and best_rd > d:
+                qm0_anchor = ec_snap.max_rd_row
+    elif 0 <= pos0 < n_known:
         ar = rt_rows[pos0]
-        row["days_to_fiscalDateEnding_qm0"] = float((d - ar["fiscalDateEnding"]).days)
-        row["days_to_reportedDate_qm0"] = float((d - ar["reportedDate"]).days)
-        row["reportTime_qm0"] = ar["reportTime"]
+        rd = ar["reportedDate"]
+        if rd is not None and 1 <= (rd - d).days <= NO_EC_PRE_REPORT_DAYS:
+            qm0_anchor = ar
+
+    if qm0_anchor is not None:
+        fde0 = qm0_anchor.get("fiscalDateEnding")
+        rd0 = qm0_anchor.get("reportedDate")
+        # earnings_calendar rows expose ``timeOfTheDay``; rt_rows expose
+        # ``reportTime`` (already normalised). Prefer the calendar field
+        # when present.
+        tod0 = qm0_anchor.get("timeOfTheDay")
+        rt0 = _normalize_report_time(tod0) if tod0 is not None else qm0_anchor.get("reportTime")
+        row["days_to_fiscalDateEnding_qm0"] = (
+            float((d - fde0).days) if fde0 is not None else None
+        )
+        row["days_to_reportedDate_qm0"] = (
+            float((d - rd0).days) if rd0 is not None else None
+        )
+        row["reportTime_qm0"] = rt0
     else:
         row["days_to_fiscalDateEnding_qm0"] = None
         row["days_to_reportedDate_qm0"] = None
@@ -1066,7 +1208,6 @@ def _build_quarterly_row(
             f_n = ar["fiscalDateEnding"]
             est_row, _days_diff = est_q_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
             if est_row is not None:
-                row[f"earnings_estimate_days_diff_qp_{suffix}"] = float((f_n - d).days)
                 for fld_name, _t in _QP_DATA_FIELDS:
                     row[f"{fld_name}_qp_{suffix}"] = est_row.get(fld_name)
             else:
@@ -1075,11 +1216,9 @@ def _build_quarterly_row(
                     and est_q_lookup.sorted_fdes[0] <= f_n <= est_q_lookup.sorted_fdes[-1]
                 ):
                     estimate_offcycle.add(f_n)
-                row[f"earnings_estimate_days_diff_qp_{suffix}"] = None
                 for fld_name, _t in _QP_DATA_FIELDS:
                     row[f"{fld_name}_qp_{suffix}"] = None
         else:
-            row[f"earnings_estimate_days_diff_qp_{suffix}"] = None
             for fld_name, _t in _QP_DATA_FIELDS:
                 row[f"{fld_name}_qp_{suffix}"] = None
 
@@ -1096,15 +1235,45 @@ def _build_annual_row(
     est_a_lookup: FdeLookup,
     fde_offcycle: set[tuple[str, str, date]],
     estimate_offcycle: set[date],
+    ec_snap: "EarningsCalendarSnap | None",
+    ec_snap_date: date | None,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {"Date": d}
 
-    # am=0 carries only the days_to_* anchors (no reportTime in annual).
+    # am=0 anchor cells are PIT-gated. Mirrors the quarterly logic but
+    # matches earnings_calendar rows by fiscalDateEnding against the
+    # annual anchor's fde -- am0 represents the next-upcoming *annual*
+    # filing, and the calendar row whose fde lines up with that fde is
+    # the announcement we care about. When no calendar exists for d the
+    # 14-day pre-report rule on rt_rows[pos0] applies.
     pos0 = m_anchor
-    if 0 <= pos0 < n_known:
+    pos0_in_range = 0 <= pos0 < n_known
+    am0_anchor: dict[str, Any] | None = None
+    if ec_snap_date is not None:
+        if pos0_in_range and ec_snap is not None:
+            target_fde = rt_rows[pos0]["fiscalDateEnding"]
+            ec_row, _diff = ec_snap.fde_lookup.find_within(
+                target_fde, FISCAL_MATCH_DAYS,
+            )
+            if ec_row is not None:
+                ec_rd = ec_row.get("reportedDate")
+                if ec_rd is not None and ec_rd > d:
+                    am0_anchor = ec_row
+    elif pos0_in_range:
         ar = rt_rows[pos0]
-        row["days_to_fiscalDateEnding_am0"] = float((d - ar["fiscalDateEnding"]).days)
-        row["days_to_reportedDate_am0"] = float((d - ar["reportedDate"]).days)
+        rd = ar["reportedDate"]
+        if rd is not None and 1 <= (rd - d).days <= NO_EC_PRE_REPORT_DAYS:
+            am0_anchor = ar
+
+    if am0_anchor is not None:
+        fde0 = am0_anchor.get("fiscalDateEnding")
+        rd0 = am0_anchor.get("reportedDate")
+        row["days_to_fiscalDateEnding_am0"] = (
+            float((d - fde0).days) if fde0 is not None else None
+        )
+        row["days_to_reportedDate_am0"] = (
+            float((d - rd0).days) if rd0 is not None else None
+        )
     else:
         row["days_to_fiscalDateEnding_am0"] = None
         row["days_to_reportedDate_am0"] = None
@@ -1137,7 +1306,6 @@ def _build_annual_row(
             f_n = ar["fiscalDateEnding"]
             est_row, _days_diff = est_a_lookup.find_within(f_n, FISCAL_MATCH_DAYS)
             if est_row is not None:
-                row[f"earnings_estimate_days_diff_ap_{suffix}"] = float((f_n - d).days)
                 for fld_name, _t in _AP_DATA_FIELDS:
                     row[f"{fld_name}_ap_{suffix}"] = est_row.get(fld_name)
             else:
@@ -1146,11 +1314,9 @@ def _build_annual_row(
                     and est_a_lookup.sorted_fdes[0] <= f_n <= est_a_lookup.sorted_fdes[-1]
                 ):
                     estimate_offcycle.add(f_n)
-                row[f"earnings_estimate_days_diff_ap_{suffix}"] = None
                 for fld_name, _t in _AP_DATA_FIELDS:
                     row[f"{fld_name}_ap_{suffix}"] = None
         else:
-            row[f"earnings_estimate_days_diff_ap_{suffix}"] = None
             for fld_name, _t in _AP_DATA_FIELDS:
                 row[f"{fld_name}_ap_{suffix}"] = None
 

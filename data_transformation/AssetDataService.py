@@ -122,7 +122,6 @@ _AM_M0_FIELDS: list[tuple[str, Any]] = [
 ]
 
 _QP_BASE_FIELDS: list[tuple[str, Any]] = [
-    ("earnings_estimate_days_diff", pl.Float32),
     ("eps_estimate_analyst_count", pl.Float32),
     ("eps_estimate_average", pl.Float32),
     ("eps_estimate_average_30_days_ago", pl.Float32),

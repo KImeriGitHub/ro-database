@@ -181,8 +181,8 @@ Finalize runs only when no `--asset-types` / `--endpoints` subset flags were pas
 > data-pull folders -- `historical/earnings_calendar.parquet` and
 > `daily/<YYYY-MM-DD>/earnings_calendar.parquet` -- and is fetched by
 > `historical_data_setup` / `daily_data_service`. The catalog flow no
-> longer touches it. See [historical_data_setup/README.md](../historical_data_setup/README.md#earnings_calendar)
-> and [daily_data_service/README.md](../daily_data_service/README.md#earnings_calendar).
+> longer touches it. See [historical_data_setup/SPEC.md](../historical_data_setup/SPEC.md#earnings_calendar)
+> and [daily_data_service/SPEC.md](../daily_data_service/SPEC.md#earnings_calendar).
 
 ## FirstRate Data requirements
 

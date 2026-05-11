@@ -29,6 +29,7 @@ from data_transformation.frames.etf_profile import build_etf_profile
 from data_transformation.frames.financials import (
     ENDPOINTS as _FIN_ENDPOINTS,
     SUFFIXES as _FIN_SUFFIXES,
+    _build_earnings_calendar_index,
     build_financials,
 )
 from data_transformation.frames.insider import build_insider_df
@@ -123,12 +124,17 @@ def transform_stocks_or_etfs(
     )
     # Build 10 financial-source indexes (5 endpoints x 2 suffixes) once.
     fin_idx: dict[tuple[str, str], dict[str, list[Path]]] = {}
+    # Scan daily/*/earnings_calendar.parquet once for the per-symbol qm0 /
+    # am0 PIT gate. Empty maps when the daily tree has none of these files.
+    ec_index: dict = {}
+    ec_snap_dates: list = []
     if asset_type == "stocks" and not skip_financials:
         for ep in _FIN_ENDPOINTS:
             for suf in _FIN_SUFFIXES:
                 fin_idx[(ep, suf)] = build_source_index(
                     historical_dir, daily_dir, asset_type, ep, suffix=suf,
                 )
+        ec_index, ec_snap_dates = _build_earnings_calendar_index(daily_dir)
 
     all_symbols = sorted(
         set(daily_idx) | set(intraday_idx) | set(profile_idx)
@@ -184,10 +190,17 @@ def transform_stocks_or_etfs(
                     source_paths_sym = {
                         key: idx.get(symbol, []) for key, idx in fin_idx.items()
                     }
+                    ec_for_symbol = {
+                        snap: by_sym[symbol]
+                        for snap, by_sym in ec_index.items()
+                        if symbol in by_sym
+                    }
                     fin_q, fin_a = build_financials(
                         symbol, inst.shareprice_daily,
                         overview_row_lookup.get(symbol),
                         source_paths_sym, report,
+                        ec_index_for_symbol=ec_for_symbol,
+                        ec_snap_dates_sorted=ec_snap_dates,
                     )
                     inst.financials_quarterly = fin_q
                     inst.financials_annually = fin_a

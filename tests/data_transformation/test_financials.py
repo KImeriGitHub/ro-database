@@ -35,7 +35,9 @@ from data_transformation.AssetData import StockData
 from data_transformation.AssetDataService import SCHEMAS
 from data_transformation.frames.financials import (
     FISCAL_MATCH_DAYS,
+    NO_EC_PRE_REPORT_DAYS,
     FdeLookup,
+    _build_earnings_calendar_index,
     _build_report_table,
     _extend_quarterly_estimates_with_annual,
     _normalize_report_time,
@@ -212,6 +214,39 @@ def _empty_source_paths() -> dict:
             for suf in ("_quarterly", "_annual")}
 
 
+_EC_SCHEMA: dict = {
+    "symbol": pl.Utf8,
+    "name": pl.Utf8,
+    "reportedDate": pl.Date,
+    "fiscalDateEnding": pl.Date,
+    "estimate": pl.Float32,
+    "currency": pl.Utf8,
+    "timeOfTheDay": pl.Utf8,
+    "cast_issues": pl.Utf8,
+}
+
+
+def _write_ec(root: Path, snap: date, rows: list[dict]) -> Path:
+    """Write a daily/<snap>/earnings_calendar.parquet from a list of dicts
+    containing at least ``symbol``, ``reportedDate``, ``fiscalDateEnding``,
+    and ``timeOfTheDay``; missing optional columns default to None / "USD".
+    """
+    full_rows = []
+    for r in rows:
+        full_rows.append({
+            "symbol": r["symbol"],
+            "name": r.get("name", r["symbol"]),
+            "reportedDate": r["reportedDate"],
+            "fiscalDateEnding": r["fiscalDateEnding"],
+            "estimate": r.get("estimate", 1.0),
+            "currency": r.get("currency", "USD"),
+            "timeOfTheDay": r.get("timeOfTheDay", "post-market"),
+            "cast_issues": r.get("cast_issues"),
+        })
+    path = root / "daily" / snap.isoformat() / "earnings_calendar.parquet"
+    return _write(path, full_rows, _EC_SCHEMA)
+
+
 def _gather_source_paths(root: Path, symbol: str = "AAPL") -> dict[tuple[str, str], list[Path]]:
     """Walk the synthetic tree and produce the {(endpoint, suffix): [paths]}
     dict that build_financials expects."""
@@ -277,13 +312,14 @@ def test_single_past_quarter_populates_qm1(tmp_path):
     """Past Q1 reported on 2026-02-01 (fiscalDateEnding 2025-12-31).
     Upcoming Q2 with overview_row reportedDate=2026-05-01,
     fiscalDateEnding=2026-03-31 (from estimates_q).
-    Row date d=2026-04-15 falls between past and upcoming -> m=0 anchors
-    on Q2 (upcoming), m=1 anchors on Q1 (past)."""
+    Row date d falls inside the 14-day pre-report window of the upcoming
+    reportedDate, so qm0 populates from rt_rows[pos0] under the historical
+    (no earnings_calendar) regime; m=1 anchors on Q1 (past)."""
     past_fde = date(2025, 12, 31)
     past_rd  = date(2026, 2, 1)
     upcoming_fde = date(2026, 3, 31)
     upcoming_rd = date(2026, 5, 1)
-    d = date(2026, 4, 15)
+    d = date(2026, 4, 20)
 
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
@@ -411,9 +447,8 @@ def test_soft_no_anchor_within_tolerance_keeps_past_quarters(tmp_path):
 
     # qp_{n} all null because estimates frame is empty (no offcycle log
     # because there's nothing to compare against).
-    assert row["earnings_estimate_days_diff_qp_0"] is None
     assert row["eps_estimate_average_qp_0"] is None
-    assert row["earnings_estimate_days_diff_qp_m1"] is None
+    assert row["eps_estimate_analyst_count_qp_m1"] is None
 
     # Soft case must NOT trigger the empty-frame defensive path.
     assert fin_q.height == 1
@@ -423,15 +458,16 @@ def test_soft_no_anchor_within_tolerance_keeps_past_quarters(tmp_path):
 
 
 def test_d_before_every_reporteddate_qm0_fills_from_earliest(tmp_path):
-    """For d strictly before every known reportedDate, m_anchor=0 and
-    only m=0's anchor columns are populated; m>=1 are out of range."""
+    """For d strictly before every known reportedDate (and inside the
+    14-day pre-report window of the earliest), m_anchor=0 and only m=0's
+    anchor columns are populated; m>=1 are out of range."""
     past_fde = date(2026, 6, 30)
     past_rd  = date(2026, 8, 1)
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(past_fde, past_rd, rt="pre-market")],
            _EARNINGS_Q_SCHEMA)
 
-    d = date(2026, 4, 15)  # before reportedDate
+    d = date(2026, 7, 25)  # 7 days before reportedDate (within 14d window)
     sd = _sd_frame([d])
     fin_q, _fin_a = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
@@ -467,7 +503,7 @@ def test_late_filer_ordering_in_report_table(tmp_path):
         _is_row(q3_fde, q3_rd, total_revenue=3.0e9),
     ], _IS_SCHEMA)
 
-    d = date(2026, 2, 20)  # between Q4.rd and Q3.rd
+    d = date(2026, 3, 5)  # between Q4.rd and Q3.rd, within 14d of q3_rd
     sd = _sd_frame([d])
     fin_q, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
@@ -801,12 +837,8 @@ def test_estimate_match_within_9d_populates_with_signed_diff(tmp_path):
     )
     row = fin_q.row(0, named=True)
     # m_anchor=1 picks the upcoming entry (fde=2026-04-09) for qp_0.
-    # days_diff is the signed offset (report_table.fde[i] - d).days,
-    # i.e. (2026-04-09 - 2026-04-15) = -6, populated because the
-    # estimate at 2026-04-09 matches within the +/-10d margin.
-    assert row["earnings_estimate_days_diff_qp_0"] == pytest.approx(
-        -6.0, abs=1e-6
-    )
+    # The estimate at 2026-04-09 matches within the +/-10d margin and
+    # populates the qp_0 estimate columns.
     assert row["eps_estimate_average_qp_0"] == pytest.approx(2.0, rel=1e-3)
     assert report.to_frame().filter(
         pl.col("issue_type") == "financials_estimate_offcycle"
@@ -872,18 +904,19 @@ def test_days_to_fiscal_dateending_positive_for_past_quarter(tmp_path):
 
 
 def test_days_to_fiscal_dateending_negative_for_upcoming_quarter(tmp_path):
-    """When d falls before the upcoming fde, m=0's days_to_fiscalDateEnding
-    is negative."""
+    """When d falls before the upcoming fde (and inside the 14-day pre-
+    report window of the upcoming reportedDate), m=0's
+    days_to_fiscalDateEnding is negative."""
     past_fde = date(2025, 12, 31)
     past_rd  = date(2026, 2, 1)
     upcoming_fde = date(2026, 6, 30)
-    upcoming_rd = date(2026, 7, 25)
+    upcoming_rd = date(2026, 7, 10)
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
     _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
            [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
     overview_row = {"reportedDate": upcoming_rd, "timeOfTheDay": "post-market"}
-    d = date(2026, 4, 15)
+    d = date(2026, 6, 28)  # 2 days before fde, 12 days before rd
     sd = _sd_frame([d])
     fin_q, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
@@ -1221,3 +1254,293 @@ def test_round_trip_via_stockdata(tmp_path):
     )
     assert saved.rows() == reloaded.rows()
     assert loaded.financials_annually.rows() == fin_a.rows()
+
+
+# ── 23. earnings_calendar PIT gating for qm0 / am0 ────────────────────────────
+
+def _ec_index_for_test(root: Path, symbol: str = "AAPL"):
+    """Build the (ec_for_symbol, ec_snap_dates_sorted) pair that
+    build_financials expects, from a synthesised daily tree."""
+    index, snap_dates = _build_earnings_calendar_index(root / "daily")
+    ec_for_symbol = {
+        snap: by_sym[symbol]
+        for snap, by_sym in index.items()
+        if symbol in by_sym
+    }
+    return ec_for_symbol, snap_dates
+
+
+def test_qm0_gated_in_by_earnings_calendar(tmp_path):
+    """daily/<d>/earnings_calendar.parquet shows the upcoming reportedDate
+    is strictly after d -> qm0 populates from the calendar row (not from
+    rt_rows). reportTime comes from timeOfTheDay normalised."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    # rt_rows would carry the eventually-filed rd; the calendar at d shows
+    # a slightly earlier announced rd. The new gate must use the calendar's
+    # value, not the rt_rows value.
+    upcoming_rd_filed = date(2026, 5, 5)
+    upcoming_rd_announced = date(2026, 5, 4)
+    d = date(2026, 4, 28)  # outside 14d of filed, but calendar gates qm0 in
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+    _write_ec(tmp_path, d, [{
+        "symbol": "AAPL",
+        "reportedDate": upcoming_rd_announced,
+        "fiscalDateEnding": upcoming_fde,
+        "timeOfTheDay": "pre-market",
+    }])
+
+    overview_row = {"reportedDate": upcoming_rd_filed,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+        ec_index_for_symbol=ec_for_symbol,
+        ec_snap_dates_sorted=ec_snap_dates,
+    )
+    row = fin_q.row(0, named=True)
+    # Values come from the calendar's announced rd, not the filed rd.
+    assert row["days_to_reportedDate_qm0"] == pytest.approx(
+        (d - upcoming_rd_announced).days, abs=1e-6,
+    )
+    assert row["days_to_fiscalDateEnding_qm0"] == pytest.approx(
+        (d - upcoming_fde).days, abs=1e-6,
+    )
+    assert row["reportTime_qm0"] == "pre-market"
+
+
+def test_qm0_gated_out_when_calendar_max_rd_le_d(tmp_path):
+    """daily/<d>/earnings_calendar.parquet exists for d but its max
+    reportedDate for the symbol is <= d (e.g. the snapshot is the
+    fallback from an earlier day, and the previously-upcoming filing has
+    now passed). qm0 must null even though rt_rows[pos0] would otherwise
+    populate it."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 20)
+    ec_snap_date = date(2026, 4, 15)
+    stale_rd = date(2026, 4, 10)  # <= d -> stale at d
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+    _write_ec(tmp_path, ec_snap_date, [{
+        "symbol": "AAPL",
+        "reportedDate": stale_rd,
+        "fiscalDateEnding": date(2025, 12, 31),
+        "timeOfTheDay": "post-market",
+    }])
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+        ec_index_for_symbol=ec_for_symbol,
+        ec_snap_dates_sorted=ec_snap_dates,
+    )
+    row = fin_q.row(0, named=True)
+    assert row["days_to_fiscalDateEnding_qm0"] is None
+    assert row["days_to_reportedDate_qm0"] is None
+    assert row["reportTime_qm0"] is None
+    # qm1 still walks back to the past quarter (gate only affects qm0).
+    assert row["days_to_fiscalDateEnding_qm1"] == pytest.approx(
+        (d - past_fde).days, abs=1e-6,
+    )
+
+
+def test_qm0_gated_out_when_calendar_lacks_symbol(tmp_path):
+    """Calendar snapshot exists at or before d but the symbol has no row
+    in it -> qm0 nulls (file is authoritative)."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 20)
+    ec_snap_date = date(2026, 4, 15)
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+    # Calendar mentions a different symbol only.
+    _write_ec(tmp_path, ec_snap_date, [{
+        "symbol": "MSFT",
+        "reportedDate": date(2026, 5, 10),
+        "fiscalDateEnding": date(2026, 3, 31),
+        "timeOfTheDay": "post-market",
+    }])
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+        ec_index_for_symbol=ec_for_symbol,
+        ec_snap_dates_sorted=ec_snap_dates,
+    )
+    row = fin_q.row(0, named=True)
+    assert row["days_to_fiscalDateEnding_qm0"] is None
+    assert row["days_to_reportedDate_qm0"] is None
+    assert row["reportTime_qm0"] is None
+
+
+def test_qm0_uses_max_reporteddate_when_calendar_has_multiple_rows(tmp_path):
+    """When a symbol has multiple rows in daily/<d>/earnings_calendar.parquet
+    the row with the largest reportedDate is the one used (per the SPEC).
+    """
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 28)
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+    # Two rows for AAPL: an earlier and a later. Largest reportedDate wins.
+    later_rd = date(2026, 8, 1)
+    later_fde = date(2026, 6, 30)
+    earlier_rd = date(2026, 5, 2)
+    earlier_fde = date(2026, 3, 31)
+    _write_ec(tmp_path, d, [
+        {"symbol": "AAPL", "reportedDate": earlier_rd,
+         "fiscalDateEnding": earlier_fde, "timeOfTheDay": "post-market"},
+        {"symbol": "AAPL", "reportedDate": later_rd,
+         "fiscalDateEnding": later_fde, "timeOfTheDay": "pre-market"},
+    ])
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+        ec_index_for_symbol=ec_for_symbol,
+        ec_snap_dates_sorted=ec_snap_dates,
+    )
+    row = fin_q.row(0, named=True)
+    # qm0 values come from the LATER row (max reportedDate).
+    assert row["days_to_reportedDate_qm0"] == pytest.approx(
+        (d - later_rd).days, abs=1e-6,
+    )
+    assert row["days_to_fiscalDateEnding_qm0"] == pytest.approx(
+        (d - later_fde).days, abs=1e-6,
+    )
+    assert row["reportTime_qm0"] == "pre-market"
+
+
+def test_qm0_calendar_fallback_to_earlier_snapshot(tmp_path):
+    """When daily/<d>/earnings_calendar.parquet doesn't exist for the row
+    date, the largest snap_date <= d is used (same fallback as statement
+    files)."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 28)
+    snap = date(2026, 4, 25)  # earlier than d -> used via fallback
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+    _write_ec(tmp_path, snap, [{
+        "symbol": "AAPL", "reportedDate": upcoming_rd,
+        "fiscalDateEnding": upcoming_fde, "timeOfTheDay": "post-market",
+    }])
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+        ec_index_for_symbol=ec_for_symbol,
+        ec_snap_dates_sorted=ec_snap_dates,
+    )
+    row = fin_q.row(0, named=True)
+    assert row["days_to_reportedDate_qm0"] == pytest.approx(
+        (d - upcoming_rd).days, abs=1e-6,
+    )
+
+
+def test_qm0_14_day_rule_when_no_calendar_snapshot(tmp_path):
+    """No daily/<d'>/earnings_calendar.parquet exists for any d' <= d.
+    rt_rows[pos0]'s reportedDate is 5 days after d -> within 14d window
+    -> qm0 populates from rt_rows."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 26)  # 5 days before upcoming_rd
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+    )
+    row = fin_q.row(0, named=True)
+    assert row["days_to_reportedDate_qm0"] == pytest.approx(
+        (d - upcoming_rd).days, abs=1e-6,
+    )
+    assert row["reportTime_qm0"] == "post-market"
+
+
+def test_qm0_14_day_rule_outside_window_nulls(tmp_path):
+    """No calendar; rt_rows[pos0]'s reportedDate is 20 days after d ->
+    outside the 14-day window -> qm0 nulls."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+    d = date(2026, 4, 11)  # 20 days before upcoming_rd
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([d])
+    fin_q, _ = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+    )
+    row = fin_q.row(0, named=True)
+    assert row["days_to_fiscalDateEnding_qm0"] is None
+    assert row["days_to_reportedDate_qm0"] is None
+    assert row["reportTime_qm0"] is None
+    # qm1 still populated (the gate only affects qm0).
+    assert row["days_to_fiscalDateEnding_qm1"] == pytest.approx(
+        (d - past_fde).days, abs=1e-6,
+    )
+
+
+def test_no_ec_pre_report_days_constant():
+    assert NO_EC_PRE_REPORT_DAYS == 14

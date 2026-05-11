@@ -511,11 +511,50 @@ For each row date `d` in `shareprice_daily.Date`:
   below) by matching `fiscalDateEnding` within +/- 10 days of
   `report_table.fiscalDateEnding[i]`; mismatches >10 days are
   logged as `financials_estimate_offcycle`.
-- `earnings_estimate_days_diff_qp_{n}` is the **signed** day offset
-  between the matched report_table's fiscalDateEnding and date d, i.e.
-  `(report_table.fiscalDateEnding[i] - d).days`
-  cast to Float32. It is the only `_qp_{n}` column that is not a direct copy
-  from `earnings_estimates`.
+
+#### qm0 / am0 PIT gating (anti-leak)
+
+The `_qm0` / `_am0` anchor cells describe the **next upcoming report**
+relative to `d`. The eventually-filed `reportedDate` for that report
+was usually announced a few weeks before the filing, not years in
+advance -- so using `report_table` directly would leak announcement
+knowledge into rows where it had not yet been published. Resolution
+proceeds in three branches:
+
+1. **A `daily/<d'>/earnings_calendar.parquet` exists at or before `d`**
+   (largest `d' <= d`, same fallback convention as the statement
+   files). The snapshot is authoritative:
+   - **qm0**: locate the row in the calendar for this symbol with the
+     **largest `reportedDate`**. If it is strictly greater than `d`,
+     populate `days_to_fiscalDateEnding_qm0`, `days_to_reportedDate_qm0`,
+     and `reportTime_qm0` from that row (`fiscalDateEnding`,
+     `reportedDate`, `timeOfTheDay` normalised). Otherwise (`reportedDate
+     <= d`, or no row exists for the symbol) null all three.
+   - **am0**: locate the row in the calendar for this symbol whose
+     `fiscalDateEnding` matches the anchor's `fiscalDateEnding`
+     (`rt_a_rows[pos0]`) within +/- 10 days. If found and its
+     `reportedDate > d`, populate `days_to_fiscalDateEnding_am0` and
+     `days_to_reportedDate_am0` from that row. Otherwise null both.
+2. **No `earnings_calendar.parquet` exists for any `d' <= d`**
+   (the historical regime, before the daily pipeline produced any
+   calendar files). Apply the **14-day pre-report rule** using the
+   `report_table` anchor at `pos0`: if `1 <= (reportedDate[pos0] - d).days
+   <= 14`, populate the qm0 / am0 cells from `report_table` as before.
+   Outside the 14-day window null the cells. This approximates the
+   typical advance-notice window that companies publish their earnings
+   date, without conceding a PIT-honest gate.
+3. **`pos0` is out of range** (soft no-anchor: `report_table` has no
+   row with `reportedDate > d`). qm0 may still be populated when branch
+   1 applies (earnings_calendar provides the gate independently); am0
+   relies on `rt_a_rows[pos0]` for the fde match, so am0 nulls in this
+   case.
+
+`earnings_calendar.parquet` is a global file (all symbols) covering a
+6-month horizon -- see
+[historical_data_setup/SPEC.md](../historical_data_setup/SPEC.md#earnings_calendar).
+The historical `historical/earnings_calendar.parquet` is intentionally
+**not** used for the gate: it carries no PIT timestamp, so applying it
+to arbitrary historical row dates would re-introduce the leak.
 
 #### Annual cell mapping
 
@@ -544,12 +583,10 @@ The `_am{m}` columns are asymmetric by m:
 
 For each row date `d`, the `am_anchor` and `_am{m}` / `_ap_{n}`
 resolution mirrors the quarterly case (m in 0..4, n in -2..1),
-pulling from the d-PIT `*_a.parquet` files. `earnings_estimate_days_diff_ap_{n}`
-follows the same signed-offset convention as its quarterly
-counterpart:
- `(report_table_annual.fiscalDateEnding[i] - d).days`
-as Float32, null when no estimate matches within the +/-10-day
-margin or the position is out of range. The same two-tier
+pulling from the d-PIT `*_a.parquet` files. `_am0` follows the same
+PIT-gating rule as `_qm0` described above (fde-matched lookup against
+the annual anchor, with the 14-day fallback when no
+`earnings_calendar.parquet` snapshot is available). The same two-tier
 no-anchor rule applies on the annual axis: when no annual
 `reportedDate > d` exists in `report_table_annual`, the soft case
 (`d - max(reportedDate) < 60 days`) sets `am_anchor = n_known_a`

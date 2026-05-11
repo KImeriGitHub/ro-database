@@ -359,7 +359,6 @@ Columns
  'totalShareholderEquity_qm{m}'                                     : pl.Float32
  'treasuryStock_qm{m}'                                              : pl.Float32
 
- 'earnings_estimate_days_diff_qp_{n}'                                : pl.Float32
  'eps_estimate_analyst_count_qp_{n}'                                 : pl.Float32
  'eps_estimate_average_qp_{n}'                                       : pl.Float32
  'eps_estimate_average_30_days_ago_qp_{n}'                           : pl.Float32
@@ -481,7 +480,6 @@ Columns
  'totalShareholderEquity_am{m}'                                     : pl.Float32
  'treasuryStock_am{m}'                                              : pl.Float32
 
- 'earnings_estimate_days_diff_ap_{n}'                                : pl.Float32
  'eps_estimate_analyst_count_ap_{n}'                                 : pl.Float32
  'eps_estimate_average_ap_{n}'                                       : pl.Float32
  'eps_estimate_average_30_days_ago_ap_{n}'                           : pl.Float32

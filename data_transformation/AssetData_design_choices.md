@@ -321,18 +321,25 @@ The synthesised rows extend the quarterly estimates frame and feed the
 `_qp_{n}` lookup as well as the future-extension positions on the
 m-axis.
 
-### Signed-day-offset columns
-
-`earnings_estimate_days_diff_qp_{n}` and `earnings_estimate_days_diff_ap_{n}`
-are the only `_qp_{n}` / `_ap_{n}` columns not copied directly from
-`earnings_estimates`. They are **signed**:
-`(fiscalDateEnding at the matched position - d).days` cast to Float32.
-Null when no estimate matches within the +/-10-day margin or the
-position is out of range.
+### Anchor-only signed-day-offset columns
 
 `days_to_fiscalDateEnding_qm{m}` is `(d - fiscalDateEnding at m).days`:
-positive for past quarters (typical), slightly negative for m=0 on rows
-where the upcoming quarter has not yet ended.
+positive for past quarters (typical), slightly negative for m=0 or null.
+Per-`_qp_{n}` / per-`_ap_{n}` fiscal-date offsets were intentionally not
+kept: they are redundant with `days_to_fiscalDateEnding_qm{m}` /
+`_am{m}`.
+
+### qm0 / am0 PIT gate
+
+The `_qm0` / `_am0` anchor cells describe the **next upcoming filing**
+relative to `d`. They are PIT-gated against
+`daily/<d'>/earnings_calendar.parquet` (largest `d' <= d`) so the
+eventually-filed `reportedDate` does not leak into rows where the
+announcement had not yet been published; when no calendar snapshot is
+available at or before `d`, a 14-day pre-report window approximates
+the typical advance-notice. See
+[SPEC.md](SPEC.md) -> "qm0 / am0 PIT gating (anti-leak)" for the
+exact rules.
 
 ### reportedDate consistency check (full no-op trigger)
 
