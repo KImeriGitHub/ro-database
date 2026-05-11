@@ -105,7 +105,7 @@ def test_resolve_dates_ignores_non_date_entries(workdir: Path):
     daily = workdir / "daily"
     _make_date_dirs(daily, ["2026-04-17", "2026-04-18"])
     (daily / ".setup_started_at").touch()
-    (daily / "README.md").touch()
+    (daily / "SPEC.md").touch()
     (daily / "not-a-date").mkdir()
     (daily / "2026-13-01").mkdir()  # invalid month -- date.fromisoformat rejects
 
@@ -293,7 +293,7 @@ def test_rename_sentiment_files_renames_parquet_only(workdir: Path):
     (sent_dir / "AAPL.parquet").write_bytes(b"B")
     (sent_dir / "MSFT.parquet").write_bytes(b"C")
     # Non-parquet files must be left untouched.
-    (sent_dir / "README.txt").write_bytes(b"keep")
+    (sent_dir / "SPEC.txt").write_bytes(b"keep")
     (sent_dir / "stale.pre_weekly").write_bytes(b"keep-too")
 
     renamed = aw._rename_sentiment_files(sent_dir)
@@ -304,7 +304,7 @@ def test_rename_sentiment_files_renames_parquet_only(workdir: Path):
     assert (sent_dir / "MSFT.parquet.pre_weekly").exists()
     # Originals gone, non-parquet preserved.
     assert not (sent_dir / "ALL_MESSAGES.parquet").exists()
-    assert (sent_dir / "README.txt").read_bytes() == b"keep"
+    assert (sent_dir / "SPEC.txt").read_bytes() == b"keep"
     assert (sent_dir / "stale.pre_weekly").read_bytes() == b"keep-too"
 
 

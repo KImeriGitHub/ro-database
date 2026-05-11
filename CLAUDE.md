@@ -51,6 +51,7 @@ tests/                        # Unified test directory (one subdir per service, 
 - FirstRate Data (when provided) takes precedence per symbol/endpoint for `prices/` and `prices_daily/`; AV is used for symbols/endpoints not covered by FRD. No FRD-vs-AV overlap comparison.
 - The yield status can tell what tickers are pulled daily
 - No em dashes in log messages
+- SPEC.md gives specification for the code files in the folder and subfolders. For every bigger task, read the SPEC.md associated to the task.
 
 ## Alpha Vantage endpoints
 

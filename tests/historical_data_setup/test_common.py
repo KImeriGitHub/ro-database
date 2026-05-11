@@ -107,7 +107,7 @@ def test_generate_months_string_inputs_warn_and_coerce(caplog):
 
 
 def test_generate_months_none_inputs_use_defaults():
-    """``None``/``None`` -> 2000-01 to today, per the README spec
+    """``None``/``None`` -> 2000-01 to today, per the SPEC spec
     ``max(ipoDate, 2000-01)`` / ``min(delistingDate, today)``. Active stocks
     normally have ``delistingDate=None``."""
     months = generate_months(None, None)

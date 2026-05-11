@@ -1,6 +1,6 @@
 # AssetData design choices
 
-Extracted from [README.md](README.md) for downstream consumers (feature
+Extracted from [SPEC.md](SPEC.md) for downstream consumers (feature
 generation lives in a separate repo and has no access to this codebase).
 These are the contracts the transformation step honours, and the
 contracts feature generation must honour in turn.

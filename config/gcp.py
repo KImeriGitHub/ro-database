@@ -2,7 +2,7 @@
 
 Read from environment variables first so the same module works locally and
 inside the Cloud Run container. Local development falls back to values that
-match the defaults described in the root ``README.md``.
+match the defaults described in the root ``SPEC.md``.
 """
 
 import os

@@ -97,7 +97,7 @@ We run two daily snapshot pipelines:
 2. Stores each api return. Clearly indicates the `observed_date`
 3. Never overwrites previous values
 
-After several years of collection, this produces a genuine PIT dataset for the covered period. The pipeline becomes productive once roughly 3 months of `daily/` snapshots have accumulated; before that the PIT layer is too sparse to use directly. See [data_transformation/README.md](data_transformation/README.md#lookahead-bias-on-the-historical-period).
+After several years of collection, this produces a genuine PIT dataset for the covered period. The pipeline becomes productive once roughly 3 months of `daily/` snapshots have accumulated; before that the PIT layer is too sparse to use directly. See [data_transformation/SPEC.md](data_transformation/SPEC.md#lookahead-bias-on-the-historical-period).
 
 
 ## Data pipeline architecture
@@ -176,7 +176,7 @@ The historical setup is a long-running job (tens of hours for a full Alpha Vanta
 - **Per-task isolation.** A failure in one `(asset_type, endpoint)` task does not abort the rest; other tasks keep running under the shared rate limiter and the failed one retries on the next run.
 - **Finalize only on clean full runs.** `yield_status` is only finalized when the full setup completes with no subsetting flags, so a partial or failed run never corrupts the catalog.
 
-See [historical_data_setup/README.md](historical_data_setup/README.md) for the full recovery behavior, including how to force a clean restart.
+See [historical_data_setup/SPEC.md](historical_data_setup/SPEC.md) for the full recovery behavior, including how to force a clean restart.
 
 ## Setup
 
@@ -375,7 +375,7 @@ Per-symbol files are prefixed with their asset type so Windows reserved names (C
 
 Every daily, weekend, and historical run ends with a monitoring pass that
 snapshots the state of the database and records regressions both to disk and
-to Cloud Logging. See [monitoring_service/README.md](monitoring_service/README.md)
+to Cloud Logging. See [monitoring_service/SPEC.md](monitoring_service/SPEC.md)
 for the full breakdown.
 
 - **When it runs.** Automatically at the end of `scheduled_scripts/run_daily.py`,

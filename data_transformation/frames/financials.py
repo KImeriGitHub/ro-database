@@ -734,7 +734,7 @@ def build_financials(
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Build (financials_quarterly, financials_annually) for one stock.
 
-    See ``data_transformation/README.md`` for the full design.
+    See ``data_transformation/SPEC.md`` for the full design.
 
     *overview_row* is the per-symbol row from ``assets_overview.parquet``
     as a dict-like with keys ``reportedDate`` (Date or None) and
@@ -972,7 +972,7 @@ def build_financials(
 
 def _build_empty_quarterly_row(d: date) -> dict[str, Any]:
     """All-null quarterly row for d. Used when m_anchor cannot be
-    resolved (no reportedDate in report_table >= d). Per the README,
+    resolved (no reportedDate in report_table >= d). Per the SPEC,
     every financials column on this row is nulled defensively.
     """
     row: dict[str, Any] = {"Date": d}
