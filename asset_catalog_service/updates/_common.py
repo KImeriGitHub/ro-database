@@ -1,6 +1,7 @@
 """Shared constants and HTTP helpers for catalog updates."""
 
 import logging
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -10,6 +11,15 @@ import requests
 logger = logging.getLogger(__name__)
 
 AV_BASE = "https://www.alphavantage.co"
+
+# AV emits a single-key JSON body when it refuses to answer. "Information" and
+# "Note" are transient (rate-limit / quota throttling) and worth retrying.
+# "Error Message" is a permanent bad-request signal -- retrying won't help.
+_AV_THROTTLE_KEYS = ("Information", "Note")
+_AV_ERROR_KEY = "Error Message"
+
+_FETCH_MAX_ATTEMPTS = 4
+_FETCH_RETRY_BACKOFF = 15.0  # seconds, multiplied by attempt number
 
 COMMODITY_ENTRIES = {
     "XAU": "Gold",
@@ -139,30 +149,92 @@ def _sanitized_request_error(exc: Exception) -> CatalogFetchError:
     return CatalogFetchError(type(exc).__name__)
 
 
+def _av_throttle_message(data: object) -> str | None:
+    """Return the throttle message if ``data`` is an AV throttle body, else None.
+
+    AV throttle bodies are single-key dicts keyed by "Information" or "Note".
+    Multi-key responses with the same key (real data) are not throttles.
+    """
+    if not isinstance(data, dict) or len(data) != 1:
+        return None
+    for key in _AV_THROTTLE_KEYS:
+        if key in data:
+            return str(data[key])
+    return None
+
+
 def fetch_text(url: str) -> str:
-    """Fetch text from a URL. Raises ``CatalogFetchError`` on HTTP errors or
-    when the response is JSON (AV's stand-in for an error CSV)."""
-    try:
-        resp = requests.get(url, timeout=60)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        raise _sanitized_request_error(e) from None
-    text = resp.text.strip()
-    if text.startswith("{"):
+    """Fetch text from a URL, retrying on AV throttle responses.
+
+    AV emits a small JSON body in place of the expected CSV when throttled.
+    That condition is detected, retried with linear backoff, and surfaced as
+    a ``CatalogFetchError`` if it persists past the retry budget.
+    """
+    last_body: str | None = None
+    for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, timeout=60)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            raise _sanitized_request_error(e) from None
+        text = resp.text.strip()
+        if not text.startswith("{"):
+            return text
         # AV emits an error JSON (e.g. throttle "Note") in place of the CSV.
         # The body itself doesn't echo the URL, so it's safe to log verbatim.
-        raise CatalogFetchError(f"Expected CSV but got JSON: {text[:200]}")
-    return text
+        last_body = text
+        logger.warning(
+            f"AV CSV endpoint returned JSON "
+            f"(attempt {attempt}/{_FETCH_MAX_ATTEMPTS}): {text[:200]}"
+        )
+        if attempt < _FETCH_MAX_ATTEMPTS:
+            time.sleep(_FETCH_RETRY_BACKOFF * attempt)
+
+    raise CatalogFetchError(
+        f"Expected CSV but got JSON after {_FETCH_MAX_ATTEMPTS} attempts: "
+        f"{(last_body or '')[:200]}"
+    )
 
 
 def fetch_json(url: str) -> dict:
-    """Fetch JSON from a URL. Raises ``CatalogFetchError`` on HTTP errors."""
-    try:
-        resp = requests.get(url, timeout=60)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.RequestException as e:
-        raise _sanitized_request_error(e) from None
+    """Fetch JSON from a URL, retrying on AV throttle responses.
+
+    AV emits a single-key body (``Information`` or ``Note``) when it refuses
+    to answer due to rate limiting; that condition is detected and retried
+    with linear backoff. A permanent ``Error Message`` body is surfaced
+    immediately without retry. HTTP errors are sanitized so the URL (and the
+    API key it embeds) never reach the logs.
+    """
+    last_throttle: str | None = None
+    for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.get(url, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as e:
+            raise _sanitized_request_error(e) from None
+
+        if isinstance(data, dict) and _AV_ERROR_KEY in data:
+            raise CatalogFetchError(
+                f"AV error: {str(data[_AV_ERROR_KEY])[:200]}"
+            )
+
+        throttle = _av_throttle_message(data)
+        if throttle is None:
+            return data
+
+        last_throttle = throttle
+        logger.warning(
+            f"AV throttle (attempt {attempt}/{_FETCH_MAX_ATTEMPTS}): "
+            f"{throttle[:200]}"
+        )
+        if attempt < _FETCH_MAX_ATTEMPTS:
+            time.sleep(_FETCH_RETRY_BACKOFF * attempt)
+
+    raise CatalogFetchError(
+        f"AV throttle persisted after {_FETCH_MAX_ATTEMPTS} attempts: "
+        f"{(last_throttle or '')[:200]}"
+    )
 
 
 def update_simple_catalog(
