@@ -208,6 +208,82 @@ def test_dedup_empty_frame():
     assert report.to_frame().height == 0
 
 
+def test_dedup_suppress_historic_boundary_skips_partial_last_bar():
+    """The last historic date routinely carries a partial bar (24/7
+    markets like crypto, or any historic pull captured mid-session).
+    With suppress_historic_boundary=True, the historic-vs-daily
+    discrepancy on that single boundary date is silent; earlier dates
+    and daily-vs-daily disagreements still fire."""
+    f_hist = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 200.0, 50.0),   # boundary, partial
+    ])
+    f_daily = _make_frame([
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 220.0, 1000.0),  # boundary, full bar
+        (date(2020, 1, 3), 1.0, 1.0, 1.0, 300.0, 100.0),
+    ])
+    df = attach_source_order([f_hist, f_daily])
+    report = TransformationReport()
+    out = dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "BTC", "cryptocurrencies", "price_daily",
+        keep="last",
+        suppress_historic_boundary=True,
+    )
+    assert out.height == 3
+    assert out.filter(pl.col("Date") == date(2020, 1, 2))["Close"][0] == 220.0
+    assert report.to_frame().height == 0
+
+
+def test_dedup_suppress_historic_boundary_only_affects_boundary_date():
+    """A discrepancy on a non-boundary date still fires when
+    suppress_historic_boundary=True. Only the maximum historic date
+    is suppressed."""
+    f_hist = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),   # interior overlap
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 200.0, 50.0),    # boundary
+    ])
+    f_daily = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 150.0, 100.0),   # 50% diff: real restatement
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 220.0, 1000.0),  # boundary, suppressed
+    ])
+    df = attach_source_order([f_hist, f_daily])
+    report = TransformationReport()
+    dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "BTC", "cryptocurrencies", "price_daily",
+        keep="last",
+        suppress_historic_boundary=True,
+    )
+    rep = report.to_frame()
+    assert rep.height == 1
+    assert rep["issue_type"][0] == "dedup_value_discrepancy_over_1pct"
+
+
+def test_dedup_suppress_historic_boundary_daily_vs_daily_still_fires():
+    """If two daily snapshots disagree on the boundary date (i.e.,
+    the discrepancy does NOT involve source 0), the suppression must
+    not hide it -- that is a real cross-daily restatement."""
+    f_hist = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),
+    ])
+    f_daily_1 = _make_frame([
+        (date(2020, 1, 1), 1.0, 1.0, 1.0, 100.0, 100.0),   # agrees with hist
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 200.0, 1000.0),
+    ])
+    f_daily_2 = _make_frame([
+        (date(2020, 1, 2), 1.0, 1.0, 1.0, 250.0, 1000.0),  # 25% diff vs daily_1
+    ])
+    df = attach_source_order([f_hist, f_daily_1, f_daily_2])
+    report = TransformationReport()
+    dedup_with_discrepancy_log(
+        df, "Date", _FLOAT_COLS, report, "BTC", "cryptocurrencies", "price_daily",
+        keep="last",
+        suppress_historic_boundary=True,
+    )
+    rep = report.to_frame()
+    assert rep.height == 1
+    assert rep["issue_type"][0] == "dedup_value_discrepancy_over_1pct"
+
+
 def test_dedup_output_sorted_by_key():
     """Output is sorted ascending by the key column."""
     f = _make_frame([

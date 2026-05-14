@@ -293,9 +293,15 @@ def test_overlap_under_1pct_logged_and_daily_wins(tmp_path):
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
 
+    # Historic extends through 2026-04-02 so the 2026-04-01 overlap is an
+    # *interior* date, not the historic boundary -- the boundary-suppression
+    # rule for price frames silences discrepancies on max(historic Date) only.
     _write_forex_source(
         historical / "forex" / "forex_EURUSD.parquet",
-        [(date(2026, 4, 1), 1.10, 1.11, 1.09, 1.100)],
+        [
+            (date(2026, 4, 1), 1.10, 1.11, 1.09, 1.100),
+            (date(2026, 4, 2), 1.11, 1.12, 1.10, 1.110),
+        ],
     )
     _write_forex_source(
         daily / "2026-04-01" / "forex" / "forex_EURUSD.parquet",
@@ -307,9 +313,10 @@ def test_overlap_under_1pct_logged_and_daily_wins(tmp_path):
     transform_simple_price_daily("forex", historical, daily, dest, overview, report)
 
     inst = ForexData.load_from(symbol_dest_dir(dest, "forex", "EURUSD"))
-    # 1 deduped row, daily snapshot wins.
-    assert inst.price_daily.height == 1
-    assert inst.price_daily["Close"][0] == pytest.approx(1.105, rel=1e-4)
+    # 2 deduped rows, daily snapshot wins on the overlapping 04-01 date.
+    assert inst.price_daily.height == 2
+    apr1 = inst.price_daily.filter(pl.col("Date") == date(2026, 4, 1))
+    assert apr1["Close"][0] == pytest.approx(1.105, rel=1e-4)
 
     rep = report.to_frame()
     assert rep.height == 1
@@ -322,9 +329,13 @@ def test_overlap_over_1pct_logged_and_daily_wins(tmp_path):
     daily = tmp_path / "daily"
     dest = tmp_path / "transformed"
 
+    # 04-02 anchors the historic boundary; the 04-01 overlap is interior.
     _write_forex_source(
         historical / "forex" / "forex_EURUSD.parquet",
-        [(date(2026, 4, 1), 1.10, 1.11, 1.09, 1.100)],
+        [
+            (date(2026, 4, 1), 1.10, 1.11, 1.09, 1.100),
+            (date(2026, 4, 2), 1.11, 1.12, 1.10, 1.110),
+        ],
     )
     _write_forex_source(
         daily / "2026-04-01" / "forex" / "forex_EURUSD.parquet",
@@ -335,7 +346,8 @@ def test_overlap_over_1pct_logged_and_daily_wins(tmp_path):
     transform_simple_price_daily("forex", historical, daily, dest, overview, report)
 
     inst = ForexData.load_from(symbol_dest_dir(dest, "forex", "EURUSD"))
-    assert inst.price_daily["Close"][0] == pytest.approx(1.500, rel=1e-4)
+    apr1 = inst.price_daily.filter(pl.col("Date") == date(2026, 4, 1))
+    assert apr1["Close"][0] == pytest.approx(1.500, rel=1e-4)
 
     rep = report.to_frame()
     assert rep.filter(pl.col("issue_type") == "dedup_value_discrepancy_over_1pct").height == 1

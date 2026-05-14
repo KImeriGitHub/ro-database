@@ -262,16 +262,25 @@ def test_null_dropped_row_logged(tmp_path):
 
 
 def test_dedup_under_1pct_logged(tmp_path):
-    """Two source files overlap on a date with Close differing by <1%."""
+    """Two source files overlap on a date with Close differing by <1%.
+
+    Historic extends past the daily-overlap date so the overlap is on an
+    *interior* date -- the boundary-suppression rule for price frames
+    silences discrepancies on max(historic Date) only.
+    """
     h = tmp_path / "historical" / "stocks_AAPL.parquet"
     d = tmp_path / "daily" / "stocks_AAPL.parquet"
-    _write_sp_source(h, [_row(date(2020, 1, 1), 100, 100, 100, 100, 1000)])
+    _write_sp_source(h, [
+        _row(date(2020, 1, 1), 100, 100, 100, 100, 1000),
+        _row(date(2020, 1, 2), 101, 101, 101, 101, 1000),
+    ])
     _write_sp_source(d, [_row(date(2020, 1, 1), 100, 100, 100, 100.5, 1000)])
     report = TransformationReport()
     sp = build_shareprice_daily("stocks", "AAPL", [h, d], report)
-    assert sp.height == 1
-    # daily snapshot wins.
-    assert pytest.approx(100.5, rel=1e-4) == sp["Close"][0]
+    assert sp.height == 2
+    # daily snapshot wins on the overlap.
+    jan1 = sp.filter(pl.col("Date") == date(2020, 1, 1))
+    assert pytest.approx(100.5, rel=1e-4) == jan1["Close"][0]
     rep = report.to_frame().filter(
         pl.col("issue_type") == "dedup_value_discrepancy_under_1pct"
     )

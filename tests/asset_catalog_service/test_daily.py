@@ -274,6 +274,74 @@ def test_daily_update_missing_parquets(mock_fetch_text):
         update_stocks_etfs("fake-key", MOCK_DIR)
 
 
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_stocks_relisted_resets_to_active(mock_fetch_text):
+    """A Corrupted/Delisted symbol that AV reports back in active LISTING_STATUS
+    gets its status reset to Active and its stale delistingDate cleared."""
+    old_date = date.today() - timedelta(days=45)
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
+        # Vanished previously, marked Delisted after the 30-day grace.
+        {"symbol": "REVIVE", "name": "Revive Corp", "sector": "Technology",
+         "ipoDate": date(2010, 1, 1), "delistingDate": old_date, "status": "Delisted"},
+        # Vanished recently, marked Corrupted (delistingDate set by block 2a).
+        {"symbol": "CORRUPT", "name": "Corrupt Inc", "sector": "Technology",
+         "ipoDate": date(2015, 1, 1), "delistingDate": date.today() - timedelta(days=2),
+         "status": "Corrupted"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "REVIVE,Revive Corp,NASDAQ,Stock,2010-01-01,null,Active\n"
+        "CORRUPT,Corrupt Inc,NASDAQ,Stock,2015-01-01,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    revive = stocks.filter(pl.col("symbol") == "REVIVE")
+    assert revive["status"].to_list()[0] == "Active"
+    assert revive["delistingDate"].to_list()[0] is None
+    corrupt = stocks.filter(pl.col("symbol") == "CORRUPT")
+    assert corrupt["status"].to_list()[0] == "Active"
+    assert corrupt["delistingDate"].to_list()[0] is None
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_stocks_active_to_delisted(mock_fetch_text):
+    """An Active symbol that AV moves into delisted LISTING_STATUS is promoted
+    to Delisted on the same run, without waiting for the 30-day Corrupted timer."""
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
+        {"symbol": "GOODBYE", "name": "Goodbye Corp", "sector": "Technology",
+         "ipoDate": date(2010, 1, 1), "delistingDate": None, "status": "Active"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    # GOODBYE is now in the delisted CSV with an explicit delistingDate.
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    delisted_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "GOODBYE,Goodbye Corp,NASDAQ,Stock,2010-01-01,2026-05-10,Delisted\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, delisted_csv]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    bye = stocks.filter(pl.col("symbol") == "GOODBYE")
+    assert bye["status"].to_list()[0] == "Delisted"
+    assert bye["delistingDate"].to_list()[0] == date(2026, 5, 10)
+
+
 # ── indices daily ─────────────────────────────────────────────────────
 
 
@@ -314,6 +382,37 @@ def test_daily_indices_delisted_after_30_days(mock_fetch):
     result = pl.read_parquet(MOCK_DIR / "indices.parquet")
     gone = result.filter(pl.col("symbol") == "GONE")
     assert gone["status"].to_list()[0] == "Delisted"
+
+
+@patch("asset_catalog_service.updates.indices.fetch_json")
+def test_daily_indices_relisted_resets_to_active(mock_fetch):
+    """A Corrupted/Delisted index that re-appears in the source list is reset
+    to Active and its delistingDate is cleared."""
+    old_date = date.today() - timedelta(days=45)
+    recent = date.today() - timedelta(days=2)
+    df = pl.DataFrame({
+        "symbol": ["SPX", "REVIVE", "CORRUPT"],
+        "name": ["S&P 500", "Revive Index", "Corrupt Index"],
+        "ipoDate": [None, None, None],
+        "delistingDate": [None, old_date, recent],
+        "status": [None, "Delisted", "Corrupted"],
+    }).cast({"ipoDate": pl.Date, "delistingDate": pl.Date, "status": pl.Utf8})
+    df.write_parquet(MOCK_DIR / "indices.parquet", compression="zstd")
+
+    mock_fetch.return_value = {
+        "SPX": "S&P 500",
+        "REVIVE": "Revive Index",
+        "CORRUPT": "Corrupt Index",
+    }
+    update_indices("fake-key", MOCK_DIR)
+
+    result = pl.read_parquet(MOCK_DIR / "indices.parquet")
+    revive = result.filter(pl.col("symbol") == "REVIVE")
+    assert revive["status"].to_list()[0] == "Active"
+    assert revive["delistingDate"].to_list()[0] is None
+    corrupt = result.filter(pl.col("symbol") == "CORRUPT")
+    assert corrupt["status"].to_list()[0] == "Active"
+    assert corrupt["delistingDate"].to_list()[0] is None
 
 
 # ── forex daily ───────────────────────────────────────────────────────

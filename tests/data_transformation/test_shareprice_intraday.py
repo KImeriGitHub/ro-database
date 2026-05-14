@@ -182,16 +182,25 @@ def test_concat_historical_plus_multiple_daily(tmp_path):
 # ── 3. Dedup discrepancy logging ──────────────────────────────────────────────
 
 def test_dedup_under_1pct_logged_and_daily_wins(tmp_path):
+    """Historic extends past the daily-overlap minute so the overlap is on
+    an *interior* Datetime -- the boundary-suppression rule for price
+    frames silences discrepancies on max(historic Datetime) only."""
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
-    _write_intraday_source(h, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0,  1000)])
+    _write_intraday_source(h, [
+        (datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0,  1000),
+        (datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101.0,  1000),
+    ])
     _write_intraday_source(d, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.5,  1000)])  # 0.5%
     report = TransformationReport()
     out = build_shareprice_intraday(
-        "stocks", "AAPL", [h, d], _daily_dates([date(2020, 1, 1)]), report,
+        "stocks", "AAPL", [h, d],
+        _daily_dates([date(2020, 1, 1), date(2020, 1, 2)]),
+        report,
     )
-    assert out.height == 1
-    assert pytest.approx(100.5, rel=1e-4) == out["Close"][0]
+    assert out.height == 2
+    overlap = out.filter(pl.col("Datetime") == datetime(2020, 1, 1, 9, 30))
+    assert pytest.approx(100.5, rel=1e-4) == overlap["Close"][0]
     rep = report.to_frame()
     assert rep.filter(
         pl.col("issue_type") == "dedup_value_discrepancy_under_1pct"
@@ -201,13 +210,19 @@ def test_dedup_under_1pct_logged_and_daily_wins(tmp_path):
 def test_dedup_over_1pct_logged_and_daily_wins(tmp_path):
     h = tmp_path / "h.parquet"
     d = tmp_path / "d.parquet"
-    _write_intraday_source(h, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0, 1000)])
+    _write_intraday_source(h, [
+        (datetime(2020, 1, 1, 9, 30), 100, 100, 100, 100.0, 1000),
+        (datetime(2020, 1, 2, 9, 30), 101, 101, 101, 101.0, 1000),
+    ])
     _write_intraday_source(d, [(datetime(2020, 1, 1, 9, 30), 100, 100, 100, 110.0, 1000)])  # 10%
     report = TransformationReport()
     out = build_shareprice_intraday(
-        "stocks", "AAPL", [h, d], _daily_dates([date(2020, 1, 1)]), report,
+        "stocks", "AAPL", [h, d],
+        _daily_dates([date(2020, 1, 1), date(2020, 1, 2)]),
+        report,
     )
-    assert pytest.approx(110.0, rel=1e-4) == out["Close"][0]
+    overlap = out.filter(pl.col("Datetime") == datetime(2020, 1, 1, 9, 30))
+    assert pytest.approx(110.0, rel=1e-4) == overlap["Close"][0]
     assert report.to_frame().filter(
         pl.col("issue_type") == "dedup_value_discrepancy_over_1pct"
     ).height == 1
