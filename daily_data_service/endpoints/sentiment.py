@@ -1,7 +1,12 @@
 """Daily pull of news sentiment (NEWS_SENTIMENT).
 
 Global backward pagination from the current UTC time down to
-``previous_date 00:00 UTC`` (inclusive). Produces:
+``min(previous_date, folder_date - PRICE_WINDOW_DAYS) 00:00 UTC``
+(inclusive). The 7-day floor mirrors the price endpoints so a
+successful run recovers the last week of articles even when
+intermediate runs failed, at the cost of overlap between adjacent
+``daily/<date>/`` folders; downstream consumers must dedup on
+``(url, ticker)``. Produces:
   - ALL_MESSAGES.parquet   (all articles with tickers matching the catalog)
   - {SYMBOL}.parquet       (per active-stock filtered view)
 """
@@ -28,6 +33,7 @@ from historical_data_setup.endpoints.sentiment import (
     _parse_feed,
     _parse_time_published,
 )
+from daily_data_service._common import price_window_lower
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +62,9 @@ async def fetch_sentiment(
     if symbols_filter is not None:
         active_symbols &= symbols_filter
 
+    lower_date = price_window_lower(previous_date, folder_date)
     time_from = datetime.combine(
-        previous_date, datetime.min.time(), tzinfo=timezone.utc,
+        lower_date, datetime.min.time(), tzinfo=timezone.utc,
     ).strftime("%Y%m%dT%H%M")
 
     if all_path.exists():

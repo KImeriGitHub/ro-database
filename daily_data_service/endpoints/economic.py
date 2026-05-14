@@ -6,7 +6,7 @@ the trailing-week floor lets a successful run recover the last few days
 even after intermediate failures, so daily folders overlap by up to
 ``PRICE_WINDOW_DAYS - 1`` days and downstream consumers must dedup on
 ``(symbol, Date)``. All other (non-daily) indicators truncate to
-``Date >= folder_date - 1 year`` (unchanged).
+``Date >= folder_date - 5 years``.
 """
 
 import logging
@@ -85,8 +85,8 @@ async def fetch_economic(
 
     daily_lower = price_window_lower(previous_date, folder_date)
     daily_window = window_expr("Date", daily_lower, folder_date)
-    one_year_cutoff = years_before(folder_date, 1)
-    yearly_since = since_expr("Date", one_year_cutoff)
+    five_year_cutoff = years_before(folder_date, 5)
+    multi_year_since = since_expr("Date", five_year_cutoff)
 
     total = catalog.height
     logger.info(f"{_ENDPOINT}: {total} indicators to process")
@@ -165,8 +165,8 @@ async def fetch_economic(
             filter_expr = daily_window
             label = f"in ({daily_lower}, {folder_date}]"
         else:
-            filter_expr = yearly_since
-            label = f">= {one_year_cutoff}"
+            filter_expr = multi_year_since
+            label = f">= {five_year_cutoff}"
 
         df = (
             pl.DataFrame(rows)

@@ -9,7 +9,7 @@ the simple flat types (forex/indices/cryptocurrencies/commodities/economic)
 also contain at least one populated symbol directory.
 
 Usage:
-    python tests/integration_tests/int_test_transform.py
+    python tests/integration_tests/int_test_transform.py [--wipe]
 """
 
 from __future__ import annotations
