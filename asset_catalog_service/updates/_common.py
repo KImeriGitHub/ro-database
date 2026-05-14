@@ -18,7 +18,7 @@ AV_BASE = "https://www.alphavantage.co"
 _AV_THROTTLE_KEYS = ("Information", "Note")
 _AV_ERROR_KEY = "Error Message"
 
-_FETCH_MAX_ATTEMPTS = 4
+_FETCH_MAX_ATTEMPTS = 6
 _FETCH_RETRY_BACKOFF = 15.0  # seconds, multiplied by attempt number
 
 COMMODITY_ENTRIES = {
@@ -183,7 +183,7 @@ def fetch_text(url: str) -> str:
         # AV emits an error JSON (e.g. throttle "Note") in place of the CSV.
         # The body itself doesn't echo the URL, so it's safe to log verbatim.
         last_body = text
-        logger.warning(
+        logger.info(
             f"AV CSV endpoint returned JSON "
             f"(attempt {attempt}/{_FETCH_MAX_ATTEMPTS}): {text[:200]}"
         )
@@ -224,7 +224,7 @@ def fetch_json(url: str) -> dict:
             return data
 
         last_throttle = throttle
-        logger.warning(
+        logger.info(
             f"AV throttle (attempt {attempt}/{_FETCH_MAX_ATTEMPTS}): "
             f"{throttle[:200]}"
         )

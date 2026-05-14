@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _STOCKS_REQUIRED_HEADERS = {"Ticker", "Company Name", "Sector", "IPO Date", "Status"}
 _ETFS_REQUIRED_HEADERS = {"Ticker", "Name", "IPO Date", "Status"}
 
-_RATE_BATCH = 73  # queries per minute (2 under limit for margin)
+_RATE_BATCH = 70  # queries per minute (2 under limit for margin)
 
 _SECTOR_FETCH_MAX_ATTEMPTS = 3
 _SECTOR_FETCH_RETRY_BACKOFF = 5.0  # seconds, multiplied by attempt number
