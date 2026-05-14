@@ -1025,7 +1025,7 @@ def build_financials(
             NO_ANCHOR_TOLERANCE_DAYS,
         )
     if hard_no_anchor_q_count or hard_no_anchor_a_count:
-        logger.warning(
+        logger.info(
             "stocks/%s: %d quarterly / %d annual row(s) had no m_anchor "
             "and d was beyond the %d-day tolerance from the latest known "
             "reportedDate; financials columns nulled defensively.",

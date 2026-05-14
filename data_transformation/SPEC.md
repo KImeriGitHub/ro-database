@@ -170,6 +170,43 @@ amounts); the under-1pct classification on these frames is noise, so
 it is never recorded. Over-1pct entries still fire and represent real
 restatements worth reviewing.
 
+#### Historic-snapshot boundary suppression
+
+`price_daily`, `shareprice_daily`, and `shareprice_intraday` pass
+`suppress_historic_boundary=True` to the dedup helper. The historic
+snapshot's last bar is routinely a *partial bar*: 24/7 markets
+(cryptocurrencies) never close, and any historic pull captured mid-
+session (forex on a weekend, equities during regular trading hours,
+intraday at any moment except the session close) carries OHLCV that
+reflects only the part of the day already elapsed at download time.
+When a later daily folder re-pulls the same date it gets the complete
+bar, and the resulting discrepancy is structural rather than a real
+restatement.
+
+The suppression rule:
+
+- Identify the *boundary key* = ``max(key)`` across rows from the
+  historic source (``_source_order == 0``).
+- For duplicate keys at the boundary, drop source-0 rows from the
+  discrepancy classification (the dedup itself is unaffected -- with
+  `keep="last"` the partial historic value is already discarded in
+  favor of the daily value).
+- All other duplicate keys are classified as before. In particular,
+  a daily-vs-daily disagreement on the boundary date (two later
+  snapshots disagreeing among themselves) still surfaces, because
+  the suppression only filters source-0 rows.
+
+A single boundary key is suppressed per symbol, so the rule has
+narrow blast radius: a `cryptocurrencies/BTC/price_daily` run that
+captures one boundary partial bar (e.g. the historic snapshot's
+final Sunday) silently keeps the daily-source value for that date
+without emitting a `dedup_value_discrepancy_*` row, while interior
+overlaps (where historic and daily disagree on a date that is not
+the boundary) continue to log. Composite-key frames
+(`insider_df`, `sentiment_df`) do not use the rule; the helper
+ignores `suppress_historic_boundary` when called with a multi-
+column key.
+
 The remaining endpoints (fundamentals, `insider`, `sentiment`,
 `etf_profile`, monthly `commodities`, non-daily `economic`) do not use
 the 7-day floor, but their builders still dedup -- historical and daily
@@ -486,7 +523,9 @@ For each row date `d` in `shareprice_daily.Date`:
   - **Hard no-anchor** (`d - max(reportedDate) >= 60 days`, or no
     known reportedDate exists at all): the entire row's financials
     columns (every `_qm{m>=0}` and every `_qp_{n}` cell) are nulled
-    defensively. Logged at `logger.warning`.
+    defensively. Logged at `logger.info` (common for delisted /
+    dormant symbols where `d` runs past the last known filing; not
+    actionable on its own).
 - For each `m in 1..16`, position `i = m_anchor - m`. Out-of-range
   positions null all `_qm{m}` columns for that m.
 - `days_to_fiscalDateEnding_qm{m} = (d - report_table.fiscalDateEnding[i]).days`
@@ -726,6 +765,38 @@ Every per-symbol oddity is recorded in two places:
 The report is **overwritten** each full run (it reflects the current
 transformation, not a cumulative log) - same convention as
 `ingestion_report.parquet`.
+
+### Per-issue log levels
+
+`transformation_report.parquet` always records the row. The Python
+`logging` line that `TransformationReport.record` emits alongside the
+row is demoted to `DEBUG` for issues that are structural / high-volume
+and not individually actionable, and kept at `INFO` for everything else:
+
+| Condition (any of these holds) | Console log level |
+|--------------------------------|-------------------|
+| `asset_type` in `{commodities, economic}` | DEBUG |
+| `frame` in `{sentiment_df, insider_df}` | DEBUG |
+| `issue_type == "financials_no_earnings_file"` | DEBUG |
+| anything else | INFO |
+
+Rationale:
+- **commodities / economic** trip `dedup_dropped_null_row` on every US
+  market holiday in the WTI / BRENT / NATURAL_GAS / TREASURY_YIELD_*
+  series (AV emits the calendar date with a null value); the count is
+  predictable and structural (~3-4% of rows over decades of history).
+- **insider_df / sentiment_df** trip `dedup_value_discrepancy_over_1pct`
+  in bulk because share counts and AV sentiment scores are routinely
+  rewritten across snapshots; the per-row drift is reviewed in the
+  parquet, not the console stream.
+- **financials_no_earnings_file** fires once per stock that has no
+  `earnings/SYMBOL_quarterly.parquet` anywhere (typically warrants,
+  preferreds, and SPAC units). Both financials frames are saved as
+  empty schema-only placeholders; nothing to act on at console-log time.
+
+The parquet payload is unchanged in every case, so a downstream consumer
+that wants the full picture reads the report directly rather than relying
+on the console stream.
 
 ## CLI
 

@@ -275,7 +275,16 @@ class TransformationReport:
                 "timestamp": datetime.now(tz=timezone.utc),
             }
         )
-        logger.info(
+        if (
+            asset_type in {"commodities", "economic"}
+            or frame in {"sentiment_df", "insider_df"}
+            or issue_type == "financials_no_earnings_file"
+        ):
+            log_level = logging.DEBUG
+        else:
+            log_level = logging.INFO
+        logger.log(
+            log_level,
             "transformation issue: %s/%s/%s/%s count=%d relative=%s detail=%s",
             asset_type, symbol, frame, issue_type,
             count,

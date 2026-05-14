@@ -85,6 +85,7 @@ def build_shareprice_intraday(
         merged, "Datetime", _INTRADAY_DEDUP_COLS, report,
         symbol, asset_type, "shareprice_intraday",
         keep="last",
+        suppress_historic_boundary=True,
     )
 
     merged = _drop_orphan_dates(

@@ -47,6 +47,7 @@ def dedup_with_discrepancy_log(
     *,
     keep: str = "first",
     flag_under_1pct: bool = True,
+    suppress_historic_boundary: bool = False,
 ) -> pl.DataFrame:
     """Sort *df* by ``(key..., _source_order)``, log per-key value
     discrepancies in *float_cols*, then dedup keeping one row per key.
@@ -62,6 +63,21 @@ def dedup_with_discrepancy_log(
     use this: small (<1%) drift between snapshots is normal noise on
     those frames and is not worth a report row. Over-1pct entries
     still fire and represent the actual signal worth reviewing.
+
+    *suppress_historic_boundary* set to True suppresses the
+    discrepancy classification (both under and over) on the single
+    duplicate key that sits at the historic-snapshot boundary: the
+    maximum value of *key* observed among ``_source_order == 0`` rows.
+    The historic snapshot's last bar is routinely a partial bar
+    (24/7 markets like crypto, or any historic pull captured mid-
+    session), so its OHLCV disagrees benignly with the same date
+    re-pulled in a later daily snapshot. The row itself is unaffected
+    -- ``keep="last"`` already discards the partial historic value in
+    favor of the daily value. Only single-column keys are supported;
+    multi-key callers (insider/sentiment) ignore the flag. The
+    suppression is silent (no report row) and applies only to
+    discrepancies that include a source-0 row, so daily-vs-daily
+    restatements on the boundary date still surface.
 
     *key* may be a single column name or a list of column names for
     composite keys (e.g. insider rows keyed on
@@ -84,6 +100,16 @@ def dedup_with_discrepancy_log(
 
     if dup_keys.height > 0:
         dup_rows = df.join(dup_keys, on=keys, how="inner")
+        if suppress_historic_boundary and len(keys) == 1:
+            hist_rows = df.filter(pl.col(SOURCE_ORDER_COL) == 0)
+            if hist_rows.height > 0:
+                boundary = hist_rows.select(pl.col(keys[0]).max()).item()
+                dup_rows = dup_rows.filter(
+                    ~(
+                        (pl.col(keys[0]) == boundary)
+                        & (pl.col(SOURCE_ORDER_COL) == 0)
+                    )
+                )
         n_under, n_over, samples_under, samples_over = _classify_discrepancies(
             dup_rows, keys, float_cols
         )
