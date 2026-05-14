@@ -586,6 +586,7 @@ def _update_listing(
             "symbol",
             pl.col("ipoDate").alias("_ipo_new"),
             pl.col("delistingDate").alias("_delist_new"),
+            pl.col("status").alias("_status_new"),
         )
         merged = (
             result.filter(pl.col("symbol").is_in(common))
@@ -689,6 +690,57 @@ def _update_listing(
                     .alias("delistingDate")
                 )
                 .drop("_upd")
+            )
+
+        # 3c. Status sync from fresh.
+        #
+        # Re-listed: a previously Corrupted/Delisted symbol that AV now
+        # reports back in the active LISTING_STATUS (_status_new == "Active")
+        # is reset to Active. Block 3b already cleared delistingDate.
+        #
+        # Newly delisted: an Active symbol that AV now reports in the
+        # delisted LISTING_STATUS (_status_new == "Delisted") is promoted
+        # to Delisted. This complements block 2b (Corrupted -> Delisted after
+        # 30 days of being missing); block 2b only fires when the symbol has
+        # vanished from both lists, while this fires when AV explicitly
+        # confirms the delisting.
+        #
+        # ``merged.status`` is the original existing value (pre-3a), so a
+        # Corrupted flag that 3a just set on this run does not satisfy the
+        # re-listed predicate and stays in place.
+        relisted = merged.filter(
+            pl.col("status").is_in(["Corrupted", "Delisted"])
+            & (pl.col("_status_new") == "Active")
+        )
+        delisted_now = merged.filter(
+            ~pl.col("status").is_in(["Corrupted", "Delisted"])
+            & (pl.col("_status_new") == "Delisted")
+        )
+        relisted_syms = relisted["symbol"].to_list()
+        delisted_now_syms = delisted_now["symbol"].to_list()
+        if relisted_syms:
+            logger.info(
+                f"{label}: {len(relisted_syms)} re-listed, status -> Active:"
+            )
+            for row in relisted.iter_rows(named=True):
+                logger.info(f"  ^ {row['symbol']} (was {row['status']})")
+        if delisted_now_syms:
+            logger.info(
+                f"{label}: {len(delisted_now_syms)} newly delisted, "
+                f"status -> Delisted:"
+            )
+            for row in delisted_now.iter_rows(named=True):
+                logger.info(
+                    f"  v {row['symbol']} (delistingDate={row['_delist_new']})"
+                )
+        if relisted_syms or delisted_now_syms:
+            result = result.with_columns(
+                pl.when(pl.col("symbol").is_in(relisted_syms))
+                .then(pl.lit("Active"))
+                .when(pl.col("symbol").is_in(delisted_now_syms))
+                .then(pl.lit("Delisted"))
+                .otherwise(pl.col("status"))
+                .alias("status")
             )
 
     result.write_parquet(path, compression="zstd")

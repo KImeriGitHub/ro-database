@@ -62,8 +62,14 @@ update_all()
 - Missing keys (in catalog but gone from API):
   - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
   - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
-- `ipoDate` moved earlier for an existing symbol: `ipoDate` updated to the earlier value and `status` set to `Corrupted` (data integrity concern). A later fresh `ipoDate` is ignored so the earliest known data window is preserved and the same row is not re-flagged on every run.
+- `ipoDate` changes for an existing symbol:
+  - Moved earlier (both non-null, fresh < existing): `ipoDate` updated to the earlier value and `status` set to `Corrupted` (data integrity concern). A later fresh `ipoDate` is ignored so the earliest known data window is preserved and the same row is not re-flagged on every run.
+  - Filled (existing was null, fresh has a value): `ipoDate` updated without flagging `Corrupted`.
 - `delistingDate` changed: updated to the new value and logged.
+- Status sync against the fresh LISTING_STATUS:
+  - `Corrupted` or `Delisted` symbol back in the active list: `status` -> `Active`, `delistingDate` cleared.
+  - `Active` symbol now in the delisted list (stocks/ETFs only): `status` -> `Delisted` (skips the 30-day Corrupted -> Delisted timer). Indices/forex/crypto have no equivalent path because their source endpoints publish only currently-listed instruments.
+  - A same-run `Corrupted` flag from an earlier-`ipoDate` change is preserved (the sync reads the pre-update status).
 
 ### etfs.parquet
 
@@ -103,6 +109,7 @@ update_all()
 - Missing keys (in catalog but gone from API):
   - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
   - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
+- Re-listed keys (was `Corrupted` or `Delisted`, back in the source list): `status` -> `Active`, `delistingDate` cleared.
 
 **API calls:** 1.
 
@@ -263,6 +270,8 @@ Both `init_catalog.py` and `update_catalog.py` normalize sector values to a cano
 ## Error handling
 
 Each catalog update runs independently. If one step fails (network error, API rate limit, malformed response), the error is logged and the remaining catalogs still update. The `fetch_text` helper rejects responses that return JSON instead of CSV (common AV error pattern for rate-limited or invalid requests).
+
+Single-fetch endpoints (LISTING_STATUS, OVERVIEW, INDEX_CATALOG, physical_currency_list, cryptocurrency_list) are wrapped in `with_network_retry`: a transient `CatalogFetchError` is retried with linear backoff before the catalog step gives up, so one network blip does not skip a whole catalog. Per-symbol OVERVIEW calls additionally fall back to sector `"Other"` after the retry budget is exhausted, so the rest of the run survives a single bad symbol.
 
 **FirstRate validation errors are fatal.** If a provided directory is missing its expected CSV or required headers, the entire `init_catalog.py` process aborts before any API calls or writes.
 

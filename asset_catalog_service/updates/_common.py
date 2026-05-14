@@ -291,6 +291,7 @@ def update_simple_catalog(
 
     added = sorted(fresh_syms - existing_syms)
     missing = sorted(existing_syms - fresh_syms)
+    common = sorted(existing_syms & fresh_syms)
 
     result = existing.clone()
 
@@ -354,6 +355,37 @@ def update_simple_catalog(
                     .otherwise(pl.col("status"))
                     .alias("status")
                 )
+
+    # 3. Re-listed entries: a symbol that was Corrupted or Delisted but is
+    # back in the source list. Reset status to Active and clear delistingDate
+    # so the catalog row stops contradicting itself ("Delisted" + a
+    # symbol-still-listed marker) and downstream yield logic resumes the
+    # symbol. Simple catalogs have no fresh status/delistingDate column, so
+    # presence in *fresh* is the only signal we have -- it is sufficient
+    # because these endpoints publish only currently-tradable instruments.
+    if common:
+        relisted = result.filter(
+            pl.col("symbol").is_in(common)
+            & pl.col("status").is_in(["Corrupted", "Delisted"])
+        )
+        if relisted.height > 0:
+            relisted_syms = relisted["symbol"].to_list()
+            logger.info(
+                f"{label}: {len(relisted_syms)} re-listed, status -> Active, "
+                f"clearing delistingDate:"
+            )
+            for row in relisted.iter_rows(named=True):
+                logger.info(f"  ^ {row['symbol']} (was {row['status']})")
+            result = result.with_columns(
+                pl.when(pl.col("symbol").is_in(relisted_syms))
+                .then(pl.lit("Active"))
+                .otherwise(pl.col("status"))
+                .alias("status"),
+                pl.when(pl.col("symbol").is_in(relisted_syms))
+                .then(pl.lit(None).cast(pl.Date))
+                .otherwise(pl.col("delistingDate"))
+                .alias("delistingDate"),
+            )
 
     result.write_parquet(path, compression="zstd")
     logger.info(f"{label}: saved ({result.height} total rows)")
