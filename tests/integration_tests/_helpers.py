@@ -265,6 +265,10 @@ def configure_int_test_logging(script_path: str | Path) -> Path:
     file_handler.setFormatter(
         logging.Formatter(fmt=DEFAULT_FORMAT, datefmt=DEFAULT_DATEFMT)
     )
+    # Sub-pipelines (e.g. transform.main) call configure_logging() themselves,
+    # which clears the root logger's handlers. Tag this handler so it survives
+    # those resets and the whole run lands in one log file.
+    file_handler._keep_through_reconfigure = True
     logging.getLogger().addHandler(file_handler)
     logger.info(f"Integration test log file: {log_path}")
     return log_path

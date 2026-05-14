@@ -95,6 +95,12 @@ def configure_logging(
 
     root = logging.getLogger()
     for h in list(root.handlers):
+        # Handlers tagged with `_keep_through_reconfigure` (e.g. the
+        # integration-test file handler) must survive nested configure_logging()
+        # calls made by sub-pipelines, otherwise the per-run log file only
+        # captures messages emitted before the first sub-pipeline starts.
+        if getattr(h, "_keep_through_reconfigure", False):
+            continue
         root.removeHandler(h)
         if isinstance(h, logging.FileHandler):
             h.close()

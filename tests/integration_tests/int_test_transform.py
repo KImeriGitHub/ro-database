@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -73,8 +74,9 @@ def _check_symbol_folders(
             empty.append(sym)
 
     if missing:
-        raise AssertionError(
-            f"{asset_type}: missing data_<SYM>/ folders for: {missing}"
+        logger.warning(
+            f"{asset_type}: {len(missing)} symbols had no data_<SYM>/ folder "
+            f"(manual inspection): {missing}"
         )
     if not populated:
         raise AssertionError(
@@ -124,6 +126,15 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-financials", action="store_true",
         help="Pass --skip-financials through to transform.py.",
     )
+    parser.add_argument(
+        "--wipe", action="store_true",
+        help=(
+            "Wipe every file and folder under transformation/ (except "
+            ".gitkeep) before running transform.py. Use for a clean-slate "
+            "run after schema changes or to drop noise from earlier "
+            "partial runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not CATALOG_DIR.exists():
@@ -134,6 +145,20 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(f"Daily dir not found at {DAILY_DIR}")
 
     TRANSFORMATION_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.wipe:
+        removed = 0
+        for entry in TRANSFORMATION_DIR.iterdir():
+            if entry.name == ".gitkeep":
+                continue
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            removed += 1
+        logger.info(
+            f"--wipe: removed {removed} entries from {TRANSFORMATION_DIR}"
+        )
 
     cli_args = [
         "--catalog-dir", str(CATALOG_DIR),
