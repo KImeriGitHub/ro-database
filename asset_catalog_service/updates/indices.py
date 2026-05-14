@@ -5,7 +5,12 @@ from pathlib import Path
 
 import polars as pl
 
-from asset_catalog_service.updates._common import AV_BASE, fetch_json, update_simple_catalog
+from asset_catalog_service.updates._common import (
+    AV_BASE,
+    fetch_json,
+    update_simple_catalog,
+    with_network_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +19,11 @@ def update_indices(api_key: str, catalog_dir: Path) -> None:
     path = catalog_dir / "indices.parquet"
 
     logger.info("Fetching INDEX_CATALOG...")
-    data = fetch_json(f"{AV_BASE}/query?function=INDEX_CATALOG&apikey={api_key}")
+    data = with_network_retry(
+        fetch_json,
+        f"{AV_BASE}/query?function=INDEX_CATALOG&apikey={api_key}",
+        label="INDEX_CATALOG",
+    )
 
     fresh = pl.DataFrame(
         {"symbol": list(data.keys()), "name": list(data.values())}

@@ -23,6 +23,7 @@ from asset_catalog_service.updates._common import (
     CatalogFetchError,
     fetch_json,
     fetch_text,
+    with_network_retry,
 )
 
 
@@ -138,10 +139,17 @@ def test_fetch_text_returns_text_on_success():
 def test_fetch_text_rejects_json_response_as_catalog_fetch_error():
     """AV returns a JSON error blob in place of CSV when throttled. The body
     itself doesn't echo the URL, so logging it is fine -- but it must surface
-    as a ``CatalogFetchError`` so callers' ``except`` clauses match."""
+    as a ``CatalogFetchError`` so callers' ``except`` clauses match.
+
+    ``fetch_text`` retries the throttle 6 times with linear backoff
+    (15+30+45+60+75 = 225s of real wall time). Patch ``time.sleep`` so the
+    retry logic is exercised without paying the production backoff.
+    """
     with patch(
         "asset_catalog_service.updates._common.requests.get"
-    ) as mock_get:
+    ) as mock_get, patch(
+        "asset_catalog_service.updates._common.time.sleep"
+    ):
         resp = MagicMock()
         resp.raise_for_status.return_value = None
         resp.text = '{"Information": "API rate limit hit"}'
@@ -149,3 +157,67 @@ def test_fetch_text_rejects_json_response_as_catalog_fetch_error():
 
         with pytest.raises(CatalogFetchError, match="JSON"):
             fetch_text(_LEAKY_URL)
+
+
+# ── with_network_retry ──────────────────────────────────────────────
+
+
+def test_with_network_retry_returns_first_call_result_on_success():
+    """Success path: ``fn`` is called once, no sleep, value is returned."""
+    fn = MagicMock(return_value="ok")
+    with patch("asset_catalog_service.updates._common.time.sleep") as sleep:
+        out = with_network_retry(fn, "a", kw="b", max_attempts=3, backoff=5.0)
+
+    assert out == "ok"
+    fn.assert_called_once_with("a", kw="b")
+    sleep.assert_not_called()
+
+
+def test_with_network_retry_retries_until_success():
+    """A transient ``CatalogFetchError`` is swallowed; the next attempt wins.
+
+    Sleep is asserted to use the configured backoff so callers can rely on
+    pacing being honoured (the per-symbol sector fetch uses a tighter backoff
+    than the default and we don't want the wrapper to silently override it).
+    """
+    fn = MagicMock(side_effect=[
+        CatalogFetchError("ConnectionError"),
+        CatalogFetchError("ConnectionError"),
+        "ok",
+    ])
+    with patch("asset_catalog_service.updates._common.time.sleep") as sleep:
+        out = with_network_retry(fn, max_attempts=3, backoff=7.0)
+
+    assert out == "ok"
+    assert fn.call_count == 3
+    # Linear backoff: 7.0 * 1, 7.0 * 2. No sleep before the first attempt or
+    # after the successful one.
+    assert [c.args[0] for c in sleep.call_args_list] == [7.0, 14.0]
+
+
+def test_with_network_retry_reraises_last_error_after_exhausting_attempts():
+    """Final-attempt failure: the most recent error propagates, no extra sleep."""
+    fn = MagicMock(side_effect=[
+        CatalogFetchError("HTTP 503"),
+        CatalogFetchError("HTTP 503"),
+        CatalogFetchError("ConnectionError"),
+    ])
+    with patch("asset_catalog_service.updates._common.time.sleep") as sleep:
+        with pytest.raises(CatalogFetchError, match="ConnectionError"):
+            with_network_retry(fn, max_attempts=3, backoff=1.0)
+
+    assert fn.call_count == 3
+    # No sleep after the final (failing) attempt.
+    assert sleep.call_count == 2
+
+
+def test_with_network_retry_does_not_swallow_non_catalog_errors():
+    """``ValueError`` (or any non-``CatalogFetchError``) must propagate
+    immediately -- the retry policy is scoped to transient HTTP failures."""
+    fn = MagicMock(side_effect=ValueError("boom"))
+    with patch("asset_catalog_service.updates._common.time.sleep") as sleep:
+        with pytest.raises(ValueError, match="boom"):
+            with_network_retry(fn, max_attempts=5, backoff=1.0)
+
+    fn.assert_called_once()
+    sleep.assert_not_called()

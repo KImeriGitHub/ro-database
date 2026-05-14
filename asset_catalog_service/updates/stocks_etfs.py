@@ -22,6 +22,7 @@ from asset_catalog_service.updates._common import (
     fetch_json,
     fetch_text,
     normalize_sector,
+    with_network_retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,11 +101,15 @@ def _fetch_av_listings(api_key: str) -> tuple[pl.DataFrame, pl.DataFrame]:
     the earliest date for which any data may exist under the ticker is kept.
     """
     logger.info("Fetching LISTING_STATUS (active + delisted)...")
-    active_csv = fetch_text(
-        f"{AV_BASE}/query?function=LISTING_STATUS&state=active&apikey={api_key}"
+    active_csv = with_network_retry(
+        fetch_text,
+        f"{AV_BASE}/query?function=LISTING_STATUS&state=active&apikey={api_key}",
+        label="LISTING_STATUS active",
     )
-    delisted_csv = fetch_text(
-        f"{AV_BASE}/query?function=LISTING_STATUS&state=delisted&apikey={api_key}"
+    delisted_csv = with_network_retry(
+        fetch_text,
+        f"{AV_BASE}/query?function=LISTING_STATUS&state=delisted&apikey={api_key}",
+        label="LISTING_STATUS delisted",
     )
 
     active_df = pl.read_csv(
@@ -193,30 +198,22 @@ def _fetch_sectors_batch(
 
 
 def _fetch_sector_with_retry(api_key: str, symbol: str) -> str:
-    """Wrap _fetch_sector with retries for transient network errors.
-
-    ``fetch_json`` translates every underlying ``requests`` failure into a
-    sanitized ``CatalogFetchError`` (no URL, no API key), and the ``e``
-    interpolation here surfaces only that scrubbed message. After all attempts
-    fail, returns "Other".
-    """
-    for attempt in range(1, _SECTOR_FETCH_MAX_ATTEMPTS + 1):
-        try:
-            return _fetch_sector(api_key, symbol)
-        except CatalogFetchError as e:
-            logger.warning(
-                f"Error fetching {symbol} "
-                f"(attempt {attempt}/{_SECTOR_FETCH_MAX_ATTEMPTS}): {e}"
-            )
-
-        if attempt < _SECTOR_FETCH_MAX_ATTEMPTS:
-            time.sleep(_SECTOR_FETCH_RETRY_BACKOFF * attempt)
-
-    logger.warning(
-        f"Giving up on {symbol} after {_SECTOR_FETCH_MAX_ATTEMPTS} attempts. "
-        f"Defaulting to Other."
-    )
-    return "Other"
+    """Wrap ``_fetch_sector`` with retries; fall back to ``"Other"`` on failure."""
+    try:
+        return with_network_retry(
+            _fetch_sector,
+            api_key,
+            symbol,
+            max_attempts=_SECTOR_FETCH_MAX_ATTEMPTS,
+            backoff=_SECTOR_FETCH_RETRY_BACKOFF,
+            label=symbol,
+        )
+    except CatalogFetchError:
+        logger.warning(
+            f"Giving up on {symbol} after {_SECTOR_FETCH_MAX_ATTEMPTS} "
+            f"attempts. Defaulting to Other."
+        )
+        return "Other"
 
 # ── FirstRate loaders ────────────────────────────────────────────────
 
@@ -511,8 +508,8 @@ def _update_listing(
         new_rows = fresh.filter(pl.col("symbol").is_in(added))
 
         if has_sector and api_key is not None:
-            # Fetch sector for each new stock symbol
-            sectors = {sym: _fetch_sector(api_key, sym) for sym in added}
+            # Same path as init: 70/min pacing + per-symbol retry + "Other" fallback.
+            sectors = _fetch_sectors_batch(api_key, added)
             sector_df = pl.DataFrame(
                 {"symbol": list(sectors.keys()), "sector": list(sectors.values())}
             )

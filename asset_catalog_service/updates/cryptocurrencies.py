@@ -6,7 +6,12 @@ from pathlib import Path
 
 import polars as pl
 
-from asset_catalog_service.updates._common import AV_BASE, fetch_text, update_simple_catalog
+from asset_catalog_service.updates._common import (
+    AV_BASE,
+    fetch_text,
+    update_simple_catalog,
+    with_network_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +20,11 @@ def update_cryptocurrencies(catalog_dir: Path) -> None:
     path = catalog_dir / "cryptocurrencies.parquet"
 
     logger.info("Fetching cryptocurrency list...")
-    csv_text = fetch_text(f"{AV_BASE}/cryptocurrency_list/")
+    csv_text = with_network_retry(
+        fetch_text,
+        f"{AV_BASE}/cryptocurrency_list/",
+        label="cryptocurrency_list",
+    )
     raw = pl.read_csv(io.StringIO(csv_text))
 
     # from_currency = Symbol, to_currency = Market; keep USD only

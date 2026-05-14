@@ -6,7 +6,12 @@ from pathlib import Path
 
 import polars as pl
 
-from asset_catalog_service.updates._common import AV_BASE, fetch_text, update_simple_catalog
+from asset_catalog_service.updates._common import (
+    AV_BASE,
+    fetch_text,
+    update_simple_catalog,
+    with_network_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +20,11 @@ def update_forex(catalog_dir: Path) -> None:
     path = catalog_dir / "forex.parquet"
 
     logger.info("Fetching physical currency list...")
-    csv_text = fetch_text(f"{AV_BASE}/physical_currency_list/")
+    csv_text = with_network_retry(
+        fetch_text,
+        f"{AV_BASE}/physical_currency_list/",
+        label="physical_currency_list",
+    )
     raw = pl.read_csv(io.StringIO(csv_text))
 
     fresh = (

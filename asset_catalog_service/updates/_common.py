@@ -4,9 +4,12 @@ import logging
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import polars as pl
 import requests
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +238,40 @@ def fetch_json(url: str) -> dict:
         f"AV throttle persisted after {_FETCH_MAX_ATTEMPTS} attempts: "
         f"{(last_throttle or '')[:200]}"
     )
+
+
+def with_network_retry(
+    fn: Callable[..., T],
+    *args,
+    max_attempts: int = 3,
+    backoff: float = 5.0,
+    label: str = "",
+    **kwargs,
+) -> T:
+    """Retry ``fn(*args, **kwargs)`` on ``CatalogFetchError`` with linear backoff.
+
+    ``fetch_text`` / ``fetch_json`` already retry AV throttle bodies, but they
+    re-raise on the first ``requests.RequestException`` (ConnectionError,
+    Timeout, etc.). One blip from the network or AV's edge is enough to abort
+    a whole catalog step, which is what this wrapper exists to absorb.
+
+    Re-raises the last ``CatalogFetchError`` if every attempt fails -- callers
+    that want a fallback value catch it themselves.
+    """
+    last_exc: CatalogFetchError | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except CatalogFetchError as e:
+            last_exc = e
+            tag = f" fetching {label}" if label else ""
+            logger.warning(
+                f"Network error{tag} (attempt {attempt}/{max_attempts}): {e}"
+            )
+            if attempt < max_attempts:
+                time.sleep(backoff * attempt)
+    assert last_exc is not None
+    raise last_exc
 
 
 def update_simple_catalog(
