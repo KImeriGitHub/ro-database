@@ -62,7 +62,7 @@ def _check_tree(historical_dir: Path) -> None:
         # Don't fail the run for empty subfolders, but log loud — the budget
         # configuration may legitimately have skipped some endpoints.
         logger.warning(
-            f"Subfolders with no .parquet files (manual inspection): "
+            f"Subfolders with no .parquet files (integration test only): "
             f"{empty_dirs}"
         )
 

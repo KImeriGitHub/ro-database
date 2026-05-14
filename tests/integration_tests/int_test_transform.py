@@ -76,7 +76,7 @@ def _check_symbol_folders(
     if missing:
         logger.warning(
             f"{asset_type}: {len(missing)} symbols had no data_<SYM>/ folder "
-            f"(manual inspection): {missing}"
+            f"(integration test only): {missing}"
         )
     if not populated:
         raise AssertionError(
@@ -86,7 +86,7 @@ def _check_symbol_folders(
     if empty:
         logger.warning(
             f"{asset_type}: {len(empty)} symbols had only empty parquets "
-            f"(manual inspection): {empty}"
+            f"(integration test only): {empty}"
         )
     logger.info(
         f"{asset_type}: {len(populated)}/{len(symbols)} symbols populated."

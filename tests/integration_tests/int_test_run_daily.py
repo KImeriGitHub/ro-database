@@ -123,7 +123,7 @@ def _check_tree(day_root: Path) -> None:
         raise AssertionError(f"Missing daily subfolders under {day_root}: {missing}")
     if empty:
         logger.warning(
-            f"Subfolders with no .parquet files (manual inspection): {empty}"
+            f"Subfolders with no .parquet files (integration test only): {empty}"
         )
 
     ingestion = day_root / "ingestion_report.parquet"
