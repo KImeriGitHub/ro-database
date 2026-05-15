@@ -817,13 +817,20 @@ python data_transformation/transform.py \
 python data_transformation/transform.py --asset-types stocks etfs
 python data_transformation/transform.py --symbols AAPL MSFT --asset-types stocks
 
-# Wipe <dest>/stocks/ before processing for a clean slate. Useful when
-# a new stock-only frame builder lands (e.g. financials_quarterly /
-# financials_annually) and previously-saved stocks need to pick up the
-# new frame, or to drop accumulated noise from earlier partial runs.
+# Wipe exactly what this invocation would build, then rebuild it.
+# Honours --asset-types and --symbols: targets only the matching
+# <asset_type>/ subtrees (or per-symbol data_<SYM>/ folders when
+# --symbols is given). assets_overview.parquet and transformation_
+# report.parquet are always wiped (they are rewritten every run);
+# unrelated asset_type subtrees and symbol folders are untouched.
 # Transformed data is regenerable from raw historical/ + daily/, so
-# wiping it is cheap.
-python data_transformation/transform.py --rebuild-stocks
+# wiping it is cheap. Common uses: (1) when a new frame builder
+# lands and existing data_<SYM>/ folders carry empty placeholders
+# that the resume check would otherwise skip silently, (2) to drop
+# accumulated noise from earlier partial runs.
+python data_transformation/transform.py --rebuild
+python data_transformation/transform.py --rebuild --asset-types stocks etfs
+python data_transformation/transform.py --rebuild --symbols AAPL MSFT --asset-types stocks
 
 # Skip the financials builder (Phase 6c) for stocks. Saves empty
 # schema-only financials_quarterly.parquet / financials_annually.parquet
@@ -839,12 +846,13 @@ a re-transform, delete the symbol's folder (or the whole
 `<dest>/<asset_type>/` tree). `assets_overview.parquet` and
 `transformation_report.parquet` are always rewritten.
 
-For stocks specifically, the `--rebuild-stocks` CLI flag wipes
-`<dest>/stocks/` before processing - shorthand for the manual
-deletion. Each per-symbol save is "all implemented frames present"
-by design (see "Build invariant" below), so when a new stock-only
-frame builder lands the existing symbol folders carry empty
-placeholders for that frame and would otherwise be skipped silently.
+The `--rebuild` CLI flag is shorthand for that manual deletion: it
+wipes exactly the dest paths the current invocation would (re)build,
+honouring `--asset-types` and `--symbols`. Each per-symbol save is
+"all implemented frames present" by design (see "Build invariant"
+below), so when a new frame builder lands the existing symbol folders
+carry empty placeholders for that frame and would otherwise be
+skipped silently; `--rebuild` is the way to pick the new frame up.
 
 ### Build invariant
 
@@ -865,8 +873,8 @@ Coverage by asset type today:
 
 If a previously-saved stock predates the financials phase
 (its `data_<SYM>/` was written before Phase 6c landed), run with
-`--rebuild-stocks` once to backfill `financials_quarterly` and
-`financials_annually` across every stock.
+`--rebuild --asset-types stocks` once to backfill
+`financials_quarterly` and `financials_annually` across every stock.
 
 ## Module structure
 
@@ -890,10 +898,14 @@ data_transformation/
     ├── etf_profile.py      # build_etf_profile for etfs (Phase 5)
     ├── insider.py          # build_insider_df for stocks (Phase 6a)
     ├── sentiment.py        # build_sentiment_df for stocks (Phase 6b)
+    ├── _report_table.py    # quarterly + annual report_table construction
+    │                       #  shared with financials.py (Phase 6c). Owns
+    │                       #  FISCAL_MATCH_DAYS and reportTime normalisation.
     ├── financials.py       # build_financials for stocks (Phase 6c):
-    │                       #  per-row PIT snapshot resolution,
-    │                       #  report_table, quarterly + annual cell
-    │                       #  mapping, annual-estimate extension
+    │                       #  per-row PIT snapshot resolution, quarterly +
+    │                       #  annual cell mapping, annual-estimate extension.
+    │                       #  report_table construction lives in
+    │                       #  _report_table.py
     └── stocks_etfs.py      # combined per-symbol orchestrator running
                             #  Phases 3, 4, 5, 6a, 6b, 6c in one pass so
                             #  the shareprice_daily.Date axis flows

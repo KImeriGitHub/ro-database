@@ -31,7 +31,7 @@ from maintainance_scripts.logging_setup import configure_logging
 
 import polars as pl
 
-from data_transformation._common import ASSET_TYPES, TransformationReport
+from data_transformation._common import ASSET_TYPES, TransformationReport, symbol_dirname
 from data_transformation.frames.overview import write_assets_overview
 from data_transformation.frames.price_daily import (
     _SIMPLE_DATACLASS,
@@ -69,18 +69,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Restrict per-symbol transformation to these symbols.",
     )
     p.add_argument(
-        "--rebuild-stocks",
+        "--rebuild",
         action="store_true",
         help=(
-            "Wipe <dest>/stocks/ before processing for a clean slate. "
-            "Resume granularity is per-symbol-folder, so existing "
-            "data_<SYM>/ directories with empty placeholders for a "
-            "newly-implemented frame would otherwise be silently "
-            "skipped. Transformed data is regenerable from raw "
-            "historical/ + daily/, so wiping it is cheap. Common uses: "
-            "(1) when a new stock-only frame builder lands "
-            "(e.g. financials_quarterly / financials_annually), "
-            "(2) to drop accumulated noise from earlier partial runs."
+            "Wipe exactly what this invocation would (re)build before "
+            "processing, then build it from scratch. Honours --asset-types "
+            "and --symbols: with --asset-types only the listed asset_type "
+            "subtrees are removed; with --symbols only the matching "
+            "data_<SYM>/ directories under each (filtered) asset_type are "
+            "removed. assets_overview.parquet and transformation_report."
+            "parquet are always wiped (they're rewritten every run). "
+            "Other asset_type subtrees and unrelated symbol folders are "
+            "left untouched."
         ),
     )
     p.add_argument(
@@ -96,17 +96,57 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _wipe_for_rebuild(
+    dest_dir: Path,
+    asset_types_filter: set[str] | None,
+    symbols_filter: set[str] | None,
+) -> None:
+    """Remove only what the current invocation would (re)build.
+
+    * ``assets_overview.parquet`` and ``transformation_report.parquet``
+      are always rewritten by every run, so they're always removed.
+    * With ``--symbols``, only the matching ``data_<SYM>/`` directories
+      under each (filtered) ``<asset_type>/`` are removed.
+    * Otherwise the full ``<asset_type>/`` subtree is removed for each
+      asset type this run would process.
+    * Asset types and symbol folders that this run would not touch are
+      left alone, including any unrelated files at the dest root.
+    """
+    for fname in ("assets_overview.parquet", "transformation_report.parquet"):
+        path = dest_dir / fname
+        if path.exists():
+            logger.info("rebuild: removing %s", path)
+            path.unlink()
+
+    asset_types = (
+        sorted(asset_types_filter) if asset_types_filter else list(ASSET_TYPES)
+    )
+    for asset_type in asset_types:
+        atype_dir = dest_dir / asset_type
+        if not atype_dir.exists():
+            continue
+        if symbols_filter:
+            for sym in sorted(symbols_filter):
+                sym_dir = atype_dir / symbol_dirname(sym)
+                if sym_dir.exists():
+                    logger.info("rebuild: removing %s", sym_dir)
+                    shutil.rmtree(sym_dir)
+        else:
+            logger.info("rebuild: removing %s", atype_dir)
+            shutil.rmtree(atype_dir)
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     args = parse_args(argv)
 
     args.dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.rebuild_stocks:
-        stocks_dir = args.dest_dir / "stocks"
-        if stocks_dir.exists():
-            logger.info("rebuild-stocks: wiping %s", stocks_dir)
-            shutil.rmtree(stocks_dir)
+    asset_types_filter = set(args.asset_types) if args.asset_types else None
+    symbols_filter = set(args.symbols) if args.symbols else None
+
+    if args.rebuild:
+        _wipe_for_rebuild(args.dest_dir, asset_types_filter, symbols_filter)
 
     report = TransformationReport()
 
@@ -118,9 +158,6 @@ def main(argv: list[str] | None = None) -> int:
         historical_dir=args.historical_dir,
     )
     overview = pl.read_parquet(overview_path)
-
-    asset_types_filter = set(args.asset_types) if args.asset_types else None
-    symbols_filter = set(args.symbols) if args.symbols else None
 
     def _wanted(asset_type: str) -> bool:
         return asset_types_filter is None or asset_type in asset_types_filter

@@ -119,8 +119,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_int_test_logging(__file__)
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument(
-        "--rebuild-stocks", action="store_true",
-        help="Pass --rebuild-stocks through to transform.py.",
+        "--rebuild", action="store_true",
+        help="Pass --rebuild through to transform.py.",
     )
     parser.add_argument(
         "--skip-financials", action="store_true",
@@ -166,8 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         "--daily-dir", str(DAILY_DIR),
         "--dest-dir", str(TRANSFORMATION_DIR),
     ]
-    if args.rebuild_stocks:
-        cli_args.append("--rebuild-stocks")
+    if args.rebuild:
+        cli_args.append("--rebuild")
     if args.skip_financials:
         cli_args.append("--skip-financials")
 

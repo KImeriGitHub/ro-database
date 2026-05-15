@@ -457,7 +457,7 @@ def test_orchestrator_includes_symbol_with_only_insider(tmp_path):
     assert pl.read_parquet(sym_dir / "insider_df.parquet").height == 1
 
 
-def test_rebuild_stocks_wipes_stocks_and_rebuilds(tmp_path):
+def test_rebuild_with_asset_types_stocks_wipes_and_rebuilds(tmp_path):
     cat, historical, daily = _build_synth_universe(tmp_path)
     dest = tmp_path / "transformed"
 
@@ -493,14 +493,14 @@ def test_rebuild_stocks_wipes_stocks_and_rebuilds(tmp_path):
         "--daily-dir", str(daily),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
-        "--rebuild-stocks",
+        "--rebuild",
         "--skip-financials",
     )
     assert r2.returncode == 0, r2.stderr
     assert pl.read_parquet(sd_path)["Close"][0] == 250.0
 
 
-def test_rebuild_stocks_does_not_touch_other_asset_trees(tmp_path):
+def test_rebuild_with_asset_types_stocks_does_not_touch_other_asset_trees(tmp_path):
     cat, historical, daily = _build_synth_universe(tmp_path)
     dest = tmp_path / "transformed"
     r1 = _run_cli(
@@ -527,7 +527,8 @@ def test_rebuild_stocks_does_not_touch_other_asset_trees(tmp_path):
         "--historical-dir", str(historical),
         "--daily-dir", str(daily),
         "--dest-dir", str(dest),
-        "--rebuild-stocks",
+        "--asset-types", "stocks",
+        "--rebuild",
         "--skip-financials",
     )
     assert r2.returncode == 0, r2.stderr

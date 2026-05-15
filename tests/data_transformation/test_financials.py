@@ -11,7 +11,7 @@ reportedDate consistency check (and the symmetric fiscalDateEnding
 drift logging), the snapshot fallback, the annual-no-quarterly-match
 drop, the no_anchor defensive null rule, the reportTime normalisation,
 the future-extension tail sort, the --skip-financials and
---rebuild-stocks CLI flags, and a StockData round-trip.
+--rebuild CLI flags, and a StockData round-trip.
 """
 
 from __future__ import annotations
@@ -33,14 +33,16 @@ from data_transformation._common import (
 )
 from data_transformation.AssetData import StockData
 from data_transformation.AssetDataService import SCHEMAS
-from data_transformation.frames.financials import (
+from data_transformation.frames._report_table import (
     FISCAL_MATCH_DAYS,
+    _build_report_table,
+    _normalize_report_time,
+)
+from data_transformation.frames.financials import (
     NO_EC_PRE_REPORT_DAYS,
     FdeLookup,
     _build_earnings_calendar_index,
-    _build_report_table,
     _extend_quarterly_estimates_with_annual,
-    _normalize_report_time,
     build_financials,
 )
 
@@ -1165,9 +1167,9 @@ def test_cli_skip_financials_writes_empty_placeholders(tmp_path):
     assert fin_issues.height == 0
 
 
-# ── 21. --rebuild-stocks backfills financials ─────────────────────────────────
+# ── 21. --rebuild backfills financials ────────────────────────────────────────
 
-def test_cli_rebuild_stocks_backfills_financials(tmp_path):
+def test_cli_rebuild_backfills_financials(tmp_path):
     cat, historical, daily = _build_minimal_stocks_universe(tmp_path)
     dest = tmp_path / "transformed"
 
@@ -1198,14 +1200,14 @@ def test_cli_rebuild_stocks_backfills_financials(tmp_path):
     _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
            [_ee_row(date(2026, 6, 30))], _EE_Q_SCHEMA)
 
-    # Re-run with --rebuild-stocks: wipes <dest>/stocks/, rebuilds with financials.
+    # Re-run with --rebuild: wipes <dest>/stocks/, rebuilds with financials.
     r2 = _run_cli(
         "--catalog-dir", str(cat),
         "--historical-dir", str(historical),
         "--daily-dir", str(daily),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
-        "--rebuild-stocks",
+        "--rebuild",
     )
     assert r2.returncode == 0, r2.stderr
     fq = pl.read_parquet(
