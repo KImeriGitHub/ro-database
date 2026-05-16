@@ -13,7 +13,7 @@ The implementation must preserve these properties. See [README.md](README.md) fo
 
 ## Data pipeline architecture
 
-Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (`gs://<project-id>-algo-trading/`), following the same folder structure described in [Data storage structure](#data-storage-structure). Raw files are append-only by default, with one narrow exception: the weekend pass may extend or rewrite content in the most-recent `daily/<date>/` folder (retried cells, refreshed ingestion report, added monitoring report). This is the permanent record.
+Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on the local machine. The container executes the ingestion scripts on a schedule and writes to a single GCS bucket (whose name is taken from the `GCS_BUCKET` env var; see [GCP configuration](#gcp-configuration)), following the same folder structure described in [Data storage structure](#data-storage-structure). Raw files are append-only by default, with one narrow exception: the weekend pass may extend or rewrite content in the most-recent `daily/<date>/` folder (retried cells, refreshed ingestion report, added monitoring report). This is the permanent record.
 
 The one-time historical setup runs **locally** (it is a multi-hour job that benefits from local disk and easy restarts), and the resulting `historical/` and `catalog/` trees are pushed to the same GCS bucket once the setup finishes. After that initial upload, the container takes over for all ongoing daily work.
 
@@ -104,9 +104,17 @@ See [historical_data_setup/SPEC.md](historical_data_setup/SPEC.md) for the full 
 
 All runtime dependencies (GCP client libraries, dataframe stack, HTML/parquet tooling) are pinned as minimums in [`requirements.txt`](requirements.txt). Install with `pip install -r requirements.txt`.
 
+### GCP configuration
+
+[`config/gcp.py`](config/gcp.py) reads every deployment-specific identifier (project id, region, bucket name, Cloud Run job name, container image ref, Secret Manager secret names) from environment variables and intentionally **does not** ship any defaults: the repo is public and a default would either leak a real deployment's identifiers or paper over a misconfigured one. Missing values surface as `None` at import time, and the first GCP client call that needs them fails loudly. The expected env vars are: `GCP_PROJECT_ID`, `GCP_REGION`, `GCS_BUCKET`, `CLOUD_RUN_JOB_NAME`, `CONTAINER_IMAGE`, `SECRET_AV_KEY_STANDARD`, `SECRET_AV_KEY_PREMIUM`, `USE_SECRET_MANAGER_FOR_AV_KEYS`. Only the boolean `USE_SECRET_MANAGER_FOR_AV_KEYS` carries a default (`false`), so local runs without GCP configured fail loudly instead of silently reaching for a Secret Manager that does not exist. Bucket name, Cloud Run job name, and secret names are chosen by the operator and passed via env; there is no built-in convention for any of them.
+
 ### API key resolution
 
-`maintainance_scripts.get_api_key.get_alpha_vantage_key(tier)` tries the local `secrets/alpha_vantage_keys` file first. If the file is missing, the tier entry is absent, or the value is still a placeholder, it falls back to GCP Secret Manager **only when** the flag `USE_SECRET_MANAGER_FOR_AV_KEYS=true` is set (defined in `config/gcp.py`). The secret names it reads are also configurable from that module: `SECRET_AV_KEY_STANDARD` and `SECRET_AV_KEY_PREMIUM` (defaults: `alpha-vantage-key-standard`, `alpha-vantage-key-premium`). The container runs with this flag on; local dev keeps the default of off so runs fail loudly when the local file is misconfigured.
+`maintainance_scripts.get_api_key.get_alpha_vantage_key(tier)` tries the local `secrets/alpha_vantage_keys` file first. If the file is missing, the tier entry is absent, or the value is still a placeholder, it falls back to GCP Secret Manager **only when** `USE_SECRET_MANAGER_FOR_AV_KEYS=true`. The secret names it reads come from `SECRET_AV_KEY_STANDARD` and `SECRET_AV_KEY_PREMIUM` (see "GCP configuration" above). The container runs with the flag on; local dev keeps the default of off so runs fail loudly when the local file is misconfigured.
+
+### Health check
+
+After a fresh deploy (new container, new project, new local machine), run `python -m maintainance_scripts.gcp_ping_test` with the same env vars the pipeline will use. The script exercises the GCS bucket end-to-end (list / write / read-back / delete a throwaway blob under `_health/`) and, when secret names are configured, fetches each AV-key secret to confirm Secret Manager access. Each failure mode (missing creds, IAM denial, wrong bucket/project, secret missing or unversioned, network egress blocked) maps to a distinct error message. Logs land in `logs/<UTC>_gcp_ping_test.log` and on stdout. Enable the Cloud Scheduler triggers only after the ping logs `PING OK`.
 
 
 ## Folder structure

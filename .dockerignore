@@ -5,10 +5,10 @@ __pycache__
 *.pyo
 secrets/
 tmp/
+logs/
 tests/
 consistency_tests/
 data_transformation/
-historical_data_setup/
 catalog/
 historical/
 daily/
