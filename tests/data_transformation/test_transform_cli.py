@@ -537,3 +537,219 @@ def test_rebuild_with_asset_types_stocks_does_not_touch_other_asset_trees(tmp_pa
     assert pre == post
     # Stocks artefacts re-emitted and intact.
     assert (dest / "stocks" / "data_AAPL" / "metadata.json").exists()
+
+
+# ── 8. last_processed_daily_date metadata + --incremental flag ───────────────
+
+def test_run_writes_last_processed_daily_date_into_each_symbol_metadata(tmp_path):
+    """Every per-symbol metadata.json carries the date of the newest
+    daily/<YYYY-MM-DD>/ folder this run consumed. This is the seam the
+    incremental dispatcher reads back on subsequent runs."""
+    cat, historical, daily = _build_synth_universe(tmp_path)
+    # Seed two daily date folders (empty subdirs are sufficient -- the
+    # orchestrator picks them up via enumerate_daily_dates regardless of
+    # contents). The newest one is what should land in every metadata.json.
+    (daily / "2026-04-16").mkdir(parents=True)
+    (daily / "2026-04-17").mkdir(parents=True)
+
+    dest = tmp_path / "transformed"
+    r = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--skip-financials",
+    )
+    assert r.returncode == 0, r.stderr
+
+    metas = list(dest.rglob("data_*/metadata.json"))
+    assert metas, "expected at least one per-symbol metadata.json"
+    for parquet_meta in metas:
+        meta = json.loads(parquet_meta.read_text())
+        assert "last_processed_daily_date" in meta
+        assert meta["last_processed_daily_date"] == "2026-04-17", parquet_meta
+
+
+def test_run_writes_null_last_processed_when_daily_dir_empty(tmp_path):
+    """A daily/ tree with no date subfolders (historical-only state) records
+    null in the new metadata field."""
+    cat, historical, daily = _build_synth_universe(tmp_path)
+    # No daily/<YYYY-MM-DD>/ folders are created -- daily as returned by
+    # _build_synth_universe is just a Path with no contents.
+    dest = tmp_path / "transformed"
+    r = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--skip-financials",
+    )
+    assert r.returncode == 0, r.stderr
+
+    metas = list(dest.rglob("data_*/metadata.json"))
+    assert metas, "expected at least one per-symbol metadata.json"
+    for parquet_meta in metas:
+        meta = json.loads(parquet_meta.read_text())
+        assert meta["last_processed_daily_date"] is None, parquet_meta
+
+
+# ── 9. Incremental run produces same output as full rebuild ──────────────────
+
+def _seed_daily_prices(daily_dir: Path, snap_date: date, row_date: date,
+                      close: float = 101.0) -> None:
+    """Add a one-row stocks_AAPL.parquet for *row_date* (and an SPY one) under
+    ``daily/<snap_date>/stocks/prices_daily/`` so the orchestrator picks
+    up new content."""
+    daily_schema = {
+        "Date": pl.Date, "Open": pl.Float32, "High": pl.Float32,
+        "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
+        "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
+    }
+    snap_dir = daily_dir / snap_date.isoformat() / "stocks" / "prices_daily"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([{
+        "Date": row_date, "Open": close, "High": close, "Low": close,
+        "Close": close, "Volume": 2000.0, "DividendAmount": 0.0,
+        "SplitCoefficient": 1.0,
+    }], schema=daily_schema).write_parquet(snap_dir / "stocks_AAPL.parquet")
+
+    snap_etf_dir = daily_dir / snap_date.isoformat() / "etfs" / "prices_daily"
+    snap_etf_dir.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([{
+        "Date": row_date, "Open": 301.0, "High": 301.0, "Low": 301.0,
+        "Close": 301.0, "Volume": 50000.0, "DividendAmount": 0.0,
+        "SplitCoefficient": 1.0,
+    }], schema=daily_schema).write_parquet(snap_etf_dir / "etfs_SPY.parquet")
+
+
+def test_incremental_run_matches_full_rebuild_on_same_data(tmp_path):
+    """Build the same universe two ways and assert frame equality:
+
+      Path A: historical + 2 daily folders, single fresh run with
+              ``--incremental``. With no metadata.json the dispatcher
+              routes to fresh, so this is effectively a full rebuild.
+      Path B: historical + first daily folder; fresh run. Then add the
+              second daily folder; run with ``--incremental``. The
+              orchestrator should load existing parquets and merge only
+              the new daily folder.
+
+    Both paths process the same inputs in different orders. Output frames
+    must be byte-identical (modulo categorical encoding) for the
+    incremental dispatch to be considered correct.
+    """
+    snap_a = date(2026, 4, 16)
+    snap_b = date(2026, 4, 17)
+
+    # ── Path A: build everything in one pass ──────────────────────────
+    cat_a, hist_a, daily_a = _build_synth_universe(tmp_path / "a")
+    _seed_daily_prices(daily_a, snap_a, date(2026, 4, 16), close=101.5)
+    _seed_daily_prices(daily_a, snap_b, date(2026, 4, 17), close=103.0)
+    dest_a = tmp_path / "a" / "transformed"
+    r_a = _run_cli(
+        "--catalog-dir", str(cat_a),
+        "--historical-dir", str(hist_a),
+        "--daily-dir", str(daily_a),
+        "--dest-dir", str(dest_a),
+        "--skip-financials",
+    )
+    assert r_a.returncode == 0, r_a.stderr
+
+    # ── Path B: build first daily, then incrementally add second ──────
+    cat_b, hist_b, daily_b = _build_synth_universe(tmp_path / "b")
+    _seed_daily_prices(daily_b, snap_a, date(2026, 4, 16), close=101.5)
+    dest_b = tmp_path / "b" / "transformed"
+    r_b1 = _run_cli(
+        "--catalog-dir", str(cat_b),
+        "--historical-dir", str(hist_b),
+        "--daily-dir", str(daily_b),
+        "--dest-dir", str(dest_b),
+        "--skip-financials",
+    )
+    assert r_b1.returncode == 0, r_b1.stderr
+
+    # Verify path B run 1 stamped 2026-04-16 into metadata.
+    aapl_meta_b = json.loads(
+        (dest_b / "stocks" / "data_AAPL" / "metadata.json").read_text()
+    )
+    assert aapl_meta_b["last_processed_daily_date"] == "2026-04-16"
+
+    # Now add the second daily folder and run incrementally.
+    _seed_daily_prices(daily_b, snap_b, date(2026, 4, 17), close=103.0)
+    r_b2 = _run_cli(
+        "--catalog-dir", str(cat_b),
+        "--historical-dir", str(hist_b),
+        "--daily-dir", str(daily_b),
+        "--dest-dir", str(dest_b),
+        "--skip-financials",
+    )
+    assert r_b2.returncode == 0, r_b2.stderr
+
+    aapl_meta_b2 = json.loads(
+        (dest_b / "stocks" / "data_AAPL" / "metadata.json").read_text()
+    )
+    assert aapl_meta_b2["last_processed_daily_date"] == "2026-04-17"
+
+    # ── Frame-equality check across paths ─────────────────────────────
+    for sym_relpath in (
+        "stocks/data_AAPL/shareprice_daily.parquet",
+        "stocks/data_AAPL/shareprice_intraday.parquet",
+        "stocks/data_AAPL/insider_df.parquet",
+        "stocks/data_AAPL/sentiment_df.parquet",
+        "etfs/data_SPY/shareprice_daily.parquet",
+        "etfs/data_SPY/shareprice_intraday.parquet",
+        "etfs/data_SPY/etf_profile.parquet",
+        "forex/data_EURUSD/price_daily.parquet",
+        "indices/data_SPX/price_daily.parquet",
+        "cryptocurrencies/data_BTC/price_daily.parquet",
+        "commodities/data_WTI/price_daily.parquet",
+        "economic/data_CPI/price_daily.parquet",
+    ):
+        a = pl.read_parquet(dest_a / sym_relpath)
+        b = pl.read_parquet(dest_b / sym_relpath)
+        # Categorical columns may have different physical encodings
+        # depending on append order; project them to Utf8 for comparison.
+        cat_cols = [
+            c for c, t in a.schema.items()
+            if t.base_type() == pl.Categorical
+        ]
+        if cat_cols:
+            a = a.with_columns([pl.col(c).cast(pl.Utf8) for c in cat_cols])
+            b = b.with_columns([pl.col(c).cast(pl.Utf8) for c in cat_cols])
+        assert a.equals(b), (
+            f"frame mismatch at {sym_relpath}\n"
+            f"path-A:\n{a}\n\n"
+            f"path-B (incremental):\n{b}"
+        )
+
+
+def test_incremental_skip_when_no_new_daily_folders(tmp_path):
+    """A second --incremental run with no new daily folders is a no-op:
+    every symbol resolves to ``mode='skip'``, metadata.json mtimes are
+    preserved."""
+    cat, historical, daily = _build_synth_universe(tmp_path)
+    _seed_daily_prices(daily, date(2026, 4, 16), date(2026, 4, 16))
+    dest = tmp_path / "transformed"
+
+    r1 = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--skip-financials",
+    )
+    assert r1.returncode == 0, r1.stderr
+
+    meta_path = dest / "stocks" / "data_AAPL" / "metadata.json"
+    mtime_before = meta_path.stat().st_mtime_ns
+
+    r2 = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--skip-financials",
+    )
+    assert r2.returncode == 0, r2.stderr
+
+    # Symbol skipped -> metadata not rewritten.
+    assert meta_path.stat().st_mtime_ns == mtime_before

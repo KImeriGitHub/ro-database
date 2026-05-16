@@ -13,6 +13,7 @@ economic), see ``frames/price_daily.py``'s
 from __future__ import annotations
 
 import logging
+from datetime import date
 from pathlib import Path
 
 import polars as pl
@@ -20,7 +21,8 @@ import polars as pl
 from data_transformation._common import (
     TransformationReport,
     build_source_index,
-    is_already_transformed,
+    paths_for_mode,
+    resolve_mode,
     sector_to_index,
     symbol_dest_dir,
 )
@@ -31,6 +33,7 @@ from data_transformation.frames.financials import (
     SUFFIXES as _FIN_SUFFIXES,
     _build_earnings_calendar_index,
     build_financials,
+    build_financials_incremental,
 )
 from data_transformation.frames.insider import build_insider_df
 from data_transformation.frames.price_daily import build_shareprice_daily
@@ -46,6 +49,27 @@ _DATACLASS_BY_ASSET_TYPE = {
 }
 
 
+def _load_cached_rt(sym_dir: Path, suffix: str) -> pl.DataFrame | None:
+    """Load ``report_table_<suffix>.parquet`` from a per-symbol folder.
+
+    Returns ``None`` when the file is absent or lacks the ``_source``
+    column (an older-schema cache from before the incremental work
+    landed). In both cases the caller falls back to the fresh-mode
+    financials builder for that symbol so correctness is preserved.
+    """
+    path = sym_dir / f"report_table_{suffix}.parquet"
+    if not path.exists():
+        return None
+    try:
+        df = pl.read_parquet(path)
+    except Exception as exc:
+        logger.warning("failed to read cached report_table %s: %s", path, exc)
+        return None
+    if "_source" not in df.columns:
+        return None
+    return df
+
+
 def transform_stocks_or_etfs(
     asset_type: str,
     historical_dir: Path,
@@ -55,6 +79,8 @@ def transform_stocks_or_etfs(
     report: TransformationReport,
     symbols_filter: set[str] | None = None,
     skip_financials: bool = False,
+    last_processed_daily_date: date | None = None,
+    all_daily_dates: list[date] | None = None,
 ) -> int:
     """Build per-symbol StockData / ETFData with every implemented frame
     populated before the dataclass is saved.
@@ -142,6 +168,10 @@ def transform_stocks_or_etfs(
         | {s for idx in fin_idx.values() for s in idx}
     )
 
+    daily_dates_for_dispatch = (
+        all_daily_dates if all_daily_dates is not None else []
+    )
+
     n_processed = 0
     for symbol in all_symbols:
         if symbols_filter is not None and symbol not in symbols_filter:
@@ -152,9 +182,38 @@ def transform_stocks_or_etfs(
                 asset_type, symbol,
             )
             continue
-        if is_already_transformed(dest_dir, asset_type, symbol):
+
+        sym_dest = symbol_dest_dir(dest_dir, asset_type, symbol)
+
+        # Per-symbol dispatch: skip if cached last_processed_daily_date
+        # already covers the newest daily folder; rebuild from scratch
+        # if no metadata or the field is null; else incremental append.
+        mode, since_date = resolve_mode(sym_dest, daily_dates_for_dispatch)
+
+        if mode == "skip":
             n_processed += 1
             continue
+
+        # Load existing for incremental. If load fails for any reason
+        # (corrupt parquet, schema drift), fall back to fresh so we
+        # always make forward progress.
+        existing_inst = None
+        cached_rt_q_df: pl.DataFrame | None = None
+        cached_rt_a_df: pl.DataFrame | None = None
+        if mode == "incremental":
+            try:
+                existing_inst = cls.load_from(sym_dest)
+            except Exception as exc:
+                logger.warning(
+                    "%s/%s: failed to load existing -> fresh build: %s",
+                    asset_type, symbol, exc,
+                )
+                existing_inst = None
+                mode = "fresh"
+                since_date = None
+            if mode == "incremental" and asset_type == "stocks" and not skip_financials:
+                cached_rt_q_df = _load_cached_rt(sym_dest, "quarterly")
+                cached_rt_a_df = _load_cached_rt(sym_dest, "annual")
 
         try:
             inst = cls.default_instance()
@@ -163,50 +222,116 @@ def transform_stocks_or_etfs(
             if asset_type == "stocks":
                 inst.sector = sector_to_index(sector_lookup.get(symbol, ""))
 
+            sp_daily_paths = paths_for_mode(
+                daily_idx.get(symbol, []), mode, since_date,
+            )
             sp_daily = build_shareprice_daily(
-                asset_type, symbol, daily_idx.get(symbol, []), report,
+                asset_type, symbol, sp_daily_paths, report,
+                existing=(
+                    existing_inst.shareprice_daily if existing_inst else None
+                ),
             )
             inst.shareprice_daily = sp_daily
 
+            intraday_paths = paths_for_mode(
+                intraday_idx.get(symbol, []), mode, since_date,
+            )
             sp_intraday = build_shareprice_intraday(
-                asset_type, symbol, intraday_idx.get(symbol, []),
+                asset_type, symbol, intraday_paths,
                 sp_daily["Date"], report,
+                existing=(
+                    existing_inst.shareprice_intraday if existing_inst else None
+                ),
             )
             inst.shareprice_intraday = sp_intraday
 
+            rt_q: pl.DataFrame | None = None
+            rt_a: pl.DataFrame | None = None
+
             if asset_type == "etfs":
+                profile_paths = paths_for_mode(
+                    profile_idx.get(symbol, []), mode, since_date,
+                )
                 inst.etf_profile = build_etf_profile(
-                    symbol, profile_idx.get(symbol, []), report,
+                    symbol, profile_paths, report,
+                    existing=(
+                        existing_inst.etf_profile if existing_inst else None
+                    ),
                 )
 
             if asset_type == "stocks":
+                insider_paths = paths_for_mode(
+                    insider_idx.get(symbol, []), mode, since_date,
+                )
                 inst.insider_df = build_insider_df(
-                    symbol, insider_idx.get(symbol, []), report,
+                    symbol, insider_paths, report,
+                    existing=(
+                        existing_inst.insider_df if existing_inst else None
+                    ),
+                )
+                sentiment_paths = paths_for_mode(
+                    sentiment_idx.get(symbol, []), mode, since_date,
                 )
                 inst.sentiment_df = build_sentiment_df(
-                    symbol, sentiment_idx.get(symbol, []), report,
+                    symbol, sentiment_paths, report,
+                    existing=(
+                        existing_inst.sentiment_df if existing_inst else None
+                    ),
                 )
                 if not skip_financials:
-                    source_paths_sym = {
-                        key: idx.get(symbol, []) for key, idx in fin_idx.items()
-                    }
                     ec_for_symbol = {
                         snap: by_sym[symbol]
                         for snap, by_sym in ec_index.items()
                         if symbol in by_sym
                     }
-                    fin_q, fin_a = build_financials(
-                        symbol, inst.shareprice_daily,
-                        overview_row_lookup.get(symbol),
-                        source_paths_sym, report,
-                        ec_index_for_symbol=ec_for_symbol,
-                        ec_snap_dates_sorted=ec_snap_dates,
-                    )
+                    # Financials needs historical paths in incremental
+                    # mode so per-row PIT lookups can fall back when
+                    # the resolved snapshot is missing an endpoint.
+                    if (
+                        mode == "incremental"
+                        and existing_inst is not None
+                        and cached_rt_q_df is not None
+                        and cached_rt_a_df is not None
+                    ):
+                        new_source_paths = {
+                            key: paths_for_mode(
+                                idx.get(symbol, []), mode, since_date,
+                                keep_historical=True,
+                            )
+                            for key, idx in fin_idx.items()
+                        }
+                        fin_q, fin_a, rt_q, rt_a = build_financials_incremental(
+                            symbol, inst.shareprice_daily,
+                            overview_row_lookup.get(symbol),
+                            new_source_paths,
+                            existing_inst.financials_quarterly,
+                            existing_inst.financials_annually,
+                            cached_rt_q_df, cached_rt_a_df,
+                            report,
+                            ec_index_for_symbol=ec_for_symbol,
+                            ec_snap_dates_sorted=ec_snap_dates,
+                        )
+                    else:
+                        source_paths_sym = {
+                            key: idx.get(symbol, []) for key, idx in fin_idx.items()
+                        }
+                        fin_q, fin_a, rt_q, rt_a = build_financials(
+                            symbol, inst.shareprice_daily,
+                            overview_row_lookup.get(symbol),
+                            source_paths_sym, report,
+                            ec_index_for_symbol=ec_for_symbol,
+                            ec_snap_dates_sorted=ec_snap_dates,
+                        )
                     inst.financials_quarterly = fin_q
                     inst.financials_annually = fin_a
 
-            inst.save_to(symbol_dest_dir(dest_dir, asset_type, symbol))
-            del sp_daily, sp_intraday, inst
+            inst.save_to(
+                sym_dest, last_processed_daily_date=last_processed_daily_date,
+            )
+            if rt_q is not None:
+                rt_q.write_parquet(sym_dest / "report_table_quarterly.parquet")
+                rt_a.write_parquet(sym_dest / "report_table_annual.parquet")
+            del sp_daily, sp_intraday, inst, existing_inst
             n_processed += 1
         except Exception as exc:
             logger.exception(

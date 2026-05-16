@@ -42,13 +42,15 @@ The schemas of the per-frame parquet files (`shareprice_daily.parquet`,
 ├── transformation_report.parquet      # per-symbol issue log, see "Logging" below
 ├── stocks/
 │   └── data_<SYMBOL>/                 # data_ prefix for Windows-reserved-name safety; <SYMBOL> is fs_symbol-encoded
-│       ├── metadata.json              # {ticker, about, sector, _asset_type}
+│       ├── metadata.json              # {ticker, about, sector, _asset_type, last_processed_daily_date}
 │       ├── shareprice_daily.parquet
 │       ├── shareprice_intraday.parquet
 │       ├── insider_df.parquet
 │       ├── sentiment_df.parquet
 │       ├── financials_quarterly.parquet
-│       └── financials_annually.parquet
+│       ├── financials_annually.parquet
+│       ├── report_table_quarterly.parquet   # build-side cache (not part of AssetData)
+│       └── report_table_annual.parquet      # build-side cache (not part of AssetData)
 ├── etfs/
 │   └── data_<SYMBOL>/
 │       ├── metadata.json
@@ -343,9 +345,13 @@ Source: `historical/stocks/insider/` + `daily/*/stocks/insider/`.
 Per source row, the raw schema carries
 `(transactionDate, executive, executive_title, security_type,
 acquisition_or_disposal, shares, share_price)`. The transformed schema
-keeps only the modelling-relevant columns (see
+keeps the modelling-relevant columns (see
 [AssetData_specifications.md](AssetData_specifications.md) section
-`### insider_df`): `Date`, `Executive_role`, `AcqDis`, `Shares`.
+`### insider_df`): `Date`, `Executive_role`, `AcqDis`, `Shares`, plus
+the underscore-prefixed `_executive` / `_security_type` columns. The
+latter two preserve the raw composite-key components so the
+incremental build path can dedup new daily rows against the saved
+frame; they are build-side scaffolding rather than modelling features.
 
 1. Read every source file. Concat with `attach_source_order`.
 2. Deduplicate on the composite key
@@ -398,21 +404,25 @@ Source: `historical/stocks/sentiment/` + `daily/*/stocks/sentiment/`.
 Per source row, the raw schema is the full NEWS_SENTIMENT response
 (time_published, ticker, scores, title, url, authors, summary,
 banner_image, source labels, plus 15 topic relevance columns). The
-transformed schema keeps only the numeric scores plus `Datetime` (see
+transformed schema keeps the numeric scores plus `Datetime`,
+`source`, and `_url` (see
 [AssetData_specifications.md](AssetData_specifications.md) section
-`### sentiment_df`); titles, urls, authors, and full text are
-dropped at the cast step.
+`### sentiment_df`); titles, authors, summary, banner image, and
+sentiment-label strings are dropped at the cast step.
 
 1. Read every source file. If a `ticker` column is present, filter
    defensively to `ticker == symbol` (the per-symbol files already
    filter upstream, but the column is not guaranteed to be present
    on every file).
-2. Rename `time_published` -> `Datetime`.
+2. Rename `time_published` -> `Datetime` and `url` -> `_url` (the
+   underscore prefix marks the column as build-side scaffolding for
+   the incremental dedup). `source` is kept verbatim and cast to
+   `Categorical` at the final schema step.
 3. Concat via `attach_source_order` and deduplicate on
-   `(Datetime, url)` with `keep="first"` (earliest source wins -- the
-   sentiment scores first published for an article persist; later
-   model rescores are dropped). Discrepancy logging covers every
-   Float32 column (`ticker_relevance_score`,
+   `(Datetime, _url)` with `keep="first"` (earliest source wins --
+   the sentiment scores first published for an article persist;
+   later model rescores are dropped). Discrepancy logging covers
+   every Float32 column (`ticker_relevance_score`,
    `ticker_sentiment_score`, `overall_sentiment_score`, plus the 15
    topic relevance columns), but only the over-1pct bucket is
    recorded -- AV's sentiment model regularly nudges scores by sub-1pct
@@ -421,8 +431,8 @@ dropped at the cast step.
    as distinct rows.
 4. Sort by `Datetime` ascending.
 5. Cast to `SCHEMAS["sentiment_df"]`. The cast drops the source
-   columns absent from the target schema (`url`, `title`, `summary`,
-   `authors`, `banner_image`, `source`, `category_within_source`,
+   columns absent from the target schema (`title`, `summary`,
+   `authors`, `banner_image`, `category_within_source`,
    `source_domain`, `ticker_sentiment_label`,
    `overall_sentiment_label`, plus `ticker` if present).
 
@@ -491,6 +501,37 @@ unknown labels map to `other`. Late filers (a quarter whose
 `reportedDate` post-dates a later quarter's) are fine; 
 their `fiscalDateEnding` will appear out-of-sequence relative 
 to neighbours, which is the PIT-correct ordering.
+
+The quarterly and annual `report_table` frames are also persisted
+next to the AssetData frames as `report_table_quarterly.parquet` and
+`report_table_annual.parquet`. They are **build-side cache files**,
+not part of the `AssetData` round-trip (`save_to` / `load_from`
+ignore them) and not intended for downstream consumption. Schema is
+the public `REPORT_TABLE_SCHEMA` exported from
+[`frames/_report_table.py`](frames/_report_table.py):
+`(reportedDate Date nullable, fiscalDateEnding Date,
+reportTime Utf8 nullable, _source Utf8)`. The `_source` column tags
+each row's origin -- `"earnings_q"` / `"earnings_a"` for PIT-correct
+past entries pulled from real earnings snapshots, `"overview"` for
+the next-upcoming entry projected from `assets_overview.parquet`,
+`"estimate"` for further-future rows from the latest earnings
+estimates. The tag lets the incremental build path (see "Resume /
+incremental mode" below) keep the first class across runs and refresh
+the latter two from the current `overview_row` and the latest
+estimates each run.
+
+Empty schema-only frames are written on every early-return path of
+the financials builder (no `shareprice_daily`, no
+`earnings/SYMBOL_quarterly.parquet`, `financials_reportedDate_mismatch`)
+so the files always exist whenever Phase 6c ran. `--skip-financials`
+short-circuits Phase 6c entirely, in which case the files are not
+written.
+
+The cache files are wiped transparently by `--rebuild` (the per-symbol
+`data_<SYM>/` removal takes them along). A cache written before the
+`_source` column existed (older schema) is detected at incremental-
+dispatch time and the symbol is routed to a full build, which then
+writes the new-shape cache.
 
 #### Quarterly cell mapping
 
@@ -838,21 +879,129 @@ python data_transformation/transform.py --rebuild --symbols AAPL MSFT --asset-ty
 python data_transformation/transform.py --skip-financials
 ```
 
-## Resume
+## Resume / incremental mode
 
-A symbol is skipped on re-run if
-`<dest>/<asset_type>/data_<SYMBOL>/metadata.json` already exists. To force
-a re-transform, delete the symbol's folder (or the whole
-`<dest>/<asset_type>/` tree). `assets_overview.parquet` and
-`transformation_report.parquet` are always rewritten.
+The per-symbol dispatcher reads `metadata.json`'s
+`last_processed_daily_date` field to decide what to do on each
+invocation. There is no flag: this is always how the orchestrator runs.
 
-The `--rebuild` CLI flag is shorthand for that manual deletion: it
-wipes exactly the dest paths the current invocation would (re)build,
-honouring `--asset-types` and `--symbols`. Each per-symbol save is
-"all implemented frames present" by design (see "Build invariant"
-below), so when a new frame builder lands the existing symbol folders
-carry empty placeholders for that frame and would otherwise be
-skipped silently; `--rebuild` is the way to pick the new frame up.
+* **Skip** -- the cached `last_processed_daily_date` already covers
+  the newest `daily/<YYYY-MM-DD>/` folder, or the cached field is null
+  / missing and `daily/` has no date folders to consume. Nothing to do.
+* **Incremental append** -- there is at least one daily folder strictly
+  newer than the cached date. Each frame builder is invoked with the
+  *existing* parquet pre-loaded and a *filtered* source-path list
+  containing only the new daily folders. Builders concatenate existing
+  + new and dedup; price frames use `keep="last"` (new daily restates
+  overlapping dates), insider / sentiment / etf_profile use
+  `keep="first"` (existing wins, PIT-correct).
+  `suppress_historic_boundary` is disabled in this branch -- the
+  existing tail is never a partial bar.
+* **Full build** -- no `metadata.json` (new symbol, or one wiped by
+  `--rebuild`), or the field is missing/null but daily folders DO
+  exist (older build that predates the field). Build from scratch
+  reading historical + every daily folder, same path as the original
+  behaviour.
+
+`assets_overview.parquet` and `transformation_report.parquet` are
+always rewritten regardless of the per-symbol decision.
+
+Per-frame routing semantics: each builder receives only what's needed
+to extend its frame. `shareprice_daily` is rebuilt as `existing +
+new_daily_files`, then `AdjFactor` is recomputed across the full
+deduped frame (single-day formula; no cumulative term in the saved
+column). `shareprice_intraday` does the same and reapplies the
+orphan-date filter against the *updated* `shareprice_daily.Date`.
+`insider_df` and `sentiment_df` dedup new daily rows internally, then
+anti-join against existing on the saved composite key (`Date`,
+`_executive`, `_security_type` and `Datetime`, `_url` respectively --
+see the "insider_df / sentiment_df" sections below for why those
+underscore-prefixed columns survive the cast). `etf_profile` and
+`price_daily` are straightforward concat+dedup on `Date`.
+
+### Financials incremental path
+
+`build_financials_incremental` reuses the per-symbol cached
+`report_table_quarterly.parquet` and `report_table_annual.parquet`
+files (the `_source` column tags PIT-correct past entries kept across
+runs vs. refreshable next-upcoming and future-extension rows). It:
+
+1. Pulls cached past entries (`_source = "earnings_q"` / `"earnings_a"`).
+2. Reads new daily snapshots' `earnings/*_quarterly.parquet` and
+   `*_annual.parquet`; runs the same per-union reportedDate consistency
+   check on the new snapshots that the full-build path does on its
+   full snapshot set.
+3. Cross-checks each new earnings_q row against the cached
+   reportedDate-by-fiscalDateEnding map. A new row whose `fde` is
+   cached with a different `reportedDate` fires the same
+   `financials_reportedDate_mismatch` no-op as the full build.
+4. Rebuilds the two `report_table_*` frames from cached past + new past
+   + fresh next-upcoming (from current `assets_overview`) + fresh
+   future-extension (from the latest estimates available in the new
+   snapshots / historical).
+5. Computes per-row `_qm{m}` / `_am{m}` / `_qp_{n}` / `_ap_{n}` cells
+   only for dates in `shareprice_daily.Date` that are NOT already in
+   `existing_fin_q.Date` (a small set in steady state -- typically the
+   trading days since the last incremental run).
+6. Appends the new rows to the existing financials frames and saves
+   the updated report_table caches.
+
+**Trade-off: old rows are not recomputed.** Incremental mode is
+designed to leave previously-computed rows in `financials_quarterly` /
+`financials_annually` untouched. Two practical consequences:
+
+- **Retroactive changes to old quarters' statement data** (AV restates
+  Q1's `totalRevenue` months after Q1 reported, say) are in principle
+  detectable by comparing new daily snapshots' values against what the
+  cached frames contain for the same `fiscalDateEnding`. The current
+  incremental builder does **not** perform that comparison; cached
+  rows therefore continue to reflect the PIT value at the time they
+  were first computed, which is also the PIT-correct value to preserve.
+  Run `--rebuild` if you want the report to surface such restatements
+  and pick up the latest available statement data.
+- **Estimates-tail refresh propagates only to new dates.** The
+  `_qp_{n}` / `_ap_{n>=1}` cells on already-saved rows reference the
+  report_table tail that existed at compute time. Cached rows are not
+  rewritten when the tail changes; only newly-computed rows for new
+  `shareprice_daily` dates see the fresh estimates view.
+
+`financials_reportedDate_mismatch` (cross-check against cached) and
+the standard consistency checks across new snapshots continue to fire
+in incremental mode, with the same no-op semantics as the full build.
+
+**Note: dropped intermediate snapshots in the gap-day case.** When a
+run consumes a new daily folder `D_new` after a multi-day gap (so
+`existing.max_date < D_new - 1`), the new daily folder's 7-day window
+may contribute price rows for dates `d` with
+`existing.max_date < d < D_new`. The financials builder computes
+fresh rows for those `d`s. Its snapshot-resolution list contains only
+the *new* daily snapshots (passed via `new_source_paths`), so a `d`
+that pre-dates `D_new` falls through to the historical baseline. A
+full build at the same `d` would have access to the previous run's
+snapshot at `D_prev` (or earlier), which carries more recent
+statement data than historical. Both paths are PIT-correct (data is
+strictly at or before `d`); incremental just uses *older*
+PIT-correct data than the full build would. This only diverges when
+new dates land inside a gap; in steady state (daily run every day,
+`existing.max_date == D_prev`) the resolver returns the same snapshot
+on both paths. Run `--rebuild` to recover the full-build view for
+affected symbols.
+
+**Cache schema requirement.** Incremental dispatch requires the
+`report_table_*.parquet` cache files to carry the `_source` column.
+Older caches written before this column existed are detected and the
+symbol is silently routed to a full build for that run (with the new
+cache saved on completion).
+
+### `--rebuild`
+
+The `--rebuild` CLI flag wipes exactly the dest paths the current
+invocation would (re)build, honouring `--asset-types` and `--symbols`.
+Use it to recover from the incremental-mode trade-offs above, to pick
+up a new frame builder that landed after existing symbols were last
+saved, or to drop accumulated noise from earlier partial runs. After
+the wipe the dispatcher sees no `metadata.json` and routes every
+affected symbol to the full build path.
 
 ### Build invariant
 

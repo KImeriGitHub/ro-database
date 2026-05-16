@@ -36,7 +36,10 @@ from typing import Any
 
 import polars as pl
 
-from data_transformation._common import TransformationReport
+from data_transformation._common import (
+    TransformationReport,
+    snapshot_date_from_path,
+)
 from data_transformation.AssetDataService import (
     SCHEMAS,
     _AM_BASE_FIELDS,
@@ -46,8 +49,12 @@ from data_transformation.AssetDataService import (
 )
 from data_transformation.frames._report_table import (
     FISCAL_MATCH_DAYS,
+    REPORT_TABLE_SCHEMA,
     _build_annual_report_table,
+    _build_annual_report_table_from_past_rows,
     _build_report_table,
+    _build_report_table_from_past_rows,
+    _earnings_a_past_rows,
     _normalize_report_time,
 )
 
@@ -137,22 +144,6 @@ def _signed_suffix(n: int) -> str:
     return "0"
 
 
-def _snapshot_date_from_path(p: Path) -> date | None:
-    """Return the snapshot date for a path under
-    ``daily/<YYYY-MM-DD>/stocks/<endpoint>/file.parquet``, else ``None``
-    (historical or any other layout).
-    """
-    if len(p.parents) < 3:
-        return None
-    name = p.parents[2].name
-    if not _SNAPSHOT_DIR_RE.match(name):
-        return None
-    try:
-        return date.fromisoformat(name)
-    except ValueError:
-        return None
-
-
 def _read_parquet_or_none(path: Path | None) -> pl.DataFrame | None:
     if path is None:
         return None
@@ -174,7 +165,7 @@ def _organize_paths(
     historical: dict[tuple[str, str], Path] = {}
     for key, paths in source_paths.items():
         for p in paths:
-            sd = _snapshot_date_from_path(p)
+            sd = snapshot_date_from_path(p)
             if sd is None:
                 historical[key] = p
             else:
@@ -614,8 +605,18 @@ def build_financials(
     report: TransformationReport,
     ec_index_for_symbol: dict[date, "EarningsCalendarSnap"] | None = None,
     ec_snap_dates_sorted: list[date] | None = None,
-) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Build (financials_quarterly, financials_annually) for one stock.
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Build (financials_quarterly, financials_annually, report_table_quarterly,
+    report_table_annual) for one stock.
+
+    The two ``report_table_*`` frames are the per-symbol chronological axes
+    of ``(reportedDate, fiscalDateEnding, reportTime)`` constructed
+    internally by Phase 6c. They are returned so the orchestrator can
+    persist them as ``report_table_quarterly.parquet`` and
+    ``report_table_annual.parquet`` next to the AssetData frames -- a
+    cache for the incremental build path (see ``SPEC.md``: "Incremental
+    mode"). Both are empty schema-only frames in every early-return case
+    (no shareprice_daily, no earnings file, reportedDate mismatch).
 
     See ``data_transformation/SPEC.md`` for the full design.
 
@@ -637,12 +638,13 @@ def build_financials(
         ec_snap_dates_sorted = []
     empty_q = pl.DataFrame(schema=SCHEMAS["financials_quarterly"])
     empty_a = pl.DataFrame(schema=SCHEMAS["financials_annually"])
+    empty_rt = pl.DataFrame(schema=REPORT_TABLE_SCHEMA)
 
     if shareprice_daily.is_empty() or "Date" not in shareprice_daily.columns:
-        return empty_q, empty_a
+        return empty_q, empty_a, empty_rt, empty_rt
     dates: list[date] = shareprice_daily["Date"].to_list()
     if not dates:
-        return empty_q, empty_a
+        return empty_q, empty_a, empty_rt, empty_rt
 
     snapshots, historical = _organize_paths(source_paths)
     snapshot_dates_sorted = sorted(snapshots.keys())
@@ -657,19 +659,19 @@ def build_financials(
             "financials_no_earnings_file", count=1,
             detail="no earnings/SYMBOL_quarterly.parquet anywhere",
         )
-        return empty_q, empty_a
+        return empty_q, empty_a, empty_rt, empty_rt
 
     # All-snapshot earnings union with reportedDate consistency check.
     earnings_q_union, mismatch = _union_earnings_with_consistency(
         symbol, "_quarterly", snapshots, historical, report,
     )
     if mismatch:
-        return empty_q, empty_a
+        return empty_q, empty_a, empty_rt, empty_rt
     earnings_a_union, mismatch_a = _union_earnings_with_consistency(
         symbol, "_annual", snapshots, historical, report,
     )
     if mismatch_a:
-        return empty_q, empty_a
+        return empty_q, empty_a, empty_rt, empty_rt
 
     # Latest extended estimates.
     latest_estimates_q = _latest_dataframe(
@@ -707,7 +709,51 @@ def build_financials(
     est_q_lookup = FdeLookup(estimates_q_extended)
     est_a_lookup = FdeLookup(latest_estimates_a)
 
-    # Per-d row construction with snapshot caching.
+    quarterly_rows, annual_rows = _compute_per_date_financials(
+        symbol, dates,
+        snapshot_dates_sorted, snapshots, historical,
+        rt_rows, n_known_q, rt_known_rd,
+        rt_a_rows, n_known_a, rt_a_known_rd,
+        est_q_lookup, est_a_lookup,
+        ec_index_for_symbol, ec_snap_dates_sorted,
+        report,
+    )
+
+    q_df = pl.DataFrame(
+        quarterly_rows, schema=SCHEMAS["financials_quarterly"],
+    )
+    a_df = pl.DataFrame(
+        annual_rows, schema=SCHEMAS["financials_annually"],
+    )
+    return q_df, a_df, report_table, report_table_annual
+
+
+def _compute_per_date_financials(
+    symbol: str,
+    dates: list[date],
+    snapshot_dates_sorted: list[date],
+    snapshots: dict[date, dict[tuple[str, str], Path]],
+    historical: dict[tuple[str, str], Path],
+    rt_rows: list[dict[str, Any]],
+    n_known_q: int,
+    rt_known_rd: list[date],
+    rt_a_rows: list[dict[str, Any]],
+    n_known_a: int,
+    rt_a_known_rd: list[date],
+    est_q_lookup: FdeLookup,
+    est_a_lookup: FdeLookup,
+    ec_index_for_symbol: dict[date, "EarningsCalendarSnap"],
+    ec_snap_dates_sorted: list[date],
+    report: TransformationReport,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Walk *dates* in order, computing one quarterly and one annual
+    financials row per d (or empty defensive rows when m_anchor cannot
+    be resolved). Flushes accumulated per-symbol issue logs to *report*
+    after the walk. Returns ``(quarterly_rows, annual_rows)``.
+
+    The snapshot lookups are cached across consecutive ds that resolve
+    to the same snap_date, to avoid reopening four parquet files per d.
+    """
     quarterly_rows: list[dict[str, Any]] = []
     annual_rows: list[dict[str, Any]] = []
 
@@ -868,13 +914,7 @@ def build_financials(
                 ),
             )
 
-    q_df = pl.DataFrame(
-        quarterly_rows, schema=SCHEMAS["financials_quarterly"],
-    )
-    a_df = pl.DataFrame(
-        annual_rows, schema=SCHEMAS["financials_annually"],
-    )
-    return q_df, a_df
+    return quarterly_rows, annual_rows
 
 
 def _build_empty_quarterly_row(d: date) -> dict[str, Any]:
@@ -1118,3 +1158,256 @@ def _build_annual_row(
                 row[f"{fld_name}_ap_{suffix}"] = None
 
     return row
+
+
+# ---------------------------------------------------------------------------
+# build_financials_incremental
+# ---------------------------------------------------------------------------
+
+def _cached_earnings_rows(
+    cached_rt: pl.DataFrame, source_tag: str,
+) -> tuple[list[dict[str, Any]], set[date], dict[date, date]]:
+    """Pull (rd, fde, reportTime) past-entry rows tagged *source_tag* out
+    of a cached report_table parquet.
+
+    Returns ``(past_rows, fde_set, rd_by_fde)`` where ``past_rows`` is
+    the list of dicts ready to feed back into
+    :func:`_build_report_table_from_past_rows`, ``fde_set`` is their
+    fiscalDateEndings, and ``rd_by_fde`` maps fde -> reportedDate for the
+    cross-snapshot consistency check.
+    """
+    past: list[dict[str, Any]] = []
+    fdes: set[date] = set()
+    rd_by_fde: dict[date, date] = {}
+    if cached_rt.is_empty() or "_source" not in cached_rt.columns:
+        return past, fdes, rd_by_fde
+    sub = cached_rt.filter(pl.col("_source") == source_tag)
+    for r in sub.iter_rows(named=True):
+        rd = r.get("reportedDate")
+        fde = r.get("fiscalDateEnding")
+        if rd is None or fde is None:
+            continue
+        past.append({
+            "reportedDate": rd,
+            "fiscalDateEnding": fde,
+            "reportTime": r.get("reportTime"),
+            "_source": source_tag,
+        })
+        fdes.add(fde)
+        rd_by_fde[fde] = rd
+    return past, fdes, rd_by_fde
+
+
+def build_financials_incremental(
+    symbol: str,
+    updated_sp_daily: pl.DataFrame,
+    overview_row: dict | None,
+    new_source_paths: dict[tuple[str, str], list[Path]],
+    existing_fin_q: pl.DataFrame,
+    existing_fin_a: pl.DataFrame,
+    cached_rt_q: pl.DataFrame,
+    cached_rt_a: pl.DataFrame,
+    report: TransformationReport,
+    ec_index_for_symbol: dict[date, "EarningsCalendarSnap"] | None = None,
+    ec_snap_dates_sorted: list[date] | None = None,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Incremental variant of :func:`build_financials`.
+
+    Reuses cached report-table past entries (``_source="earnings_q"`` /
+    ``"earnings_a"``) across runs to avoid re-scanning every historical /
+    daily snapshot's earnings file. Refreshes the next-upcoming entry
+    (``_source="overview"``) and future-extension rows
+    (``_source="estimate"``) from the current ``overview_row`` and the
+    latest estimates available in *new_source_paths*. Computes per-row
+    financials only for dates in ``updated_sp_daily.Date`` not already
+    present in ``existing_fin_q.Date``; old rows are left untouched.
+
+    Trade-off vs. fresh mode: a retroactive change to an OLDER quarter's
+    statement data (after the quarter is already in the saved frame)
+    will not be picked up. A retroactive change to an OLDER quarter's
+    ``reportedDate`` IS detected (cross-snapshot consistency check
+    against cached) and triggers a ``financials_reportedDate_mismatch``
+    + full no-op like fresh mode does. Run ``--rebuild`` to recover
+    from either trade-off.
+
+    Returns ``(financials_quarterly, financials_annually,
+    report_table_quarterly, report_table_annual)`` in the same shape as
+    :func:`build_financials`. The two report tables are the *updated*
+    versions (cached past + freshly recomputed overview/estimate tails).
+    """
+    if ec_index_for_symbol is None:
+        ec_index_for_symbol = {}
+    if ec_snap_dates_sorted is None:
+        ec_snap_dates_sorted = []
+    empty_q = pl.DataFrame(schema=SCHEMAS["financials_quarterly"])
+    empty_a = pl.DataFrame(schema=SCHEMAS["financials_annually"])
+    empty_rt = pl.DataFrame(schema=REPORT_TABLE_SCHEMA)
+
+    if updated_sp_daily.is_empty() or "Date" not in updated_sp_daily.columns:
+        return existing_fin_q, existing_fin_a, cached_rt_q, cached_rt_a
+
+    # New dates: in updated_sp_daily but not in existing_fin_q.
+    existing_dates: set[date] = set()
+    if not existing_fin_q.is_empty() and "Date" in existing_fin_q.columns:
+        existing_dates = set(existing_fin_q["Date"].to_list())
+    full_dates = updated_sp_daily["Date"].to_list()
+    new_dates = [d for d in full_dates if d not in existing_dates]
+    if not new_dates:
+        # Nothing new -> hand back inputs as-is.
+        return existing_fin_q, existing_fin_a, cached_rt_q, cached_rt_a
+
+    snapshots, historical = _organize_paths(new_source_paths)
+    snapshot_dates_sorted = sorted(snapshots.keys())
+
+    # Pull cached past entries (PIT-correct: kept across runs).
+    cached_q_past, cached_q_fdes, cached_q_rd_by_fde = _cached_earnings_rows(
+        cached_rt_q, "earnings_q",
+    )
+    cached_a_past, cached_a_fdes, _cached_a_rd = _cached_earnings_rows(
+        cached_rt_a, "earnings_a",
+    )
+
+    # New earnings_q rows from new snapshots, with the same per-union
+    # reportedDate consistency check that fresh mode uses on its full
+    # snapshot set. The check is intra-new-snapshots only here; the
+    # cross-check against cached is below.
+    new_earnings_q_union, mismatch_q = _union_earnings_with_consistency(
+        symbol, "_quarterly", snapshots, historical, report,
+    )
+    if mismatch_q:
+        return empty_q, empty_a, empty_rt, empty_rt
+    new_earnings_a_union, mismatch_a = _union_earnings_with_consistency(
+        symbol, "_annual", snapshots, historical, report,
+    )
+    if mismatch_a:
+        return empty_q, empty_a, empty_rt, empty_rt
+
+    # Cross-snapshot reportedDate consistency: new earnings_q row's fde
+    # may not be in cached, but if it IS the cached rd must match.
+    # An empty cached_q_past combined with an empty union is fine (no
+    # earnings ever, will fall through to "no_earnings_file" below).
+    if not new_earnings_q_union.is_empty():
+        for r in new_earnings_q_union.iter_rows(named=True):
+            fde = r.get("fiscalDateEnding")
+            rd = r.get("reportedDate")
+            if fde is None or rd is None:
+                continue
+            cached_rd = cached_q_rd_by_fde.get(fde)
+            if cached_rd is not None and cached_rd != rd:
+                report.record(
+                    symbol, "stocks", "financials_quarterly",
+                    "financials_reportedDate_mismatch", count=1,
+                    detail=(
+                        f"fde={fde.isoformat()} reportedDate "
+                        f"{cached_rd.isoformat()} (cached) vs "
+                        f"{rd.isoformat()} (new)"
+                    ),
+                )
+                return empty_q, empty_a, empty_rt, empty_rt
+
+    # If there are no earnings_q anywhere (cached or new), behave like
+    # fresh mode does: financials_no_earnings_file + empty.
+    has_any_q = bool(cached_q_past) or not new_earnings_q_union.is_empty()
+    if not has_any_q:
+        report.record(
+            symbol, "stocks", "financials_quarterly",
+            "financials_no_earnings_file", count=1,
+            detail="no earnings/SYMBOL_quarterly.parquet anywhere",
+        )
+        return empty_q, empty_a, empty_rt, empty_rt
+
+    # Append new-only earnings_q past rows (skipping fdes already cached).
+    new_q_past: list[dict[str, Any]] = []
+    if not new_earnings_q_union.is_empty():
+        for r in new_earnings_q_union.iter_rows(named=True):
+            fde = r.get("fiscalDateEnding")
+            rd = r.get("reportedDate")
+            if fde is None or rd is None:
+                continue
+            if fde in cached_q_fdes:
+                continue
+            new_q_past.append({
+                "reportedDate": rd,
+                "fiscalDateEnding": fde,
+                "reportTime": _normalize_report_time(r.get("reportTime")),
+                "_source": "earnings_q",
+            })
+
+    # Refresh latest estimates from new snapshots / historical (fresh
+    # mode's _latest_path naturally picks the highest snap_date).
+    latest_estimates_q = _latest_dataframe(
+        snapshots, historical, ("earnings_estimates", "_quarterly"),
+    )
+    latest_estimates_a = _latest_dataframe(
+        snapshots, historical, ("earnings_estimates", "_annual"),
+    )
+    estimates_q_extended = _extend_quarterly_estimates_with_annual(
+        latest_estimates_q, latest_estimates_a,
+    )
+
+    # Build the updated quarterly report_table: cached earnings_q rows +
+    # new earnings_q rows + fresh next-upcoming + fresh future-extension.
+    updated_rt_q = _build_report_table_from_past_rows(
+        cached_q_past + new_q_past, overview_row, estimates_q_extended,
+    )
+
+    # Annual past: match new earnings_a fdes to the UPDATED quarterly
+    # report_table, then drop any whose fde is already cached.
+    new_a_past_all = _earnings_a_past_rows(
+        symbol, new_earnings_a_union, updated_rt_q, report,
+    )
+    new_a_past = [r for r in new_a_past_all if r["fiscalDateEnding"] not in cached_a_fdes]
+    updated_rt_a = _build_annual_report_table_from_past_rows(
+        cached_a_past + new_a_past, latest_estimates_a,
+    )
+
+    # Prep state for the per-d walk over new_dates only.
+    rt_rows = updated_rt_q.to_dicts() if not updated_rt_q.is_empty() else []
+    n_known_q = (
+        updated_rt_q.filter(pl.col("reportedDate").is_not_null()).height
+        if not updated_rt_q.is_empty() else 0
+    )
+    rt_known_rd = [rt_rows[i]["reportedDate"] for i in range(n_known_q)]
+
+    rt_a_rows = updated_rt_a.to_dicts() if not updated_rt_a.is_empty() else []
+    n_known_a = (
+        updated_rt_a.filter(pl.col("reportedDate").is_not_null()).height
+        if not updated_rt_a.is_empty() else 0
+    )
+    rt_a_known_rd = [rt_a_rows[i]["reportedDate"] for i in range(n_known_a)]
+
+    est_q_lookup = FdeLookup(estimates_q_extended)
+    est_a_lookup = FdeLookup(latest_estimates_a)
+
+    new_q_rows_list, new_a_rows_list = _compute_per_date_financials(
+        symbol, new_dates,
+        snapshot_dates_sorted, snapshots, historical,
+        rt_rows, n_known_q, rt_known_rd,
+        rt_a_rows, n_known_a, rt_a_known_rd,
+        est_q_lookup, est_a_lookup,
+        ec_index_for_symbol, ec_snap_dates_sorted,
+        report,
+    )
+
+    new_q_df = pl.DataFrame(
+        new_q_rows_list, schema=SCHEMAS["financials_quarterly"],
+    )
+    new_a_df = pl.DataFrame(
+        new_a_rows_list, schema=SCHEMAS["financials_annually"],
+    )
+
+    # Concat existing + new, preserving Date order. Existing comes first
+    # because its dates are all strictly older than new_dates (new_dates
+    # are dates NOT present in existing_fin_q.Date, and shareprice_daily
+    # is sorted ascending, so existing_fin_q.Date is also sorted and the
+    # set difference yields the chronological tail).
+    combined_q = (
+        pl.concat([existing_fin_q, new_q_df], how="vertical_relaxed")
+        if not existing_fin_q.is_empty() else new_q_df
+    )
+    combined_a = (
+        pl.concat([existing_fin_a, new_a_df], how="vertical_relaxed")
+        if not existing_fin_a.is_empty() else new_a_df
+    )
+
+    return combined_q, combined_a, updated_rt_q, updated_rt_a

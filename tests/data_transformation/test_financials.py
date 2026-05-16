@@ -35,6 +35,7 @@ from data_transformation.AssetData import StockData
 from data_transformation.AssetDataService import SCHEMAS
 from data_transformation.frames._report_table import (
     FISCAL_MATCH_DAYS,
+    REPORT_TABLE_SCHEMA,
     _build_report_table,
     _normalize_report_time,
 )
@@ -284,7 +285,7 @@ def _gather_source_paths(root: Path, symbol: str = "AAPL") -> dict[tuple[str, st
 
 def test_empty_inputs_returns_schema_correct_empty(tmp_path):
     sd = _sd_frame([])
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _empty_source_paths(), TransformationReport(),
     )
     assert fin_q.height == 0
@@ -298,7 +299,7 @@ def test_no_earnings_file_logs_and_returns_empty(tmp_path):
     logs 'financials_no_earnings_file' and returns empty frames."""
     sd = _sd_frame([date(2026, 4, 15)])
     report = TransformationReport()
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _empty_source_paths(), report,
     )
     assert fin_q.height == 0
@@ -339,7 +340,7 @@ def test_single_past_quarter_populates_qm1(tmp_path):
     }
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     assert fin_q.height == 1
@@ -377,7 +378,7 @@ def test_no_anchor_nulls_every_financials_cell(tmp_path):
 
     d = date(2026, 4, 15)  # 622 days past past_rd, well beyond tolerance
     sd = _sd_frame([d])
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -423,7 +424,7 @@ def test_soft_no_anchor_within_tolerance_keeps_past_quarters(tmp_path):
     d = date(2026, 5, 31)  # 30 days past past_rd, well within 60-day tol
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path), report,
     )
     assert fin_q.height == 1
@@ -471,7 +472,7 @@ def test_d_before_every_reporteddate_qm0_fills_from_earliest(tmp_path):
 
     d = date(2026, 7, 25)  # 7 days before reportedDate (within 14d window)
     sd = _sd_frame([d])
-    fin_q, _fin_a = build_financials(
+    fin_q, _fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -507,7 +508,7 @@ def test_late_filer_ordering_in_report_table(tmp_path):
 
     d = date(2026, 3, 5)  # between Q4.rd and Q3.rd, within 14d of q3_rd
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -570,7 +571,7 @@ def test_annual_no_quarterly_match_drops_unaligned(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    _fin_q, fin_a = build_financials(
+    _fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path), report,
     )
     # annual_no_quarterly_match logged exactly once (count=1).
@@ -679,7 +680,7 @@ def test_all_snapshots_earnings_q_union(tmp_path):
 
     sd = _sd_frame([date(2026, 5, 5)])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path), report,
     )
     assert fin_q.height == 1
@@ -711,7 +712,7 @@ def test_snapshot_fallback_uses_most_recent_earlier(tmp_path):
     d = date(2026, 4, 15)  # no daily/<d>/, must fall back to 2026-04-01
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
@@ -738,7 +739,7 @@ def test_no_daily_uses_historical_no_fallback_log(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
@@ -769,7 +770,7 @@ def test_fiscaldateending_5d_offset_matches_within_margin(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
@@ -804,7 +805,7 @@ def test_fiscaldateending_15d_offset_unmatched_logged(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
@@ -834,7 +835,7 @@ def test_estimate_match_within_9d_populates_with_signed_diff(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     row = fin_q.row(0, named=True)
@@ -870,7 +871,7 @@ def test_estimate_offset_12d_unmatched_logged(tmp_path):
     d = date(2026, 4, 15)
     sd = _sd_frame([d])
     report = TransformationReport()
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path), report,
     )
     # m_anchor = 1 (upcoming entry is the only known reportedDate >= d).
@@ -897,7 +898,7 @@ def test_days_to_fiscal_dateending_positive_for_past_quarter(tmp_path):
     overview_row = {"reportedDate": upcoming_rd, "timeOfTheDay": "post-market"}
     d = date(2026, 3, 31)  # 30 days after past_fde, before upcoming_rd
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -920,7 +921,7 @@ def test_days_to_fiscal_dateending_negative_for_upcoming_quarter(tmp_path):
     overview_row = {"reportedDate": upcoming_rd, "timeOfTheDay": "post-market"}
     d = date(2026, 6, 28)  # 2 days before fde, 12 days before rd
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -942,7 +943,7 @@ def test_reportedate_mismatch_triggers_full_noop(tmp_path):
 
     sd = _sd_frame([date(2026, 4, 15)])
     report = TransformationReport()
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path), report,
     )
     assert fin_q.height == 0
@@ -1004,7 +1005,7 @@ def test_no_upcoming_entry_when_no_estimate_beyond_past(tmp_path):
                     "timeOfTheDay": "post-market"}
     d = date(2026, 4, 15)  # past every reportedDate in report_table
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -1066,7 +1067,7 @@ def test_output_schema_exact_quarterly_and_annual(tmp_path):
     _write(_hist_path(tmp_path, "earnings", "_quarterly"),
            [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
     sd = _sd_frame([date(2026, 3, 31)])
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -1228,7 +1229,7 @@ def test_round_trip_via_stockdata(tmp_path):
     _write(_hist_path(tmp_path, "income_statement", "_quarterly"),
            [_is_row(past_fde, past_rd, total_revenue=4.4e9)], _IS_SCHEMA)
     sd = _sd_frame([date(2026, 4, 15)])
-    fin_q, fin_a = build_financials(
+    fin_q, fin_a, _, _ = build_financials(
         "AAPL", sd, None, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -1301,7 +1302,7 @@ def test_qm0_gated_in_by_earnings_calendar(tmp_path):
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
     ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
         ec_index_for_symbol=ec_for_symbol,
@@ -1347,7 +1348,7 @@ def test_qm0_gated_out_when_calendar_max_rd_le_d(tmp_path):
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
     ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
         ec_index_for_symbol=ec_for_symbol,
@@ -1389,7 +1390,7 @@ def test_qm0_gated_out_when_calendar_lacks_symbol(tmp_path):
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
     ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
         ec_index_for_symbol=ec_for_symbol,
@@ -1431,7 +1432,7 @@ def test_qm0_uses_max_reporteddate_when_calendar_has_multiple_rows(tmp_path):
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
     ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
         ec_index_for_symbol=ec_for_symbol,
@@ -1472,7 +1473,7 @@ def test_qm0_calendar_fallback_to_earlier_snapshot(tmp_path):
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
     ec_for_symbol, ec_snap_dates = _ec_index_for_test(tmp_path)
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
         ec_index_for_symbol=ec_for_symbol,
@@ -1502,7 +1503,7 @@ def test_qm0_14_day_rule_when_no_calendar_snapshot(tmp_path):
     overview_row = {"reportedDate": upcoming_rd,
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -1530,7 +1531,7 @@ def test_qm0_14_day_rule_outside_window_nulls(tmp_path):
     overview_row = {"reportedDate": upcoming_rd,
                     "timeOfTheDay": "post-market"}
     sd = _sd_frame([d])
-    fin_q, _ = build_financials(
+    fin_q, _, _, _ = build_financials(
         "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
         TransformationReport(),
     )
@@ -1546,3 +1547,323 @@ def test_qm0_14_day_rule_outside_window_nulls(tmp_path):
 
 def test_no_ec_pre_report_days_constant():
     assert NO_EC_PRE_REPORT_DAYS == 14
+
+
+# ── 24. report_table cache files ─────────────────────────────────────────────
+
+def test_build_financials_returns_report_tables_with_known_and_upcoming(tmp_path):
+    """The quarterly report_table returned by build_financials carries the
+    past entry from earnings_q and the next-upcoming entry assembled from
+    overview_row + the smallest estimate fde beyond it. Schema is the
+    public REPORT_TABLE_SCHEMA."""
+    past_fde = date(2025, 12, 31)
+    past_rd  = date(2026, 2, 1)
+    upcoming_fde = date(2026, 3, 31)
+    upcoming_rd = date(2026, 5, 1)
+
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd, rt="pre-market")],
+           _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings_estimates", "_quarterly"),
+           [_ee_row(upcoming_fde)], _EE_Q_SCHEMA)
+
+    overview_row = {"reportedDate": upcoming_rd,
+                    "timeOfTheDay": "post-market"}
+    sd = _sd_frame([date(2026, 4, 15)])
+    _fin_q, _fin_a, rt_q, rt_a = build_financials(
+        "AAPL", sd, overview_row, _gather_source_paths(tmp_path),
+        TransformationReport(),
+    )
+
+    assert dict(rt_q.schema) == REPORT_TABLE_SCHEMA
+    assert dict(rt_a.schema) == REPORT_TABLE_SCHEMA
+    rows = rt_q.to_dicts()
+    # Past entry first (sorted by reportedDate ascending), then upcoming.
+    # _source tags the origin so the incremental rebuild path can tell
+    # PIT-correct past entries from refreshable next-upcoming rows.
+    assert rows[0] == {
+        "reportedDate": past_rd,
+        "fiscalDateEnding": past_fde,
+        "reportTime": "pre-market",
+        "_source": "earnings_q",
+    }
+    assert rows[1] == {
+        "reportedDate": upcoming_rd,
+        "fiscalDateEnding": upcoming_fde,
+        "reportTime": "post-market",
+        "_source": "overview",
+    }
+
+
+def test_build_financials_empty_returns_empty_schema_only_report_tables(tmp_path):
+    """No earnings file -> both financials frames AND both report_tables come
+    back as empty schema-only frames (not None)."""
+    # _gather_source_paths returns the empty {(ep, suf): []} structure when
+    # no fundamentals files exist; build_financials short-circuits on
+    # has_eq=False and returns the no-earnings-file empty payload.
+    sd = _sd_frame([date(2026, 4, 15)])
+    fin_q, fin_a, rt_q, rt_a = build_financials(
+        "AAPL", sd, None, _gather_source_paths(tmp_path),
+        TransformationReport(),
+    )
+    assert fin_q.is_empty()
+    assert fin_a.is_empty()
+    assert rt_q.is_empty()
+    assert rt_a.is_empty()
+    assert dict(rt_q.schema) == REPORT_TABLE_SCHEMA
+    assert dict(rt_a.schema) == REPORT_TABLE_SCHEMA
+
+
+def test_cli_writes_report_table_parquet_files_next_to_assetdata(tmp_path):
+    """A full CLI run writes ``report_table_quarterly.parquet`` and
+    ``report_table_annual.parquet`` to the per-symbol folder alongside the
+    AssetData frames. Contents round-trip exactly to what build_financials
+    would return for the same inputs."""
+    cat, historical, daily = _build_minimal_stocks_universe(tmp_path)
+    past_fde = date(2026, 3, 1)
+    past_rd  = date(2026, 3, 25)
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(tmp_path, "earnings", "_annual"),
+           [_earnings_a(past_fde)], _EARNINGS_A_SCHEMA)
+    dest = tmp_path / "transformed"
+    r = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--asset-types", "stocks",
+    )
+    assert r.returncode == 0, r.stderr
+
+    sym_dir = dest / "stocks" / "data_AAPL"
+    rt_q_path = sym_dir / "report_table_quarterly.parquet"
+    rt_a_path = sym_dir / "report_table_annual.parquet"
+    assert rt_q_path.exists()
+    assert rt_a_path.exists()
+
+    rt_q = pl.read_parquet(rt_q_path)
+    rt_a = pl.read_parquet(rt_a_path)
+    assert dict(rt_q.schema) == REPORT_TABLE_SCHEMA
+    assert dict(rt_a.schema) == REPORT_TABLE_SCHEMA
+
+    # The minimal universe seeds an upcoming reportedDate of 2026-07-25 via
+    # the earnings_calendar; with no estimates beyond past_fde the upcoming
+    # entry can't be assembled (no estimate fde > past_fde), so report_table
+    # carries only the one past entry.
+    assert rt_q.to_dicts() == [{
+        "reportedDate": past_rd,
+        "fiscalDateEnding": past_fde,
+        "reportTime": "post-market",
+        "_source": "earnings_q",
+    }]
+    # The annual report_table matches the past annual fde to the quarterly
+    # row above (within +/-10d).
+    assert rt_a.to_dicts() == [{
+        "reportedDate": past_rd,
+        "fiscalDateEnding": past_fde,
+        "reportTime": "post-market",
+        "_source": "earnings_a",
+    }]
+
+
+def test_cli_skip_financials_does_not_write_report_table_cache(tmp_path):
+    """``--skip-financials`` short-circuits Phase 6c entirely; no
+    ``report_table_*.parquet`` files are written."""
+    cat, historical, daily = _build_minimal_stocks_universe(tmp_path)
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(date(2026, 3, 1), date(2026, 3, 25))],
+           _EARNINGS_Q_SCHEMA)
+    dest = tmp_path / "transformed"
+    r = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--asset-types", "stocks",
+        "--skip-financials",
+    )
+    assert r.returncode == 0, r.stderr
+
+    sym_dir = dest / "stocks" / "data_AAPL"
+    assert not (sym_dir / "report_table_quarterly.parquet").exists()
+    assert not (sym_dir / "report_table_annual.parquet").exists()
+
+
+def test_cli_rebuild_wipes_report_table_cache(tmp_path):
+    """``--rebuild`` removes the per-symbol folder, taking the cached
+    report_table files with it; the next run produces them fresh."""
+    cat, historical, daily = _build_minimal_stocks_universe(tmp_path)
+    _write(_hist_path(tmp_path, "earnings", "_quarterly"),
+           [_earnings_q(date(2026, 3, 1), date(2026, 3, 25))],
+           _EARNINGS_Q_SCHEMA)
+    dest = tmp_path / "transformed"
+
+    r1 = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--asset-types", "stocks",
+    )
+    assert r1.returncode == 0, r1.stderr
+    rt_q_path = dest / "stocks" / "data_AAPL" / "report_table_quarterly.parquet"
+    assert rt_q_path.exists()
+    mtime_before = rt_q_path.stat().st_mtime_ns
+
+    r2 = _run_cli(
+        "--catalog-dir", str(cat),
+        "--historical-dir", str(historical),
+        "--daily-dir", str(daily),
+        "--dest-dir", str(dest),
+        "--asset-types", "stocks",
+        "--rebuild",
+    )
+    assert r2.returncode == 0, r2.stderr
+    assert rt_q_path.exists()
+    assert rt_q_path.stat().st_mtime_ns != mtime_before
+
+
+# ── 25. Incremental financials end-to-end ────────────────────────────────────
+
+def _add_daily_snapshot(tmp_path: Path, snap_date: date,
+                       *, fde: date, rd: date,
+                       new_price_row_date: date,
+                       close: float = 105.0) -> None:
+    """Append a new daily folder with: a new shareprice_daily row, a new
+    earnings_quarterly row, a new income_statement_quarterly row, and a
+    new earnings_calendar pointing further ahead. Used by the financials
+    incremental integration test."""
+    daily_schema = {
+        "Date": pl.Date, "Open": pl.Float32, "High": pl.Float32,
+        "Low": pl.Float32, "Close": pl.Float32, "Volume": pl.Float32,
+        "DividendAmount": pl.Float32, "SplitCoefficient": pl.Float32,
+    }
+    pdp = (tmp_path / "daily" / snap_date.isoformat() / "stocks"
+           / "prices_daily" / "stocks_AAPL.parquet")
+    pdp.parent.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame([{
+        "Date": new_price_row_date, "Open": close, "High": close,
+        "Low": close, "Close": close, "Volume": 2000.0,
+        "DividendAmount": 0.0, "SplitCoefficient": 1.0,
+    }], schema=daily_schema).write_parquet(pdp)
+
+    # New earnings_q and income_statement_q at fde / rd.
+    _write(_daily_path(tmp_path, snap_date, "earnings", "_quarterly"),
+           [_earnings_q(fde, rd)], _EARNINGS_Q_SCHEMA)
+    _write(_daily_path(tmp_path, snap_date, "income_statement", "_quarterly"),
+           [_is_row(fde, rd, total_revenue=3.0e9)], _IS_SCHEMA)
+    # Refresh earnings_calendar pointing one quarter further out.
+    _write_ec(tmp_path, snap_date, [{
+        "symbol": "AAPL",
+        "reportedDate": date(rd.year, rd.month, rd.day),
+        "fiscalDateEnding": fde,
+        "timeOfTheDay": "post-market",
+    }])
+
+
+def test_cli_incremental_financials_matches_full_rebuild(tmp_path_factory):
+    """End-to-end financials parity:
+
+      Path A: build universe with historical earnings + ONE daily folder
+              in a single fresh run.
+      Path B: build historical-only first, then incrementally add the
+              same daily folder. The dispatch should load existing
+              parquets and call build_financials_incremental.
+
+    Compare financials_quarterly.parquet, financials_annually.parquet,
+    and the report_table cache files. Same content should land regardless
+    of path (modulo dict-ordering on the _source enum, which we sort).
+    """
+    # Path A
+    root_a = tmp_path_factory.mktemp("a")
+    cat_a, hist_a, daily_a = _build_minimal_stocks_universe(root_a)
+    past_fde = date(2026, 3, 31)
+    past_rd = date(2026, 4, 30)
+    _write(_hist_path(root_a, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(root_a, "income_statement", "_quarterly"),
+           [_is_row(past_fde, past_rd, total_revenue=2.5e9)], _IS_SCHEMA)
+    # Add daily folder with one new shareprice row.
+    _add_daily_snapshot(
+        root_a, snap_date=date(2026, 4, 16),
+        fde=past_fde, rd=past_rd,
+        new_price_row_date=date(2026, 4, 16),
+    )
+    dest_a = root_a / "transformed"
+    r_a = _run_cli(
+        "--catalog-dir", str(cat_a),
+        "--historical-dir", str(hist_a),
+        "--daily-dir", str(daily_a),
+        "--dest-dir", str(dest_a),
+        "--asset-types", "stocks",  # no metadata exists -> fresh dispatch
+    )
+    assert r_a.returncode == 0, r_a.stderr
+
+    # Path B: same seed, but historical-only first run, then incremental.
+    root_b = tmp_path_factory.mktemp("b")
+    cat_b, hist_b, daily_b = _build_minimal_stocks_universe(root_b)
+    _write(_hist_path(root_b, "earnings", "_quarterly"),
+           [_earnings_q(past_fde, past_rd)], _EARNINGS_Q_SCHEMA)
+    _write(_hist_path(root_b, "income_statement", "_quarterly"),
+           [_is_row(past_fde, past_rd, total_revenue=2.5e9)], _IS_SCHEMA)
+    dest_b = root_b / "transformed"
+    r_b1 = _run_cli(
+        "--catalog-dir", str(cat_b),
+        "--historical-dir", str(hist_b),
+        "--daily-dir", str(daily_b),
+        "--dest-dir", str(dest_b),
+        "--asset-types", "stocks",
+    )
+    assert r_b1.returncode == 0, r_b1.stderr
+
+    _add_daily_snapshot(
+        root_b, snap_date=date(2026, 4, 16),
+        fde=past_fde, rd=past_rd,
+        new_price_row_date=date(2026, 4, 16),
+    )
+    r_b2 = _run_cli(
+        "--catalog-dir", str(cat_b),
+        "--historical-dir", str(hist_b),
+        "--daily-dir", str(daily_b),
+        "--dest-dir", str(dest_b),
+        "--asset-types", "stocks",
+    )
+    assert r_b2.returncode == 0, r_b2.stderr
+
+    # Cross-path equality on the financials frames.
+    for sym_relpath in (
+        "stocks/data_AAPL/financials_quarterly.parquet",
+        "stocks/data_AAPL/financials_annually.parquet",
+    ):
+        a = pl.read_parquet(dest_a / sym_relpath)
+        b = pl.read_parquet(dest_b / sym_relpath)
+        # Categorical reportTime columns project to Utf8 for comparison.
+        cat_cols = [
+            c for c, t in a.schema.items()
+            if t.base_type() == pl.Categorical
+        ]
+        if cat_cols:
+            a = a.with_columns([pl.col(c).cast(pl.Utf8) for c in cat_cols])
+            b = b.with_columns([pl.col(c).cast(pl.Utf8) for c in cat_cols])
+        assert a.height == b.height, (
+            f"row count mismatch at {sym_relpath}: a={a.height} b={b.height}"
+        )
+        assert a.equals(b), (
+            f"frame mismatch at {sym_relpath}\n"
+            f"path-A:\n{a}\n\n"
+            f"path-B (incremental):\n{b}"
+        )
+
+    # Report-table caches: same row content (sorted for stability).
+    for sym_relpath in (
+        "stocks/data_AAPL/report_table_quarterly.parquet",
+        "stocks/data_AAPL/report_table_annual.parquet",
+    ):
+        a = pl.read_parquet(dest_a / sym_relpath).sort(
+            ["_source", "fiscalDateEnding"]
+        )
+        b = pl.read_parquet(dest_b / sym_relpath).sort(
+            ["_source", "fiscalDateEnding"]
+        )
+        assert a.rows() == b.rows(), f"report_table mismatch at {sym_relpath}"

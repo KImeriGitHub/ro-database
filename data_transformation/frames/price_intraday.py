@@ -40,26 +40,49 @@ def build_shareprice_intraday(
     paths: list[Path],
     daily_dates: pl.Series,
     report: TransformationReport,
+    *,
+    existing: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """Build the ``shareprice_intraday`` frame for one stocks/etfs symbol.
 
     *daily_dates* is the ``shareprice_daily.Date`` column for the same
-    symbol (post null-row drop). Intraday rows whose calendar date is
-    not in this set are dropped as orphans.
+    symbol (post null-row drop, post any incremental merge). Intraday
+    rows whose calendar date is not in this set are dropped as orphans.
 
-    *paths* is the symbol's prices/ source list (historical + every daily
-    folder). Returns an empty schema-correct frame when no usable data is
-    available.
+    *paths* is the symbol's prices/ source list. In fresh mode this is
+    every available source (historical + every daily). In incremental
+    mode (when *existing* is provided) it must contain only the *new*
+    daily files; the existing frame is attached as the earliest source
+    so ``keep="last"`` lets new daily values restate overlapping
+    ``Datetime`` rows, and ``suppress_historic_boundary`` is disabled.
 
     Output is raw OHLCV; no adjustment is applied here. Null OHLCV
     fields are *not* dropped (per spec); the count is recorded in
     ``transformation_report`` as ``intraday_null_field``.
     """
     empty = pl.DataFrame(schema=SCHEMAS["shareprice_intraday"])
-    if not paths:
+    incremental = existing is not None
+
+    if incremental and not paths:
+        # No new daily files. Re-apply the orphan filter against the
+        # (possibly extended) daily_dates and return.
+        if existing.is_empty():
+            return empty
+        filtered = _drop_orphan_dates(
+            existing, daily_dates, symbol, asset_type, report,
+        )
+        if filtered.height == 0:
+            return empty
+        return cast_to_schema(
+            filtered, SCHEMAS["shareprice_intraday"], "shareprice_intraday",
+        )
+    if not paths and not incremental:
         return empty
 
     frames: list[pl.DataFrame] = []
+    if incremental and not existing.is_empty():
+        frames.append(existing)
+
     for p in paths:
         try:
             raw = pl.read_parquet(p)
@@ -85,7 +108,7 @@ def build_shareprice_intraday(
         merged, "Datetime", _INTRADAY_DEDUP_COLS, report,
         symbol, asset_type, "shareprice_intraday",
         keep="last",
-        suppress_historic_boundary=True,
+        suppress_historic_boundary=not incremental,
     )
 
     merged = _drop_orphan_dates(

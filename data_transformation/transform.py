@@ -31,7 +31,12 @@ from maintainance_scripts.logging_setup import configure_logging
 
 import polars as pl
 
-from data_transformation._common import ASSET_TYPES, TransformationReport, symbol_dirname
+from data_transformation._common import (
+    ASSET_TYPES,
+    TransformationReport,
+    enumerate_daily_dates,
+    symbol_dirname,
+)
 from data_transformation.frames.overview import write_assets_overview
 from data_transformation.frames.price_daily import (
     _SIMPLE_DATACLASS,
@@ -150,6 +155,15 @@ def main(argv: list[str] | None = None) -> int:
 
     report = TransformationReport()
 
+    # Newest daily folder this run will consume. Stamped into each
+    # per-symbol metadata.json (via save_to's last_processed_daily_date
+    # kwarg) so a future incremental run can detect which folders are
+    # new. None when daily/ is empty (historical-only state); the next
+    # incremental dispatch then routes every symbol through the fresh
+    # path.
+    all_daily_dates = enumerate_daily_dates(args.daily_dir)
+    last_processed_daily_date = all_daily_dates[-1] if all_daily_dates else None
+
     # ---- Phase 1: assets_overview.parquet ---------------------------------
     overview_path = write_assets_overview(
         args.catalog_dir,
@@ -174,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
             overview,
             report,
             symbols_filter=symbols_filter,
+            last_processed_daily_date=last_processed_daily_date,
+            all_daily_dates=all_daily_dates,
         )
         logger.info("phase2 %s: processed %d symbols", asset_type, n)
 
@@ -190,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
             report,
             symbols_filter=symbols_filter,
             skip_financials=args.skip_financials,
+            last_processed_daily_date=last_processed_daily_date,
+            all_daily_dates=all_daily_dates,
         )
         logger.info(
             "stocks/etfs phase %s: processed %d symbols", asset_type, n,

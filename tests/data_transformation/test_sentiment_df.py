@@ -264,8 +264,10 @@ def test_output_schema_exact_strings_dropped(tmp_path):
     _write_sentiment(p, [_row(datetime(2026, 4, 15, 9, 30), url="u")])
     out = build_sentiment_df("AAPL", [p], TransformationReport())
     assert dict(out.schema) == SCHEMAS["sentiment_df"]
+    # ``source`` is now retained (Categorical) and ``url`` survives as
+    # the underscore-prefixed ``_url`` for the incremental dedup path.
     expected_dropped = {
-        "url", "title", "summary", "authors", "banner_image", "source",
+        "url", "title", "summary", "authors", "banner_image",
         "category_within_source", "source_domain", "ticker_sentiment_label",
         "overall_sentiment_label", "ticker", "time_published",
     }
@@ -273,6 +275,13 @@ def test_output_schema_exact_strings_dropped(tmp_path):
     # All 18 Float32 score columns are present.
     for col in _SENTIMENT_FLOAT_COLS:
         assert col in out.columns
+    # New retained columns.
+    assert "source" in out.columns
+    assert "_url" in out.columns
+    assert out.schema["source"].base_type() == pl.Categorical
+    assert out.schema["_url"] == pl.Utf8
+    assert out["source"][0] == "Reuters"
+    assert out["_url"][0] == "u"
 
 
 # ── 10. ALL_MESSAGES.parquet ignored by source enumeration ────────────────────

@@ -295,10 +295,16 @@ def test_output_schema_exact(tmp_path):
     _write_insider(p, [_row(date(2026, 4, 10))])
     out = build_insider_df("AAPL", [p], TransformationReport())
     assert dict(out.schema) == SCHEMAS["insider_df"]
-    assert set(out.columns) == {"Date", "Executive_role", "AcqDis", "Shares"}
+    assert set(out.columns) == {
+        "Date", "Executive_role", "AcqDis", "Shares",
+        "_executive", "_security_type",
+    }
     # Categorical role / AcqDis (allow polars to vary in physical layout).
     assert out.schema["Executive_role"].base_type() == pl.Categorical
     assert out.schema["AcqDis"].base_type() == pl.Categorical
+    # Raw composite-key columns retained for the incremental dedup path.
+    assert out["_executive"][0] == "Jane Doe"
+    assert out["_security_type"][0] == "Common Stock"
 
 
 # ── 10. Sort order ────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ in ``transform.py`` import everything they need from here.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import date, datetime, timezone
@@ -182,6 +183,141 @@ def _symbol_from_filename(name: str, prefix: str, suffix_with_ext: str) -> str |
     # see the canonical ticker (``BC/PB``) rather than the on-disk form
     # (``BC%2FPB``); the result is then used as a dict key downstream.
     return unfs_symbol(encoded)
+
+
+def snapshot_date_from_path(p: Path) -> date | None:
+    """Return the ``YYYY-MM-DD`` snapshot date encoded in any ancestor of
+    *p* (``daily/<YYYY-MM-DD>/...``), or ``None`` if no such ancestor
+    exists.
+
+    Works for both the nested layout
+    (``daily/<d>/<asset_type>/<endpoint>/file.parquet``) and the flat
+    layout (``daily/<d>/<asset_type>/file.parquet``). Historical paths
+    contain no date-shaped ancestor and return ``None``.
+    """
+    for parent in p.parents:
+        if _DATE_DIR_RE.match(parent.name):
+            try:
+                return date.fromisoformat(parent.name)
+            except ValueError:
+                continue
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Per-symbol metadata + incremental mode dispatch
+# ---------------------------------------------------------------------------
+
+def load_metadata(sym_dir: Path) -> dict | None:
+    """Return the parsed ``metadata.json`` dict for a per-symbol folder, or
+    ``None`` if the file is absent or unreadable.
+
+    Used by the incremental-mode dispatcher (:func:`resolve_mode`) to peek
+    at the previous build's ``last_processed_daily_date`` without
+    instantiating the full ``AssetData`` dataclass.
+    """
+    path = sym_dir / "metadata.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def resolve_mode(
+    sym_dir: Path,
+    all_daily_dates: list[date],
+) -> tuple[str, date | None]:
+    """Return ``(mode, since_date)`` for a per-symbol pass in the
+    incremental build path.
+
+    Modes:
+
+    * ``"fresh"`` -- no ``metadata.json``, or ``last_processed_daily_date``
+      is missing / null / unparseable *and* there is at least one daily
+      folder to incorporate. Run the full builder.
+    * ``"skip"`` -- ``last_processed_daily_date`` already covers the
+      newest daily folder, or it is null/missing and there are no daily
+      folders to consume. Nothing new to do for this symbol.
+    * ``"incremental"`` -- there is at least one daily folder strictly
+      newer than the cached ``last_processed_daily_date``. Run the
+      append path against the new folders only.
+
+    ``since_date`` is the parsed ``last_processed_daily_date`` whenever
+    available (in ``skip`` and ``incremental`` modes), else ``None``.
+    The caller is responsible for honouring the mode.
+    """
+    meta = load_metadata(sym_dir)
+    if meta is None:
+        return "fresh", None
+    raw = meta.get("last_processed_daily_date")
+    if raw is None:
+        # Either an older build that predates the field, or a build done
+        # when daily/ was empty. Rebuild to incorporate any daily folders
+        # that have since arrived; otherwise nothing changed -> skip.
+        if not all_daily_dates:
+            return "skip", None
+        return "fresh", None
+    try:
+        since = date.fromisoformat(raw)
+    except (TypeError, ValueError):
+        # Field present but unparseable. Rebuild only if daily/ has content
+        # to incorporate; otherwise nothing new.
+        if not all_daily_dates:
+            return "skip", None
+        return "fresh", None
+    if not all_daily_dates:
+        return "skip", since
+    max_d = max(all_daily_dates)
+    if since >= max_d:
+        return "skip", since
+    return "incremental", since
+
+
+def paths_for_mode(
+    paths: list[Path],
+    mode: str,
+    since_date: date | None,
+    *,
+    keep_historical: bool = False,
+) -> list[Path]:
+    """Filter a per-symbol source-path list for the dispatched build mode.
+
+    * ``"fresh"`` -- returns *paths* unchanged (historical + every daily).
+    * ``"skip"`` -- returns ``[]`` (caller should not invoke a builder).
+    * ``"incremental"`` -- returns only the daily-folder paths whose
+      snapshot date is strictly greater than *since_date*. Historical
+      paths and daily paths at or before *since_date* are excluded
+      because they are already represented in the existing transformed
+      frame.
+
+    *keep_historical* (incremental mode only): when True, historical
+    paths (those with no ``daily/<YYYY-MM-DD>/`` ancestor) are kept in
+    the returned list. This is what the financials builder needs because
+    its per-row PIT snapshot resolution can fall back to historical
+    statement files for new dates whose snapshot is missing a particular
+    endpoint. Frames whose existing-parquet already encodes the
+    historical state (shareprice_daily, etc.) use the default
+    ``keep_historical=False``.
+    """
+    if mode == "fresh":
+        return paths
+    if mode == "skip":
+        return []
+    if mode != "incremental":
+        raise ValueError(f"unknown mode: {mode!r}")
+    if since_date is None:
+        return paths
+    out: list[Path] = []
+    for p in paths:
+        d = snapshot_date_from_path(p)
+        if d is None:
+            if keep_historical:
+                out.append(p)
+        elif d > since_date:
+            out.append(p)
+    return out
 
 
 # ---------------------------------------------------------------------------

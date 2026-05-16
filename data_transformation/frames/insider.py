@@ -72,14 +72,31 @@ def build_insider_df(
     symbol: str,
     paths: list[Path],
     report: TransformationReport,
+    *,
+    existing: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """Build the ``insider_df`` frame for one stock symbol.
 
     Returns an empty schema-correct frame when no usable data is
     available (no source files, all reads failed, etc.).
+
+    Incremental mode: when *existing* is the previous run's frame and
+    *paths* contains only new daily files, the new files are read
+    + dedupped + mapped to the final schema independently, then
+    anti-joined against existing on
+    ``(Date, _executive, _security_type)`` so only genuinely new
+    composite-keys are appended. ``keep="first"`` semantics are
+    preserved because existing always wins. ``dedup_value_discrepancy_*``
+    rows for existing-vs-new conflicts are not emitted in incremental
+    mode (those would have been logged on the run that first saw the
+    daily folder); only conflicts among the new daily files surface.
     """
     empty = pl.DataFrame(schema=SCHEMAS["insider_df"])
-    if not paths:
+    incremental = existing is not None
+
+    if incremental and not paths:
+        return existing if not existing.is_empty() else empty
+    if not paths and not incremental:
         return empty
 
     frames: list[pl.DataFrame] = []
@@ -100,7 +117,7 @@ def build_insider_df(
             )
 
     if not frames:
-        return empty
+        return existing if incremental and not existing.is_empty() else empty
 
     merged = attach_source_order(frames)
     merged = dedup_with_discrepancy_log(
@@ -114,6 +131,12 @@ def build_insider_df(
         _role_expr().alias("Executive_role"),
         pl.col("acquisition_or_disposal").alias("AcqDis"),
         pl.col("shares").alias("Shares"),
+        # Preserve the raw composite-key components so the incremental
+        # build path can dedup new daily rows against the saved frame
+        # by (Date, _executive, _security_type) without re-reading every
+        # historical / daily source.
+        pl.col("executive").alias("_executive"),
+        pl.col("security_type").alias("_security_type"),
     )
 
     before = merged.height
@@ -132,6 +155,32 @@ def build_insider_df(
                 "non-A/D acquisition_or_disposal"
             ),
         )
+
+    if incremental:
+        new_typed = cast_to_schema(merged, SCHEMAS["insider_df"], "insider_df")
+        if not existing.is_empty():
+            # Anti-join: keep only rows whose composite key is not in
+            # existing. Casting _executive / _security_type to Utf8 on
+            # both sides avoids Categorical-vs-Utf8 mismatches if a
+            # column happens to be encoded differently.
+            existing_keys = existing.select(
+                pl.col("Date"),
+                pl.col("_executive").cast(pl.Utf8),
+                pl.col("_security_type").cast(pl.Utf8),
+            )
+            new_with_str_keys = new_typed.with_columns(
+                pl.col("_executive").cast(pl.Utf8),
+                pl.col("_security_type").cast(pl.Utf8),
+            )
+            new_only = new_with_str_keys.join(
+                existing_keys, on=["Date", "_executive", "_security_type"],
+                how="anti",
+            )
+            combined = pl.concat([existing, new_only], how="vertical_relaxed")
+        else:
+            combined = new_typed
+        combined = combined.sort("Date")
+        return cast_to_schema(combined, SCHEMAS["insider_df"], "insider_df")
 
     merged = merged.sort("Date")
     return cast_to_schema(merged, SCHEMAS["insider_df"], "insider_df")

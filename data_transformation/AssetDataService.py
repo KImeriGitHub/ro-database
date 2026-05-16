@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -212,9 +213,18 @@ SCHEMAS: dict[str, dict] = {
         "Executive_role": pl.Categorical,
         "AcqDis": pl.Categorical,
         "Shares": pl.Float32,
+        # Raw composite-key columns preserved for the incremental build
+        # path's dedup against existing rows; not part of the modelling
+        # surface (downstream code keys on Date / Executive_role / AcqDis).
+        "_executive": pl.Utf8,
+        "_security_type": pl.Utf8,
     },
     "sentiment_df": {
         "Datetime": pl.Datetime,
+        # News-source label from the upstream NEWS_SENTIMENT response
+        # (Reuters, Bloomberg, ...) kept as a regular column. Categorical
+        # because the source label space is small and bounded.
+        "source": pl.Categorical,
         "ticker_relevance_score": pl.Float32,
         "ticker_sentiment_score": pl.Float32,
         "overall_sentiment_score": pl.Float32,
@@ -233,6 +243,9 @@ SCHEMAS: dict[str, dict] = {
         "real_estate": pl.Float32,
         "retail_wholesale": pl.Float32,
         "technology": pl.Float32,
+        # Raw composite-key column preserved for the incremental build
+        # path's dedup against existing rows.
+        "_url": pl.Utf8,
     },
     "etf_profile": {
         "Date": pl.Date,
@@ -344,13 +357,34 @@ class AssetDataMixin:
             kwargs[frame] = getattr(self, frame).clone()
         return type(self)(**kwargs)
 
-    def save_to(self, dir) -> None:
+    def save_to(
+        self, dir, *, last_processed_daily_date: date | None = None,
+    ) -> None:
+        """Persist the dataclass to *dir* as ``metadata.json`` + one parquet
+        per frame.
+
+        ``last_processed_daily_date`` is recorded in ``metadata.json`` as
+        an ISO-8601 date string (or ``null`` when ``None``) and tracks the
+        newest ``daily/<YYYY-MM-DD>/`` folder consumed by this build. The
+        incremental-mode dispatcher (see
+        ``data_transformation/_common.py:resolve_mode``) reads it back to
+        decide whether a future run can append only newer daily folders
+        instead of doing a full rebuild. Callers that don't have a run-
+        level daily-date context (round-trip tests, ad-hoc serialisation)
+        leave it ``None`` -- the next dispatch will then route the symbol
+        through the fresh path, which is always safe.
+        """
         path = Path(dir)
         path.mkdir(parents=True, exist_ok=True)
         layout = ASSET_LAYOUT[type(self).__name__]
         metadata: dict[str, Any] = {"_asset_type": type(self).__name__}
         for scalar in layout["scalars"]:
             metadata[scalar] = getattr(self, scalar)
+        metadata["last_processed_daily_date"] = (
+            last_processed_daily_date.isoformat()
+            if last_processed_daily_date is not None
+            else None
+        )
         (path / "metadata.json").write_text(json.dumps(metadata, indent=2))
         for frame in layout["frames"]:
             getattr(self, frame).write_parquet(path / f"{frame}.parquet")

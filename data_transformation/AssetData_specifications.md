@@ -169,11 +169,21 @@ Columns
  'Executive_role'    : pl.Categorical  (label from CANONICAL_INSIDER_ROLES; see below)
  'AcqDis'            : pl.Categorical  ('A' for acquisition, 'D' for disposal)
  'Shares'            : pl.Float32
+ '_executive'        : pl.Utf8         (raw composite-key component; build-side scaffolding)
+ '_security_type'    : pl.Utf8         (raw composite-key component; build-side scaffolding)
 
 `Date` is the raw `transactionDate` from INSIDER_TRANSACTIONS; the frame
 is a chronological list of transactions (not a per-trading-date snapshot).
 Avoiding lookahead leakage when consuming this frame is the responsibility
 of the feature-generation step.
+
+The underscore-prefixed columns (`_executive`, `_security_type`) carry the
+raw composite-key components that drove the dedup. They are not part of the
+modelling surface (downstream features should key on
+`(Date, Executive_role, AcqDis)`); they exist so the incremental build path
+in `data_transformation/transform.py` can dedup new daily rows against the
+saved frame without re-reading every historical / daily source file. Treat
+them as internal scaffolding.
 
 CANONICAL_INSIDER_ROLES: CAO, General Counsel, CFO, COO, CTO_CIO,
 VP, CEO, Other C-Suite, Chairman, Director, 10% Owner, Officer, Other
@@ -211,6 +221,7 @@ Match rules (index : label : regex pattern, applied to lowercased title):
 
 ### sentiment_df: pl.DataFrame
  'Datetime'                   : pl.Datetime
+ 'source'                     : pl.Categorical  News-source label (Reuters, Bloomberg, ...) from NEWS_SENTIMENT.
  'ticker_relevance_score'     : pl.Float32
  'ticker_sentiment_score'     : pl.Float32
  'overall_sentiment_score'    : pl.Float32
@@ -229,6 +240,17 @@ Match rules (index : label : regex pattern, applied to lowercased title):
  'real_estate'                : pl.Float32
  'retail_wholesale'           : pl.Float32
  'technology'                 : pl.Float32
+ '_url'                       : pl.Utf8         Raw article url; build-side scaffolding for the incremental dedup.
+
+`source` is the upstream news-source label (`Reuters`, `Bloomberg`, ...).
+The label space is small and bounded, hence Categorical.
+
+`_url` is the raw article url renamed with an underscore prefix; it carries
+the second component of the `(Datetime, url)` dedup key so the incremental
+build path can dedup new daily rows against the saved frame without
+re-reading every historical / daily sentiment file. Like the
+`_executive` / `_security_type` columns on `insider_df`, this is internal
+scaffolding rather than a modelling feature.
 
 ### etf_profile: pl.DataFrame
  'Date'                       : pl.Date

@@ -10,6 +10,7 @@ Phase 3: the richer ``shareprice_daily`` frame for stocks and etfs
 from __future__ import annotations
 
 import logging
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,8 @@ from data_transformation._common import (
     TransformationReport,
     build_source_index,
     cast_to_schema,
-    is_already_transformed,
+    paths_for_mode,
+    resolve_mode,
     symbol_dest_dir,
 )
 from data_transformation.AssetData import (
@@ -85,6 +87,8 @@ def transform_simple_price_daily(
     overview: pl.DataFrame,
     report: TransformationReport,
     symbols_filter: set[str] | None = None,
+    last_processed_daily_date: date | None = None,
+    all_daily_dates: list[date] | None = None,
 ) -> int:
     """Transform ``price_daily`` for one of the flat asset types.
 
@@ -114,6 +118,10 @@ def transform_simple_price_daily(
     src_index = build_source_index(
         historical_dir, daily_dir, asset_type, endpoint=None
     )
+    daily_dates_for_dispatch = (
+        all_daily_dates if all_daily_dates is not None else []
+    )
+
     n_processed = 0
     for symbol in sorted(src_index.keys()):
         if symbols_filter is not None and symbol not in symbols_filter:
@@ -124,14 +132,46 @@ def transform_simple_price_daily(
                 asset_type, symbol,
             )
             continue
-        if is_already_transformed(dest_dir, asset_type, symbol):
+
+        sym_dest = symbol_dest_dir(dest_dir, asset_type, symbol)
+
+        # Per-symbol dispatch: skip if cached last_processed_daily_date
+        # already covers the newest daily folder; rebuild from scratch
+        # if no metadata or the field is null; else incremental append.
+        mode, since_date = resolve_mode(sym_dest, daily_dates_for_dispatch)
+
+        if mode == "skip":
             n_processed += 1
             continue
 
+        existing_frame: pl.DataFrame | None = None
+        if mode == "incremental":
+            existing_path = sym_dest / "price_daily.parquet"
+            if existing_path.exists():
+                try:
+                    existing_frame = pl.read_parquet(existing_path)
+                except Exception as exc:
+                    logger.warning(
+                        "%s/%s: failed to load existing price_daily -> "
+                        "fresh build: %s", asset_type, symbol, exc,
+                    )
+                    existing_frame = None
+                    mode = "fresh"
+                    since_date = None
+            else:
+                # No existing parquet to merge against; treat as fresh.
+                mode = "fresh"
+                since_date = None
+
         try:
+            filtered_paths = paths_for_mode(
+                src_index[symbol], mode, since_date,
+            )
             _build_one_symbol(
                 asset_type, symbol, about_lookup[symbol], cls,
-                src_index[symbol], dest_dir, report,
+                filtered_paths, dest_dir, report,
+                last_processed_daily_date=last_processed_daily_date,
+                existing=existing_frame,
             )
             n_processed += 1
         except Exception as exc:
@@ -156,8 +196,26 @@ def _build_one_symbol(
     paths: list[Path],
     dest_dir: Path,
     report: TransformationReport,
+    *,
+    last_processed_daily_date: date | None = None,
+    existing: pl.DataFrame | None = None,
 ) -> None:
+    """Build and save one flat-asset-type symbol.
+
+    Incremental mode: when *existing* is the previous run's
+    ``price_daily`` frame, *paths* must contain only the *new* daily
+    files (filtered upstream via
+    :func:`data_transformation._common.paths_for_mode`). Existing is
+    attached as the earliest source and ``keep="last"`` lets the new
+    daily values restate overlapping dates;
+    ``suppress_historic_boundary`` is disabled in this mode.
+    """
+    incremental = existing is not None
+
     frames: list[pl.DataFrame] = []
+    if incremental and not existing.is_empty():
+        frames.append(existing)
+
     for p in paths:
         try:
             raw = pl.read_parquet(p)
@@ -180,7 +238,7 @@ def _build_one_symbol(
             merged, "Date", _PRICE_FLOAT_COLS, report,
             symbol, asset_type, "price_daily",
             keep="last",
-            suppress_historic_boundary=True,
+            suppress_historic_boundary=not incremental,
         )
         df = _drop_null_ohlc(merged, symbol, asset_type, report)
         df = cast_to_schema(df, SCHEMAS["price_daily"], "price_daily")
@@ -189,7 +247,10 @@ def _build_one_symbol(
     inst.ticker = symbol
     inst.about = about
     inst.price_daily = df
-    inst.save_to(symbol_dest_dir(dest_dir, asset_type, symbol))
+    inst.save_to(
+        symbol_dest_dir(dest_dir, asset_type, symbol),
+        last_processed_daily_date=last_processed_daily_date,
+    )
 
 
 def _drop_null_ohlc(
@@ -274,6 +335,8 @@ def build_shareprice_daily(
     symbol: str,
     paths: list[Path],
     report: TransformationReport,
+    *,
+    existing: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """Build the ``shareprice_daily`` frame for one stocks/etfs symbol.
 
@@ -281,12 +344,37 @@ def build_shareprice_daily(
     ``AdjFactor`` column is added; consumers compute any cumulative
     adjusted series themselves. See ``AssetData_design_choices.md``
     section 6 for the formula.
+
+    Incremental mode: when *existing* is the previous run's saved frame
+    (loaded from ``shareprice_daily.parquet``), *paths* must contain
+    only the *new* daily files (use
+    :func:`data_transformation._common.paths_for_mode` to filter). The
+    existing frame is treated as the earliest source order so ``keep="last"``
+    lets the new daily values restate overlapping dates, and ``AdjFactor``
+    is stripped from existing and recomputed across the full merged frame.
+    ``suppress_historic_boundary`` is disabled in this mode -- the
+    existing frame's tail is never a partial bar.
     """
     empty_sp = pl.DataFrame(schema=SCHEMAS["shareprice_daily"])
-    if not paths:
+    incremental = existing is not None
+
+    if incremental and not paths:
+        # Nothing new to merge -> return existing as-is.
+        return existing if not existing.is_empty() else empty_sp
+    if not paths and not incremental:
         return empty_sp
 
     frames: list[pl.DataFrame] = []
+    if incremental and not existing.is_empty():
+        # Strip AdjFactor (recomputed below) so the schema lines up with
+        # the normalized daily-source frames.
+        ex = (
+            existing.drop("AdjFactor")
+            if "AdjFactor" in existing.columns
+            else existing
+        )
+        frames.append(ex)
+
     for p in paths:
         try:
             raw = pl.read_parquet(p)
@@ -304,14 +392,18 @@ def build_shareprice_daily(
             )
 
     if not frames:
-        return empty_sp
+        return existing if incremental and not existing.is_empty() else empty_sp
 
     merged = attach_source_order(frames)
     merged = dedup_with_discrepancy_log(
         merged, "Date", _SP_DAILY_DEDUP_COLS, report,
         symbol, asset_type, "shareprice_daily",
         keep="last",
-        suppress_historic_boundary=True,
+        # Historic-boundary suppression is only meaningful for the
+        # fresh path (the historic-source partial bar). In incremental
+        # mode the existing frame's tail was already produced by a
+        # completed daily run, never partial.
+        suppress_historic_boundary=not incremental,
     )
 
     adj_factor = _compute_adj_factor(merged)

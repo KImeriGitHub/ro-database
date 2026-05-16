@@ -358,3 +358,51 @@ def test_orchestrator_includes_symbols_with_only_profile(tmp_path):
     assert inst.etf_profile.height == 1
     assert inst.shareprice_daily.height == 0
     assert inst.shareprice_intraday.height == 0
+
+
+# ── 10. Incremental concat: existing + new daily file ────────────────────────
+
+def test_build_etf_profile_incremental_appends_new_daily_row(tmp_path):
+    """Incremental path: an existing saved frame (loaded from disk, in
+    SCHEMAS["etf_profile"] order) merges cleanly with a newly-normalized
+    daily-source frame. Regression test for the column-order conflict
+    between the saved-schema order (Date, weights, holdings, scalars,
+    leveraged) and the source-normalisation order (sectors then scalars
+    then holdings) that ``pl.concat(how="vertical_relaxed")`` rejects.
+    """
+    # Build a fresh frame, save it, then load it back as ``existing``.
+    historical_p = tmp_path / "h.parquet"
+    _write_profile(historical_p, [_profile_row(date(2026, 4, 15))])
+    fresh = build_etf_profile("SPY", [historical_p], TransformationReport())
+    assert dict(fresh.schema) == SCHEMAS["etf_profile"]
+
+    saved = tmp_path / "fresh_saved.parquet"
+    fresh.write_parquet(saved)
+    existing = pl.read_parquet(saved)
+    assert dict(existing.schema) == SCHEMAS["etf_profile"]
+
+    # Now feed in a daily file with a NEW Date row alongside the existing.
+    daily_p = tmp_path / "d.parquet"
+    _write_profile(daily_p, [_profile_row(date(2026, 4, 16), net_assets=1.2e11)])
+
+    out = build_etf_profile(
+        "SPY", [daily_p], TransformationReport(), existing=existing,
+    )
+    assert dict(out.schema) == SCHEMAS["etf_profile"]
+    assert out.height == 2
+    dates = sorted(out["Date"].to_list())
+    assert dates == [date(2026, 4, 15), date(2026, 4, 16)]
+
+
+def test_build_etf_profile_incremental_no_new_paths_returns_existing(tmp_path):
+    """Incremental with paths=[] (the orchestrator's
+    paths_for_mode("incremental", ...) returned nothing new for this
+    symbol) is a fast no-op: return the existing frame as-is, no concat,
+    no errors."""
+    historical_p = tmp_path / "h.parquet"
+    _write_profile(historical_p, [_profile_row(date(2026, 4, 15))])
+    existing = build_etf_profile(
+        "SPY", [historical_p], TransformationReport(),
+    )
+    out = build_etf_profile("SPY", [], TransformationReport(), existing=existing)
+    assert out.equals(existing)

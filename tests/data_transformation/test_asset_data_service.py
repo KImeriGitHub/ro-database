@@ -2,6 +2,7 @@
 and the schema registry in AssetDataService.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -225,6 +226,44 @@ def test_load_from_uses_default_frame_when_parquet_missing(tmp_path):
     loaded = StockData.load_from(out_dir)
     assert loaded.shareprice_daily.height == 0
     assert dict(loaded.shareprice_daily.schema) == SCHEMAS["shareprice_daily"]
+
+
+# ── save_to: last_processed_daily_date metadata field ────────────────────────
+
+def test_save_to_writes_last_processed_daily_date_field(tmp_path):
+    """save_to records the iso-formatted date into metadata.json."""
+    from datetime import date as _date
+    s = StockData.default_instance()
+    s.ticker = "AAPL"
+    out_dir = tmp_path / "aapl"
+    s.save_to(out_dir, last_processed_daily_date=_date(2026, 5, 15))
+    meta = json.loads((out_dir / "metadata.json").read_text())
+    assert meta["last_processed_daily_date"] == "2026-05-15"
+
+
+def test_save_to_writes_null_last_processed_when_kwarg_omitted(tmp_path):
+    """Omitting the kwarg writes ``null`` (still present, so the field's
+    presence does not imply a non-null value)."""
+    s = StockData.default_instance()
+    s.ticker = "AAPL"
+    out_dir = tmp_path / "aapl"
+    s.save_to(out_dir)  # no kwarg
+    meta = json.loads((out_dir / "metadata.json").read_text())
+    assert "last_processed_daily_date" in meta
+    assert meta["last_processed_daily_date"] is None
+
+
+def test_load_from_ignores_last_processed_daily_date(tmp_path):
+    """load_from reads only the layout-declared scalars; the new field
+    travels in metadata.json but is not exposed on the dataclass."""
+    from datetime import date as _date
+    s = StockData.default_instance()
+    s.ticker = "AAPL"
+    out_dir = tmp_path / "aapl"
+    s.save_to(out_dir, last_processed_daily_date=_date(2026, 5, 15))
+    loaded = StockData.load_from(out_dir)
+    assert loaded.ticker == "AAPL"
+    assert not hasattr(loaded, "last_processed_daily_date")
 
 
 def test_etf_holdings_list_struct_roundtrip(tmp_path):

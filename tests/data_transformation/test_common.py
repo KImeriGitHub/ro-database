@@ -22,7 +22,11 @@ from data_transformation._common import (
     cast_to_schema,
     enumerate_daily_dates,
     is_already_transformed,
+    load_metadata,
+    paths_for_mode,
+    resolve_mode,
     sector_to_index,
+    snapshot_date_from_path,
     symbol_dest_dir,
     symbol_dirname,
 )
@@ -275,3 +279,184 @@ def test_flat_asset_types_excludes_stocks_etfs():
     assert FLAT_ASSET_TYPES == frozenset({
         "forex", "indices", "cryptocurrencies", "commodities", "economic",
     })
+
+
+# ── snapshot_date_from_path ───────────────────────────────────────────────────
+
+def test_snapshot_date_from_path_nested_layout(tmp_path):
+    """Nested asset_type: daily/<d>/<asset_type>/<endpoint>/file.parquet."""
+    p = (tmp_path / "daily" / "2026-05-15" / "stocks" / "prices_daily"
+         / "stocks_AAPL.parquet")
+    assert snapshot_date_from_path(p) == date(2026, 5, 15)
+
+
+def test_snapshot_date_from_path_flat_layout(tmp_path):
+    """Flat asset_type: daily/<d>/<asset_type>/file.parquet."""
+    p = tmp_path / "daily" / "2026-05-15" / "forex" / "forex_EURUSD.parquet"
+    assert snapshot_date_from_path(p) == date(2026, 5, 15)
+
+
+def test_snapshot_date_from_path_historical_returns_none(tmp_path):
+    """Historical paths have no YYYY-MM-DD ancestor."""
+    p = (tmp_path / "historical" / "stocks" / "prices_daily"
+         / "stocks_AAPL.parquet")
+    assert snapshot_date_from_path(p) is None
+
+
+def test_snapshot_date_from_path_invalid_date_dir_returns_none(tmp_path):
+    """A regex-matching but unparseable date (2026-13-99) is rejected."""
+    p = tmp_path / "daily" / "2026-13-99" / "stocks" / "stocks_AAPL.parquet"
+    assert snapshot_date_from_path(p) is None
+
+
+# ── load_metadata ─────────────────────────────────────────────────────────────
+
+def test_load_metadata_returns_none_when_absent(tmp_path):
+    assert load_metadata(tmp_path) is None
+
+
+def test_load_metadata_returns_dict(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "2026-05-15"}'
+    )
+    meta = load_metadata(tmp_path)
+    assert meta == {"ticker": "AAPL", "last_processed_daily_date": "2026-05-15"}
+
+
+def test_load_metadata_returns_none_on_invalid_json(tmp_path):
+    (tmp_path / "metadata.json").write_text("not json at all{")
+    assert load_metadata(tmp_path) is None
+
+
+# ── resolve_mode ──────────────────────────────────────────────────────────────
+
+def test_resolve_mode_fresh_when_no_metadata(tmp_path):
+    mode, since = resolve_mode(tmp_path, [date(2026, 5, 15)])
+    assert mode == "fresh"
+    assert since is None
+
+
+def test_resolve_mode_fresh_when_field_null(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": null}'
+    )
+    mode, since = resolve_mode(tmp_path, [date(2026, 5, 15)])
+    assert mode == "fresh"
+    assert since is None
+
+
+def test_resolve_mode_fresh_when_field_missing(tmp_path):
+    """An older metadata.json predating this change has no field at all."""
+    (tmp_path / "metadata.json").write_text('{"ticker": "AAPL"}')
+    mode, since = resolve_mode(tmp_path, [date(2026, 5, 15)])
+    assert mode == "fresh"
+    assert since is None
+
+
+def test_resolve_mode_fresh_on_unparseable_date(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "not-a-date"}'
+    )
+    mode, since = resolve_mode(tmp_path, [date(2026, 5, 15)])
+    assert mode == "fresh"
+    assert since is None
+
+
+def test_resolve_mode_skip_when_cache_covers_latest(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "2026-05-15"}'
+    )
+    mode, since = resolve_mode(
+        tmp_path, [date(2026, 5, 14), date(2026, 5, 15)]
+    )
+    assert mode == "skip"
+    assert since == date(2026, 5, 15)
+
+
+def test_resolve_mode_skip_when_cache_ahead_of_daily(tmp_path):
+    """A cache date strictly greater than max(daily_dates) -- unusual but
+    legal (e.g. a daily folder was removed) -- still routes to skip."""
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "2026-06-01"}'
+    )
+    mode, since = resolve_mode(tmp_path, [date(2026, 5, 15)])
+    assert mode == "skip"
+    assert since == date(2026, 6, 1)
+
+
+def test_resolve_mode_skip_when_no_daily_dates(tmp_path):
+    """No daily folders at all -> nothing new to do; skip."""
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "2026-05-15"}'
+    )
+    mode, since = resolve_mode(tmp_path, [])
+    assert mode == "skip"
+    assert since == date(2026, 5, 15)
+
+
+def test_resolve_mode_incremental_when_newer_daily(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        '{"ticker": "AAPL", "last_processed_daily_date": "2026-05-14"}'
+    )
+    mode, since = resolve_mode(
+        tmp_path, [date(2026, 5, 14), date(2026, 5, 15)]
+    )
+    assert mode == "incremental"
+    assert since == date(2026, 5, 14)
+
+
+# ── paths_for_mode ────────────────────────────────────────────────────────────
+
+def test_paths_for_mode_fresh_returns_unchanged(tmp_path):
+    paths = [
+        tmp_path / "historical" / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
+        tmp_path / "daily" / "2026-05-14" / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
+        tmp_path / "daily" / "2026-05-15" / "stocks" / "prices_daily" / "stocks_AAPL.parquet",
+    ]
+    assert paths_for_mode(paths, "fresh", None) == paths
+    assert paths_for_mode(paths, "fresh", date(2026, 5, 14)) == paths
+
+
+def test_paths_for_mode_skip_returns_empty(tmp_path):
+    paths = [tmp_path / "daily" / "2026-05-15" / "stocks" / "stocks_AAPL.parquet"]
+    assert paths_for_mode(paths, "skip", date(2026, 5, 15)) == []
+
+
+def test_paths_for_mode_incremental_filters_to_newer_daily_only(tmp_path):
+    historical = tmp_path / "historical" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    d14 = tmp_path / "daily" / "2026-05-14" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    d15 = tmp_path / "daily" / "2026-05-15" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    d16 = tmp_path / "daily" / "2026-05-16" / "stocks" / "prices_daily" / "stocks_AAPL.parquet"
+    paths = [historical, d14, d15, d16]
+    # since_date = 2026-05-14 -> keep only d15 and d16 (strictly greater).
+    out = paths_for_mode(paths, "incremental", date(2026, 5, 14))
+    assert out == [d15, d16]
+
+
+def test_paths_for_mode_incremental_with_none_since_date_returns_paths(tmp_path):
+    """Defensive: incremental with None since_date is unusual but should
+    not crash; return paths unchanged."""
+    paths = [tmp_path / "daily" / "2026-05-15" / "x.parquet"]
+    assert paths_for_mode(paths, "incremental", None) == paths
+
+
+def test_paths_for_mode_incremental_keep_historical(tmp_path):
+    """``keep_historical=True`` retains paths with no daily/<d>/ ancestor
+    (the financials builder needs them for PIT fallback)."""
+    historical = tmp_path / "historical" / "stocks" / "earnings" / "stocks_AAPL_quarterly.parquet"
+    d14 = tmp_path / "daily" / "2026-05-14" / "stocks" / "earnings" / "stocks_AAPL_quarterly.parquet"
+    d15 = tmp_path / "daily" / "2026-05-15" / "stocks" / "earnings" / "stocks_AAPL_quarterly.parquet"
+    paths = [historical, d14, d15]
+    out = paths_for_mode(
+        paths, "incremental", date(2026, 5, 14), keep_historical=True,
+    )
+    assert out == [historical, d15]
+    out_no_hist = paths_for_mode(
+        paths, "incremental", date(2026, 5, 14),
+    )
+    assert out_no_hist == [d15]
+
+
+def test_paths_for_mode_unknown_mode_raises(tmp_path):
+    with pytest.raises(ValueError, match="unknown mode"):
+        paths_for_mode([], "garbage", None)
