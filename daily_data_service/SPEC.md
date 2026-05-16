@@ -71,6 +71,8 @@ This keeps folder-date stable across crashes and across calendar-day rollovers d
 
 Read from `catalog/yield_status.parquet`'s `date` column (all rows share the same value; read any one). This is the folder-date of the prior successful full run.
 
+**Bootstrap fallback.** If `daily/` contains no `YYYY-MM-DD` subdirectory other than the current `folder_date` (i.e. no prior daily run has ever produced a folder), `read_previous_date` returns `folder_date - 7` without consulting `yield_status.parquet`. This unblocks the very first `setup_daily` run after a fresh `init_catalog` (which seeds the `date` column to `date.today()`), and also covers a crash-resume that happens before any prior folder exists. 7 days matches the trailing-week floor every price-family endpoint already enforces via `price_window_lower`, so the first run looks identical to a steady-state run with a one-week previous-date.
+
 The truncation windows use **`(previous-date, folder-date]`** -- previous-date excluded, folder-date included.
 
 ### Same-day no-op

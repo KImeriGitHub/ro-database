@@ -150,7 +150,7 @@ async def run_daily_pull(
         endpoints = [ep for ep in endpoints if ep != "earnings_calendar"]
 
     started_at, folder_date, marker = resolve_start_marker(daily_dir)
-    previous_date = read_previous_date(catalog_dir)
+    previous_date = read_previous_date(catalog_dir, daily_dir, folder_date)
 
     logger.info(
         f"Daily pull: folder_date={folder_date}, previous_date={previous_date}, "

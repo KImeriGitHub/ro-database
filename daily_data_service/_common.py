@@ -3,6 +3,7 @@ a top-level start marker, previous-date lookup from yield_status, and date-
 window filter utilities used across endpoints."""
 
 import logging
+import re
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,6 +13,8 @@ import polars as pl
 logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
+
+_DATE_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def compute_folder_date(started_at_et: datetime) -> date:
@@ -55,11 +58,41 @@ def resolve_start_marker(daily_dir: Path) -> tuple[datetime, date, Path]:
     return started_at, compute_folder_date(started_at), marker
 
 
-def read_previous_date(catalog_dir: Path) -> date:
-    """Return the ``date`` value from ``catalog/yield_status.parquet``.
+def _has_prior_date_subdir(daily_dir: Path, folder_date: date) -> bool:
+    """True if any ``YYYY-MM-DD`` subdir under *daily_dir* is not *folder_date*."""
+    if not daily_dir.exists():
+        return False
+    fd_name = folder_date.isoformat()
+    for child in daily_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if not _DATE_DIR_RE.match(child.name):
+            continue
+        if child.name != fd_name:
+            return True
+    return False
 
-    All rows share the same date; the first row is sufficient.
+
+def read_previous_date(
+    catalog_dir: Path,
+    daily_dir: Path,
+    folder_date: date,
+) -> date:
+    """Return ``previous-date`` for the current run.
+
+    Bootstrap path: when ``daily_dir`` contains no ``YYYY-MM-DD`` subdir
+    other than ``folder_date`` itself, no prior daily run has produced a
+    folder, so fall back to ``folder_date - PRICE_WINDOW_DAYS`` (matches
+    the trailing-week floor used by the price-family endpoints). The
+    yield_status file is not consulted on this path.
+
+    Steady state: read the ``date`` column from
+    ``catalog/yield_status.parquet`` (all rows share the same value; the
+    first row is sufficient).
     """
+    if not _has_prior_date_subdir(daily_dir, folder_date):
+        return folder_date - timedelta(days=PRICE_WINDOW_DAYS)
+
     path = catalog_dir / "yield_status.parquet"
     if not path.exists():
         raise FileNotFoundError(
