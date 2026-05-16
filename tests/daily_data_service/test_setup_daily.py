@@ -91,6 +91,10 @@ def test_run_daily_pull_noop_when_previous_ge_folder(workdir: Path):
     daily = workdir / "daily"
     catalog = workdir / "catalog"
     _write_yield_status(catalog, folder_date)  # previous == folder
+    # A prior YYYY-MM-DD subdir is required so read_previous_date takes the
+    # steady-state path (reads yield_status) instead of the bootstrap fallback
+    # to folder_date - PRICE_WINDOW_DAYS.
+    (daily / "2026-04-14").mkdir()
 
     finalize_calls: list = []
 

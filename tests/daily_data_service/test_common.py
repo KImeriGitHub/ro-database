@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -145,29 +145,79 @@ def _write_yield_status(catalog_dir: Path, rows: list[dict]) -> Path:
     return path
 
 
+def _make_prior_daily_subdir(daily_dir: Path, d: date) -> Path:
+    """Create a YYYY-MM-DD subdir so read_previous_date leaves the bootstrap branch."""
+    sub = daily_dir / d.isoformat()
+    sub.mkdir(parents=True, exist_ok=True)
+    return sub
+
+
 def test_read_previous_date_returns_first_row_value(tmp_path):
     catalog = tmp_path / "catalog"
+    daily = tmp_path / "daily"
+    folder_date = date(2026, 4, 15)
+    _make_prior_daily_subdir(daily, date(2026, 4, 14))
     _write_yield_status(catalog, [
         {"symbol": "AAPL", "date": date(2026, 4, 14), "prices_daily": True},
         {"symbol": "MSFT", "date": date(2026, 4, 14), "prices_daily": True},
     ])
-    assert dc.read_previous_date(catalog) == date(2026, 4, 14)
+    assert dc.read_previous_date(catalog, daily, folder_date) == date(2026, 4, 14)
 
 
 def test_read_previous_date_missing_file_raises(tmp_path):
+    daily = tmp_path / "daily"
+    folder_date = date(2026, 4, 15)
+    # Prior subdir present -> bootstrap branch skipped -> file lookup -> raise.
+    _make_prior_daily_subdir(daily, date(2026, 4, 14))
     with pytest.raises(FileNotFoundError, match="yield_status.parquet"):
-        dc.read_previous_date(tmp_path / "catalog")
+        dc.read_previous_date(tmp_path / "catalog", daily, folder_date)
 
 
 def test_read_previous_date_empty_file_raises(tmp_path):
     catalog = tmp_path / "catalog"
     catalog.mkdir()
+    daily = tmp_path / "daily"
+    folder_date = date(2026, 4, 15)
+    _make_prior_daily_subdir(daily, date(2026, 4, 14))
     pl.DataFrame(
         {"symbol": [], "date": []},
         schema={"symbol": pl.Utf8, "date": pl.Date},
     ).write_parquet(catalog / "yield_status.parquet")
     with pytest.raises(ValueError, match="empty"):
-        dc.read_previous_date(catalog)
+        dc.read_previous_date(catalog, daily, folder_date)
+
+
+def test_read_previous_date_bootstrap_no_daily_subdirs(tmp_path):
+    """No prior daily/<date>/ subdir -> fall back to folder_date - 7 without
+    touching yield_status.parquet (file absent entirely)."""
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    folder_date = date(2026, 4, 15)
+    assert dc.read_previous_date(
+        tmp_path / "catalog_missing", daily, folder_date
+    ) == folder_date - timedelta(days=dc.PRICE_WINDOW_DAYS)
+
+
+def test_read_previous_date_bootstrap_only_folder_date_subdir(tmp_path):
+    """Resume case: only daily/<folder_date>/ exists (created mid-run). Still
+    bootstrap -> folder_date - 7, even if yield_status.parquet has a date set."""
+    catalog = tmp_path / "catalog"
+    daily = tmp_path / "daily"
+    folder_date = date(2026, 4, 15)
+    _make_prior_daily_subdir(daily, folder_date)  # same date as folder_date
+    _write_yield_status(catalog, [
+        {"symbol": "AAPL", "date": folder_date, "prices_daily": True},
+    ])
+    assert dc.read_previous_date(catalog, daily, folder_date) == \
+        folder_date - timedelta(days=dc.PRICE_WINDOW_DAYS)
+
+
+def test_read_previous_date_bootstrap_daily_dir_missing(tmp_path):
+    """daily/ directory itself does not exist -> bootstrap."""
+    folder_date = date(2026, 4, 15)
+    assert dc.read_previous_date(
+        tmp_path / "catalog", tmp_path / "daily_missing", folder_date
+    ) == folder_date - timedelta(days=dc.PRICE_WINDOW_DAYS)
 
 
 # ---------------------------------------------------------------------------
