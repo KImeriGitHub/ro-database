@@ -309,7 +309,7 @@ def _merge_report(
 async def adjust_weekly(
     catalog_dir: Path | None = None,
     daily_dir: Path | None = None,
-    look_back_days: int = 6,
+    look_back_days: int = 7,
     api_tier: str = "premium",
 ) -> None:
     """Retry the union of ``yield_status`` False cells and every
