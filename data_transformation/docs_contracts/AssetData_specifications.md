@@ -40,10 +40,13 @@ US/Eastern by convention. Consumers that need true UTC for
 
 ### Listing / delisting
 
-- **Stocks and ETFs support delisted symbols.** A delisted ticker
-  remains in the catalog and produces an `AssetData` instance, but
-  `shareprice_daily.Date` ends at (or near) the delisting date. As a
-  rule of thumb a symbol with `max(shareprice_daily.Date) < today` is
+- **Stocks and ETFs include delisted symbols.** The dataset is
+  survivorship-bias-free for these asset types: tickers that have
+  been delisted (acquired, bankrupt, deregistered, ...) remain in
+  the catalog and produce an `AssetData` instance alongside active
+  tickers, with `shareprice_daily` / `shareprice_intraday` /
+  `etf_profile` populated up to the delisting date. As a rule of
+  thumb a symbol with `max(shareprice_daily.Date) < today` is
   delisted; rare exceptions are stale data feeds. There is no
   dedicated `delisted` boolean — consumers infer it from the date
   axis.

@@ -59,8 +59,11 @@ covers semantics, not schema.
   - `shareprice_intraday`: `Datetime`
   - `insider_df`: `(transactionDate, executive, security_type)`
   - `sentiment_df`: `(Datetime, url)`
-
-TODO: Are they also ordered?
+- **Output is sorted ascending by the dedup key.** The dedup helper
+  (`frames/_dedup.py`) sorts by `(key..., _source_order)` before
+  collapsing duplicates, then re-sorts the surviving rows by `key`
+  alone before returning. Consumers can rely on every deduped frame
+  arriving in key-ascending order without an explicit sort downstream.
 
 ## 5. Null and drop policies (asymmetric by frame)
 
@@ -353,7 +356,36 @@ logged. `fiscalDateEnding` differences across observations do **not**
 trigger the no-op (they log `financials_fiscalDateEnding_offcycle`
 instead).
 
-## 11. etf_profile sparsity
+## 11. Macro / economic revisions: NOT PIT-correct
+
+`price_daily` deduplication keeps the **most recent observed value**
+on collisions: when the same `Date` is seen on multiple ingestion
+days with different values, the latest one wins. For data sources
+that **revise published values after the fact**, this means the
+saved frame carries the latest revision, not the value as first
+published at `d`.
+
+This bites hardest on the `economic` asset type: BLS, BEA, and the
+Fed revise CPI, GDP, unemployment, non-farm payrolls, and similar
+series weeks or months after first release. Each revision is picked
+up on the next ingestion and silently overwrites the prior value in
+`price_daily`. Monthly `commodities` series (COPPER, WHEAT, CORN,
+ALL_COMMODITIES, ...) follow the same dynamic. Daily-cadence prices
+(forex, indices, cryptocurrencies, daily commodities like WTI /
+BRENT) are not typically revised retroactively by the source, so
+the issue is moot there.
+
+**Consequence:** `price_daily` is **not provider-PIT** for
+source-revised series. A row at `Date = d` reflects the latest
+revision known at transformation time, not what was actually
+published at `d`. Backtests that need true PIT macro data cannot
+recover it from this frame.
+
+This contrasts with `financials_*` (section 10), where the daily era
+*is* per-row PIT-resolved. No equivalent per-row PIT resolution is
+performed on `price_daily`.
+
+## 12. etf_profile sparsity
 
 - The historical file contributes a single row dated to the historical
   run's data-complete date; daily files contribute one row per daily
@@ -361,7 +393,7 @@ instead).
 - The frame is **sparse in time** — consumers must treat absent dates
   as "no profile snapshot taken that day", not "the profile changed".
 
-## 12. Coverage matrix (what's present per asset type)
+## 13. Coverage matrix (what's present per asset type)
 
 | Asset type | Frames built per symbol |
 |---|---|
@@ -373,7 +405,7 @@ Frames not present for an asset type are simply absent from the
 per-symbol folder (not empty placeholders, except for the financials
 no-op cases described above and the `--skip-financials` CLI flag).
 
-## 13. transformation_report.parquet
+## 14. transformation_report.parquet
 
 - Per-symbol issue log at the destination root.
 - **Overwritten on each full run** — reflects the current transformation,
@@ -386,7 +418,7 @@ no-op cases described above and the `--skip-financials` CLI flag).
   any `financials_reportedDate_mismatch` may warrant exclusion from
   certain models.
 
-## 14. Things feature generation MUST NOT assume
+## 15. Things feature generation MUST NOT assume
 
 - **No pre-computed `AdjClose` / `AdjVolume` anywhere.** OHLCV is raw;
   build adjusted series from `shareprice_daily.AdjFactor` (see
@@ -410,7 +442,7 @@ no-op cases described above and the `--skip-financials` CLI flag).
 - **No commodities `unit` column.** Dropped at transformation; if needed,
   it belongs in `metadata.json` via a future scalar field.
 
-## 15. Things feature generation CAN rely on
+## 16. Things feature generation CAN rely on
 
 - Schema-exact frames: dtypes and column names match
   `AssetData_specifications.md` byte-for-byte, or the load fails.
