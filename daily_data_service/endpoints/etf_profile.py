@@ -46,19 +46,24 @@ async def fetch_etf_profile(
     folder_date: date,
     previous_date: date,
     symbols_filter: set[str] | None = None,
+    active_only: bool = True,
 ) -> None:
     if asset_type != "etfs":
         logger.info(f"etf_profile: skipping asset_type={asset_type!r} (ETFs only)")
         return
 
     catalog = read_catalog_symbols(catalog_dir, asset_type)
+    if active_only:
+        catalog = catalog.filter(pl.col("status") == "Active")
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "etf_profile"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = catalog.height
-    logger.info(f"etf_profile: {total} symbols to process")
+    logger.info(
+        f"etf_profile: {total} symbols to process (active_only={active_only})"
+    )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]

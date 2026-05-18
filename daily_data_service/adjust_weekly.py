@@ -70,6 +70,7 @@ from config.settings import AV_RATE_LIMIT_PER_MIN
 from daily_data_service._common import ET
 from daily_data_service.ensure_folders import ensure_daily_folders
 from daily_data_service.setup_daily import (
+    ACTIVE_ONLY_ENDPOINTS,
     ASSET_ENDPOINTS,
     ENDPOINT_MAP,
     YIELD_SKIP_ENDPOINTS,
@@ -411,6 +412,8 @@ async def adjust_weekly(
                     extra: dict = {}
                     if ep in YIELD_SKIP_ENDPOINTS:
                         extra["skip_empty_yield"] = False
+                    if ep in ACTIVE_ONLY_ENDPOINTS:
+                        extra["active_only"] = False
                     await f(
                         catalog_dir=catalog_dir,
                         daily_dir=day_root,

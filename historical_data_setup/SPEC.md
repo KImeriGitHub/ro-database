@@ -177,6 +177,10 @@ python historical_data_setup/setup_historical.py --stocks-dir /path/to/frd/stock
 
 ## Stocks & ETFs
 
+### Status filtering
+
+Every stock/ETF endpoint queries the full catalog -- both `status == "Active"` and `status == "Delisted"` symbols are fetched. Historical setup is the survivorship-bias-free anchor, so delisted coverage matters; the daily service is the one that restricts to active. The only per-symbol exception is `sentiment`, whose per-symbol parquet split is active-only (the global `ALL_MESSAGES.parquet` still carries every catalog symbol). `forex`, `indices`, `cryptocurrencies`, `commodities`, and `economic` ignore the `status` column entirely (their catalogs only carry currently-listed instruments).
+
 ### Stocks
 
 Stocks use the `prices`, `prices_daily`, `income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`, `insider`, and `sentiment` endpoints. The pipeline reads from `catalog/stocks.parquet` and writes to `historical/stocks/`.
@@ -344,7 +348,7 @@ Typical fields include `eps_estimate_average`, `eps_estimate_high`, `eps_estimat
 
 ### insider (INSIDER_TRANSACTIONS)
 
-Per symbol, fetches insider transaction history for **active stocks only**. The API response contains a flat `"data"` list. The `"transaction_date"` field is renamed to `transactionDate`; the `"ticker"` field is dropped (redundant with the file name). One file per symbol.
+Per symbol, fetches insider transaction history for every stock in the catalog (active and delisted). The API response contains a flat `"data"` list. The `"transaction_date"` field is renamed to `transactionDate`; the `"ticker"` field is dropped (redundant with the file name). One file per symbol.
 
 **Output schema** (`historical/stocks/insider/stocks_SYMBOL.parquet`):
 
@@ -738,7 +742,7 @@ Per-endpoint round-trip averages from catalog-sample speedtests, with full-catal
 | forex | 1.70s | 40 | 156 | ~4 min | Larger payloads (~3.2k rows/call) |
 | cryptocurrencies | 0.81s | 100 | 352 | ~5 min | USD pairs; ~915 rows/call |
 | etf_profile | 0.40s | 10 | 6,527 | ~1.4 h | One call per ETF |
-| insider | 0.70s | 10 | 8,649 | ~1.9 h | Active stocks only; ~1,150 rows/call |
+| insider | 0.70s | 10 | 8,649 | ~1.9 h | All stocks (active + delisted); ~1,150 rows/call |
 | prices_daily | 0.70s | 30 | 22,623 | ~5.5 h | Stocks + ETFs combined; ~1,740 rows/call |
 | Fundamentals (5 endpoints) | 0.5s | 30 | 80,480 | ~12.4 h | 16,096 stocks x 5 endpoints |
 | sentiment | ~2.5s | 500 | ~40,000 | < 1 h (as of 2026) | Global paginated fetch to 2010; multi-MB payloads |

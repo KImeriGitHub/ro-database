@@ -39,8 +39,11 @@ async def fetch_earnings_estimates(
     previous_date: date,
     skip_empty_yield: bool = False,
     symbols_filter: set[str] | None = None,
+    active_only: bool = True,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
+    if active_only:
+        catalog = catalog.filter(pl.col("status") == "Active")
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "earnings_estimates"
@@ -56,7 +59,8 @@ async def fetch_earnings_estimates(
     logger.info(
         f"earnings_estimates ({asset_type}): {total} symbols to process "
         f"(cutoff fiscalDateEnding >= {cutoff}; "
-        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)})"
+        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)}; "
+        f"active_only={active_only})"
     )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):

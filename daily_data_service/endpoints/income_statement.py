@@ -21,6 +21,7 @@ async def fetch_income_statement(
     previous_date: date,
     skip_empty_yield: bool = False,
     symbols_filter: set[str] | None = None,
+    active_only: bool = True,
 ) -> None:
     await fetch_fundamental_endpoint_daily(
         catalog_dir=catalog_dir,
@@ -37,4 +38,5 @@ async def fetch_income_statement(
         folder_date=folder_date,
         skip_empty_yield=skip_empty_yield,
         symbols_filter=symbols_filter,
+        active_only=active_only,
     )

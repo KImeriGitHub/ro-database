@@ -1,7 +1,7 @@
 """Download historical insider transaction data (INSIDER_TRANSACTIONS) for stocks.
 
-Only fetched for active symbols. The response contains a flat ``"data"`` list;
-each record becomes a row in a single DataFrame per symbol.
+The response contains a flat ``"data"`` list; each record becomes a row in a
+single DataFrame per symbol.
 """
 
 import logging
@@ -35,14 +35,13 @@ async def fetch_insider(
     issue_tracker: IssueTracker,
     asset_type: str = "stocks",
 ) -> None:
-    """Download insider transaction data for all active symbols of the given asset type."""
+    """Download insider transaction data for all symbols of the given asset type."""
     catalog = read_catalog_symbols(catalog_dir, asset_type)
-    catalog = catalog.filter(pl.col("status") == "Active")
     output_dir = historical_dir / asset_type / "insider"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     total = catalog.height
-    logger.info(f"insider (stocks): {total} active symbols to process")
+    logger.info(f"insider (stocks): {total} symbols to process")
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):
         symbol = row["symbol"]

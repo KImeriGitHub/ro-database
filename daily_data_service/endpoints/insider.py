@@ -1,6 +1,9 @@
-"""Daily pull of insider transactions (INSIDER_TRANSACTIONS) for active stocks.
+"""Daily pull of insider transactions (INSIDER_TRANSACTIONS).
 
-Truncates to ``transactionDate >= folder_date - 1 year``.
+Truncates to ``transactionDate >= folder_date - 1 year``. Daily runs query
+``status == "Active"`` symbols only; the weekend retry pass calls with
+``active_only=False`` so delisted stocks flagged in the ingestion report or
+``yield_status`` False cells get re-fetched too.
 """
 
 import logging
@@ -38,9 +41,11 @@ async def fetch_insider(
     folder_date: date,
     previous_date: date,
     symbols_filter: set[str] | None = None,
+    active_only: bool = True,
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
-    catalog = catalog.filter(pl.col("status") == "Active")
+    if active_only:
+        catalog = catalog.filter(pl.col("status") == "Active")
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "insider"
@@ -49,8 +54,8 @@ async def fetch_insider(
     cutoff = years_before(folder_date, 1)
     total = catalog.height
     logger.info(
-        f"insider ({asset_type}): {total} active symbols to process "
-        f"(cutoff transactionDate >= {cutoff})"
+        f"insider ({asset_type}): {total} symbols to process "
+        f"(cutoff transactionDate >= {cutoff}; active_only={active_only})"
     )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):

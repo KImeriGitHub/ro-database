@@ -4,6 +4,16 @@ Daily incremental pull from Alpha Vantage. Same endpoint coverage as [`historica
 
 Weekday runs can skip fundamental queries for symbols known to return empty data via the `--skip-empty-yield` flag; weekend runs omit the flag to re-validate those cells.
 
+## Status filtering (active vs delisted)
+
+Stock/ETF endpoints honour an `active_only: bool = True` kwarg that filters the catalog to `status == "Active"` before the per-symbol loop:
+
+- **Daily run** ([`setup_daily.py`](setup_daily.py)) leaves the default in place, so only active stocks/ETFs are queried. This keeps the weekday call budget off chronically-empty delisted tickers.
+- **Weekend retry** ([`adjust_weekly.py`](adjust_weekly.py)) passes `active_only=False` for every endpoint listed in `ACTIVE_ONLY_ENDPOINTS` (`prices`, `prices_daily`, the five fundamentals, `insider`, `etf_profile`), so delisted symbols flagged in `yield_status` False cells or in-window ingestion reports actually get re-fetched.
+- **Other asset types** (`forex`, `indices`, `cryptocurrencies`, `commodities`, `economic`) do not accept the flag; their catalogs only carry currently-listed instruments and the SPEC already states they are queried regardless of `status`.
+
+`sentiment` is a single global paginated call, not a per-symbol query; daily and weekend runs both pull every catalog ticker and only the per-symbol parquet split is restricted to active stocks (master `ALL_MESSAGES.parquet` always carries every catalog symbol).
+
 ## Relationship to historical_data_setup
 
 The daily service mirrors historical's orchestration (async, cross-endpoint concurrency, shared sliding-window rate limiter, issue tracker, resume-by-file-existence) and reuses its primitives directly from [`historical_data_setup/_common.py`](../historical_data_setup/_common.py):
@@ -32,7 +42,7 @@ daily/
     │   ├── cash_flow/
     │   ├── earnings/
     │   ├── earnings_estimates/
-    │   ├── insider/                # stocks_SYMBOL.parquet (active stocks only), INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
+    │   ├── insider/                # stocks_SYMBOL.parquet (daily: active only, weekend retry: active + delisted), INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
     │   └── sentiment/              # ALL_MESSAGES.parquet + stocks_SYMBOL.parquet
     ├── etfs/
     │   ├── prices/
@@ -90,7 +100,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 | `cash_flow` | stocks | `CASH_FLOW` | `fiscalDateEnding >= folder-date - 5 years` |
 | `earnings` | stocks | `EARNINGS` | `fiscalDateEnding >= folder-date - 5 years` |
 | `earnings_estimates` | stocks | `EARNINGS_ESTIMATES` | `fiscalDateEnding >= folder-date - 5 years` |
-| `insider` | stocks (active only) | `INSIDER_TRANSACTIONS` | `transactionDate >= folder-date - 1 year` |
+| `insider` | stocks | `INSIDER_TRANSACTIONS` | `transactionDate >= folder-date - 1 year` |
 | `sentiment` | stocks | `NEWS_SENTIMENT`, backward pagination | `time_from = min(previous-date, folder-date - 7d) 00:00 UTC` (INCLUDING) to current UTC time |
 | `etf_profile` | etfs | `ETF_PROFILE` | no truncation; `date` column set to folder-date |
 | `forex` | forex | `FX_DAILY`, **`outputsize=compact`** | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
@@ -279,7 +289,7 @@ All retried results land under `daily/<folder_date>/`, regardless of which sourc
 - **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `<prefix>_SYMBOL_annual.parquet` and `<prefix>_SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
 - **Sentiment**: handled specially (see below).
 
-The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call.
+The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call, and passes `active_only=False` for every endpoint in `ACTIVE_ONLY_ENDPOINTS` so delisted symbols flagged for retry are queried (the weekday daily run leaves `active_only=True`).
 
 ### `symbols_filter` on endpoint functions
 

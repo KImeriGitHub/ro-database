@@ -64,6 +64,7 @@ async def fetch_fundamental_endpoint_daily(
     folder_date: date,
     skip_empty_yield: bool = False,
     symbols_filter: set[str] | None = None,
+    active_only: bool = True,
 ) -> None:
     """Generic daily fetcher for fundamental endpoints with 5-year truncation.
 
@@ -77,6 +78,8 @@ async def fetch_fundamental_endpoint_daily(
     ``(symbol, endpoint)`` pairs flagged in the ingestion report.
     """
     catalog = read_catalog_symbols(catalog_dir, asset_type)
+    if active_only:
+        catalog = catalog.filter(pl.col("status") == "Active")
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / endpoint
@@ -91,7 +94,8 @@ async def fetch_fundamental_endpoint_daily(
     logger.info(
         f"{endpoint} ({asset_type}): {total} symbols to process "
         f"(cutoff fiscalDateEnding >= {cutoff}; "
-        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)})"
+        f"skip_empty_yield={skip_empty_yield}, skip_set={len(skip_symbols)}; "
+        f"active_only={active_only})"
     )
 
     for idx, row in enumerate(catalog.iter_rows(named=True), 1):

@@ -96,6 +96,19 @@ YIELD_SKIP_ENDPOINTS = {
     "earnings", "earnings_estimates",
 }
 
+# Endpoints that honour ``active_only``: stock/ETF endpoints that filter the
+# catalog to ``status == "Active"`` by default. Daily runs leave the flag at
+# True; the weekend retry pass calls with ``active_only=False`` so delisted
+# symbols flagged for retry are queried. Endpoints whose catalogs have no
+# active/delisted distinction (forex, indices, cryptocurrencies, commodities,
+# economic) are not listed and ignore the flag.
+ACTIVE_ONLY_ENDPOINTS = {
+    "prices", "prices_daily",
+    "income_statement", "balance_sheet", "cash_flow",
+    "earnings", "earnings_estimates",
+    "insider", "etf_profile",
+}
+
 
 async def _run_endpoint_task(label: str, coro_factory) -> None:
     """Await an endpoint coroutine, logging any top-level exception instead
