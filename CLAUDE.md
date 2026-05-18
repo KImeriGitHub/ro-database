@@ -12,7 +12,7 @@ Bias-aware market data infrastructure for algo trading research, backtesting, an
 
 ## Architecture
 
-- **GCP Cloud container** runs daily ingestion scripts, writes to a single GCS bucket (`gs://<project-id>-algo-trading/`)
+- **GCP Cloud container** runs daily ingestion scripts, writes to a single GCS bucket (`gs://<project-id>-asset-database/`)
 - **Local sync script** mirrors GCS bucket contents for transformation and research
 - All data stored as `.parquet` (both daily and historical)
 - Restatement detection via `deepdiff` comparing new data against previous day's data

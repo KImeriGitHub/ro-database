@@ -3,10 +3,11 @@
 Entrypoints call ``configure_logging()`` once inside ``__main__`` so
 formatting stays consistent across the codebase.
 
-On Cloud Run (``K_SERVICE`` is set) the handler swaps to a JSON formatter
-whose field names match Cloud Logging's structured-log spec, so severity,
-source location, and any ``extra={...}`` payload become queryable fields
-in Logs Explorer (e.g. ``jsonPayload.ticker = "AAPL"``).
+On Cloud Run (``K_SERVICE`` on Services, ``CLOUD_RUN_JOB`` on Jobs) the
+handler swaps to a JSON formatter whose field names match Cloud Logging's
+structured-log spec, so severity, source location, and any ``extra={...}``
+payload become queryable fields in Logs Explorer
+(e.g. ``jsonPayload.ticker = "AAPL"``).
 """
 
 from __future__ import annotations
@@ -129,5 +130,10 @@ def configure_logging(
 
 
 def detect_cloud_run() -> bool:
-    """Return True when running inside Cloud Run (env var ``K_SERVICE``)."""
-    return "K_SERVICE" in os.environ
+    """Return True when running inside Cloud Run.
+
+    Cloud Run **Services** auto-inject ``K_SERVICE``; Cloud Run **Jobs**
+    auto-inject ``CLOUD_RUN_JOB`` (per the container runtime contract).
+    Either presence flips us into Cloud Run mode.
+    """
+    return "K_SERVICE" in os.environ or "CLOUD_RUN_JOB" in os.environ

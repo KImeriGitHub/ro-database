@@ -53,20 +53,34 @@ def _restore_root_logger():
 
 def test_detect_cloud_run_true_when_k_service_set(monkeypatch):
     monkeypatch.setenv("K_SERVICE", "ro-daily-ingest")
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     assert detect_cloud_run() is True
 
 
-def test_detect_cloud_run_false_when_k_service_unset(monkeypatch):
+def test_detect_cloud_run_true_when_cloud_run_job_set(monkeypatch):
+    """Cloud Run Jobs do not inject ``K_SERVICE`` (only Services do); they
+    inject ``CLOUD_RUN_JOB`` instead. Detection must accept either."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setenv("CLOUD_RUN_JOB", "ro-daily-run")
+    assert detect_cloud_run() is True
+
+
+def test_detect_cloud_run_false_when_neither_set(monkeypatch):
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     assert detect_cloud_run() is False
 
 
 def test_detect_cloud_run_truthy_value_only_checks_presence(monkeypatch):
     """The check is presence-based: any value, even empty string, qualifies.
-    This matches Cloud Run's behaviour, which always sets K_SERVICE to the
-    service name (never empty in practice but the contract is
-    presence-based, not value-based)."""
+    This matches Cloud Run's behaviour, which always sets the variable to a
+    non-empty name in practice but the contract is presence-based, not
+    value-based."""
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     monkeypatch.setenv("K_SERVICE", "")
+    assert detect_cloud_run() is True
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.setenv("CLOUD_RUN_JOB", "")
     assert detect_cloud_run() is True
 
 
@@ -183,6 +197,7 @@ def test_configure_logging_idempotent_replaces_handler(monkeypatch):
     pytest collections) must replace the handler, not stack a second one,
     or every log line would be duplicated."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     configure_logging(log_to_file=False)
     configure_logging(log_to_file=False)
     configure_logging(log_to_file=False)
@@ -193,6 +208,7 @@ def test_configure_logging_text_mode_writes_human_format(monkeypatch):
     """When ``structured=False`` the human formatter is installed -- must
     contain the level name and message verbatim (i.e. not JSON)."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     buf = io.StringIO()
     configure_logging(stream=buf, structured=False, log_to_file=False)
 
@@ -206,6 +222,7 @@ def test_configure_logging_text_mode_writes_human_format(monkeypatch):
 
 def test_configure_logging_json_mode_writes_structured_payload(monkeypatch):
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     buf = io.StringIO()
     configure_logging(stream=buf, structured=True, log_to_file=False)
 
@@ -234,6 +251,7 @@ def test_configure_logging_default_structured_follows_detect_cloud_run(monkeypat
 def test_configure_logging_respects_level(monkeypatch):
     """A WARNING-level configure must drop INFO messages."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     buf = io.StringIO()
     configure_logging(level=logging.WARNING, stream=buf, structured=False, log_to_file=False)
 
@@ -250,6 +268,7 @@ def test_configure_logging_writes_file_when_log_to_file_true(monkeypatch, tmp_pa
     """A file handler must be installed alongside the stream handler and
     receive the same formatted output, so failed local runs leave a trail."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     buf = io.StringIO()
     configure_logging(stream=buf, structured=False, log_to_file=True, log_dir=tmp_path)
 

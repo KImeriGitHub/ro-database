@@ -2,8 +2,9 @@
 
 The resolver picks one of three branches:
 
-1. Cloud Run (``K_SERVICE`` env present) -> return ``None`` so the client
-   library uses Application Default Credentials.
+1. Cloud Run (``K_SERVICE`` env present on Services, ``CLOUD_RUN_JOB`` on
+   Jobs -- either flips ``detect_cloud_run`` to True) -> return ``None`` so
+   the client library uses Application Default Credentials.
 2. Local with ``GOOGLE_APPLICATION_CREDENTIALS`` set -> load that file.
 3. Local without the override -> load ``secrets/gcs_credentials.json``.
 
@@ -58,6 +59,7 @@ def test_uses_explicit_override_env_var(monkeypatch, tmp_path, stub_loader):
     """GOOGLE_APPLICATION_CREDENTIALS, when set locally, must win over the
     default ``secrets/gcs_credentials.json`` path."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     override = tmp_path / "my-creds.json"
     override.write_text("{}")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(override))
@@ -74,6 +76,7 @@ def test_falls_back_to_default_secrets_path(monkeypatch, tmp_path, stub_loader):
     ``settings.GCS_CREDENTIALS_FILE``. Redirect that constant to a scratch
     file so the test is hermetic."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     default = tmp_path / "gcs_credentials.json"
     default.write_text("{}")
@@ -91,6 +94,7 @@ def test_missing_default_file_raises(monkeypatch, tmp_path, stub_loader):
     fail loudly with a path-bearing message so the operator knows where to
     drop the key, instead of silently writing to a wrong project."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
     missing = tmp_path / "does-not-exist.json"
     monkeypatch.setattr(gcp_credentials, "GCS_CREDENTIALS_FILE", missing)
@@ -104,6 +108,7 @@ def test_missing_override_file_raises(monkeypatch, tmp_path, stub_loader):
     must NOT silently fall back to the default path -- the override is the
     user's stated intent and must be honoured or rejected."""
     monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     bogus = tmp_path / "missing.json"
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(bogus))
     # Also point the default at a file that DOES exist; if the resolver
