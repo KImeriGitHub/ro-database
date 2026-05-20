@@ -11,6 +11,8 @@ transfers or lifecycle management) belongs in its own module.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,8 +38,22 @@ def get_client() -> Client:
     return _client
 
 
-def get_bucket(bucket_name: str = GCS_BUCKET) -> Bucket:
-    return get_client().bucket(bucket_name)
+def get_bucket(bucket_name: str | None = None) -> Bucket:
+    """Return the ``Bucket`` handle for *bucket_name* (defaults to ``GCS_BUCKET``).
+
+    The default is resolved at call time, not at import time, so an unset
+    ``GCS_BUCKET`` surfaces as a loud ``RuntimeError`` from here rather than
+    a confusing ``ValueError`` deep inside the Google SDK when it sees a
+    ``None`` bucket name. Tests that monkeypatch ``gcs_client.GCS_BUCKET``
+    have their patch honoured.
+    """
+    name = bucket_name or GCS_BUCKET
+    if not name:
+        raise RuntimeError(
+            "GCS_BUCKET is not configured. Set the GCS_BUCKET environment "
+            "variable or add 'gcs_bucket' to secrets/gcs_credentials.json."
+        )
+    return get_client().bucket(name)
 
 
 @dataclass(frozen=True)
@@ -49,7 +65,7 @@ class BlobInfo:
     updated_iso: str | None
 
 
-def list_blobs(prefix: str, bucket_name: str = GCS_BUCKET) -> Iterator[BlobInfo]:
+def list_blobs(prefix: str, bucket_name: str | None = None) -> Iterator[BlobInfo]:
     """Iterate blobs under *prefix* (non-recursive-aware; GCS has no dirs)."""
     bucket = get_bucket(bucket_name)
     for blob in bucket.list_blobs(prefix=prefix):
@@ -64,21 +80,21 @@ def list_blobs(prefix: str, bucket_name: str = GCS_BUCKET) -> Iterator[BlobInfo]
 def upload_file(
     local_path: Path,
     blob_name: str,
-    bucket_name: str = GCS_BUCKET,
+    bucket_name: str | None = None,
     content_type: str | None = None,
 ) -> Blob:
     """Upload *local_path* to ``gs://bucket/blob_name``. Returns the blob."""
     bucket = get_bucket(bucket_name)
     blob = bucket.blob(blob_name)
     blob.upload_from_filename(str(local_path), content_type=content_type)
-    logger.info(f"Uploaded {local_path} to gs://{bucket_name}/{blob_name}")
+    logger.info(f"Uploaded {local_path} to gs://{bucket.name}/{blob_name}")
     return blob
 
 
 def download_file(
     blob_name: str,
     local_path: Path,
-    bucket_name: str = GCS_BUCKET,
+    bucket_name: str | None = None,
 ) -> Path:
     """Download ``gs://bucket/blob_name`` into *local_path*. Creates parents."""
     bucket = get_bucket(bucket_name)
@@ -88,14 +104,14 @@ def download_file(
     return local_path
 
 
-def blob_exists(blob_name: str, bucket_name: str = GCS_BUCKET) -> bool:
+def blob_exists(blob_name: str, bucket_name: str | None = None) -> bool:
     return get_bucket(bucket_name).blob(blob_name).exists()
 
 
 def upload_tree(
     local_root: Path,
     prefix: str,
-    bucket_name: str = GCS_BUCKET,
+    bucket_name: str | None = None,
     include_hidden: bool = True,
 ) -> list[str]:
     """Recursively upload *local_root* under bucket ``prefix/``.
@@ -121,17 +137,35 @@ def upload_tree(
     return uploaded
 
 
+def _local_md5_b64(path: Path) -> str:
+    """Return the base64-encoded MD5 of *path* in the same format GCS reports.
+
+    Streamed in 1 MiB chunks so the helper stays cheap on large parquets.
+    GCS' ``Blob.md5_hash`` is base64-encoded; this mirrors that encoding so
+    a single ``==`` comparison settles the freshness question.
+    """
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return base64.b64encode(h.digest()).decode("ascii")
+
+
 def download_tree(
     prefix: str,
     local_root: Path,
-    bucket_name: str = GCS_BUCKET,
-    skip_if_same_size: bool = True,
+    bucket_name: str | None = None,
+    skip_if_same_md5: bool = True,
 ) -> list[Path]:
     """Recursively download every blob under ``prefix/`` into *local_root*.
 
-    When *skip_if_same_size* is True, a local file that already matches the
-    remote blob's size is left untouched. This is cheap and good enough for
-    the append-only parquet layout.
+    When *skip_if_same_md5* is True, a local file whose MD5 matches the
+    remote blob's ``md5_hash`` is left untouched. MD5 over size avoids the
+    rare-but-real case where a rewritten file (e.g. a refreshed
+    ``ingestion_report.parquet``) lands at the same byte count but with
+    different content. A blob whose ``md5_hash`` is missing (composite
+    objects don't expose one) is always re-downloaded since there is no
+    way to verify freshness from the metadata alone.
     """
     local_root.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -140,7 +174,12 @@ def download_tree(
         if not rel:
             continue
         dest = local_root / rel
-        if skip_if_same_size and dest.exists() and dest.stat().st_size == info.size:
+        if (
+            skip_if_same_md5
+            and dest.exists()
+            and info.md5_hash is not None
+            and _local_md5_b64(dest) == info.md5_hash
+        ):
             continue
         download_file(info.name, dest, bucket_name=bucket_name)
         written.append(dest)
@@ -150,7 +189,7 @@ def download_tree(
 def diff_local_vs_remote(
     local_root: Path,
     prefix: str,
-    bucket_name: str = GCS_BUCKET,
+    bucket_name: str | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """Return ``(only_local, only_remote, size_mismatch)`` as blob names.
 

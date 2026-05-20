@@ -106,7 +106,9 @@ All runtime dependencies (GCP client libraries, dataframe stack, HTML/parquet to
 
 ### GCP configuration
 
-[`config/gcp.py`](config/gcp.py) reads every deployment-specific identifier (project id, region, bucket name, Cloud Run job name, container image ref, Secret Manager secret names) from environment variables and intentionally **does not** ship any defaults: the repo is public and a default would either leak a real deployment's identifiers or paper over a misconfigured one. Missing values surface as `None` at import time, and the first GCP client call that needs them fails loudly. The expected env vars are: `GCP_PROJECT_ID`, `GCP_REGION`, `GCS_BUCKET`, `CLOUD_RUN_JOB_NAME`, `CONTAINER_IMAGE`, `SECRET_AV_KEY_STANDARD`, `SECRET_AV_KEY_PREMIUM`, `USE_SECRET_MANAGER_FOR_AV_KEYS`. Only the boolean `USE_SECRET_MANAGER_FOR_AV_KEYS` carries a default (`false`), so local runs without GCP configured fail loudly instead of silently reaching for a Secret Manager that does not exist. Bucket name, Cloud Run job name, and secret names are chosen by the operator and passed via env; there is no built-in convention for any of them.
+[`config/gcp.py`](config/gcp.py) reads every deployment-specific identifier (project id, region, bucket name, Cloud Run job name, Secret Manager secret names) from environment variables first, then falls back to a matching snake_case key in `secrets/gcs_credentials.json` -- so local dev can keep the values in one file instead of exporting them in every shell, while Cloud Run keeps using its env-var spec (the secrets file is not shipped in the container). There are intentionally **no** hard-coded defaults: the repo is public and a default would either leak a real deployment's identifiers or paper over a misconfigured one. Missing values surface as `None` at import time, and the first GCP client call that needs them fails loudly. The expected env vars (and their JSON keys) are: `GCP_PROJECT_ID` / `project_id`, `GCP_REGION` / `gcp_region`, `GCS_BUCKET` / `gcs_bucket`, `CLOUD_RUN_JOB_NAME` / `cloud_run_job_name`, `SECRET_AV_KEY_STANDARD` / `secret_av_key_standard`, `SECRET_AV_KEY_PREMIUM` / `secret_av_key_premium`, `USE_SECRET_MANAGER_FOR_AV_KEYS` / `use_secret_manager_for_av_keys`. Only the boolean `USE_SECRET_MANAGER_FOR_AV_KEYS` carries a default (`false`), so local runs without GCP configured fail loudly instead of silently reaching for a Secret Manager that does not exist. Bucket name, Cloud Run job name, and secret names are chosen by the operator; there is no built-in convention for any of them.
+
+Authentication is **Application Default Credentials (ADC)** on every host. On Cloud Run the platform injects ADC via the bound service account. Locally, run `gcloud auth application-default login` once; the SDK writes credentials to the standard ADC location and the Google client libraries pick them up automatically (`GOOGLE_APPLICATION_CREDENTIALS` still overrides that path if set). `secrets/gcs_credentials.json` holds configuration only -- no service-account key lives on disk.
 
 ### API key resolution
 
@@ -125,7 +127,7 @@ Same parser as `alpha_vantage_keys`: one `key=value` per line, `#` comments and 
 
 ### Health check
 
-After a fresh deploy (new container, new project, new local machine), run `python -m maintainance_scripts.gcp_ping_test` with the same env vars the pipeline will use. The script exercises the GCS bucket end-to-end (list / write / read-back / delete a throwaway blob under `_health/`) and, when secret names are configured, fetches each AV-key secret to confirm Secret Manager access. Each failure mode (missing creds, IAM denial, wrong bucket/project, secret missing or unversioned, network egress blocked) maps to a distinct error message. Logs land in `logs/<UTC>_gcp_ping_test.log` and on stdout. Enable the Cloud Scheduler triggers only after the ping logs `PING OK`.
+After a fresh deploy (new container, new project, new local machine), run `python -m maintainance_scripts.gcp_ping_test`. The script takes no flags: bucket and project id are resolved through the shared GCS client (env vars first, then `secrets/gcs_credentials.json`). It exercises the GCS bucket end-to-end (list / write / read-back / delete a throwaway blob under `_health/`) and, when secret names are configured, fetches each AV-key secret to confirm Secret Manager access. Each failure mode (missing creds, IAM denial, wrong bucket/project, secret missing or unversioned, network egress blocked) maps to a distinct error message. Logs land in `logs/<UTC>_gcp_ping_test.log` and on stdout. Enable the Cloud Scheduler triggers only after the ping logs `PING OK`.
 
 
 ## Folder structure
@@ -133,7 +135,7 @@ After a fresh deploy (new container, new project, new local machine), run `pytho
 ```
 secrets/                      # NOT IN GIT - optional locally; container pulls from Secret Manager
 ├── alpha_vantage_keys        # Alpha Vantage API keys (standard= / premium=)
-├── gcs_credentials.json      # GCP service-account key (local dev only; Cloud Run uses ADC)
+├── gcs_credentials.json      # GCP config: project id, bucket, secret names (local dev only; container uses env). NOT a service-account key - auth is ADC on every host.
 └── dir_location.txt          # Optional local-path overrides (database_dir= / transformation_dir=)
 
 config/

@@ -33,15 +33,29 @@ def get_client() -> SecretManagerServiceClient:
 def get_secret(
     secret_name: str,
     version: str = "latest",
-    project_id: str = GCP_PROJECT_ID,
+    project_id: str | None = None,
 ) -> str:
     """Fetch the payload of ``projects/{project_id}/secrets/{secret_name}/versions/{version}``.
+
+    ``project_id`` defaults to ``GCP_PROJECT_ID`` resolved at call time (not
+    at import time), so an unset project id surfaces as a friendly
+    ``RuntimeError`` here instead of an opaque ``InvalidArgument`` from the
+    SDK after it tries to look up ``projects/None/secrets/...``. Tests that
+    monkeypatch ``secret_manager_client.GCP_PROJECT_ID`` have their patch
+    honoured.
 
     The payload is UTF-8 decoded and stripped of surrounding whitespace so
     callers do not need to worry about trailing newlines from ``gcloud
     secrets create --data-file=-``.
     """
-    resource = f"projects/{project_id}/secrets/{secret_name}/versions/{version}"
+    project = project_id or GCP_PROJECT_ID
+    if not project:
+        raise RuntimeError(
+            "GCP_PROJECT_ID is not configured, so the Secret Manager resource "
+            "path would be 'projects/None/secrets/...'. Set GCP_PROJECT_ID in "
+            "the environment or add 'project_id' to secrets/gcs_credentials.json."
+        )
+    resource = f"projects/{project}/secrets/{secret_name}/versions/{version}"
     response = get_client().access_secret_version(request={"name": resource})
     logger.info(f"Fetched secret {secret_name} (version {version}) from Secret Manager")
     return response.payload.data.decode("utf-8").strip()

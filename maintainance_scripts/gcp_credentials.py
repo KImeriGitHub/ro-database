@@ -4,44 +4,28 @@ Used by every client library that talks to GCP (Cloud Storage, Secret
 Manager, etc.). Credentials are service-agnostic, so a single helper is
 enough for the whole codebase.
 
-Resolution order:
+This project uses Application Default Credentials (ADC) on every host:
 
-1. Inside Cloud Run the platform injects Application Default Credentials, so
-   we return ``None`` and let ``google.auth`` pick them up automatically.
-2. Locally, load a service-account JSON file from ``secrets/gcs_credentials.json``
-   (overridable via ``GOOGLE_APPLICATION_CREDENTIALS``) and build a
-   ``google.oauth2.service_account.Credentials`` from it.
-3. If neither path is available we raise: failing loudly beats silently
-   writing to the wrong project.
+- On Cloud Run the platform injects ADC via the bound service account; the
+  Google client libraries pick them up from the metadata server.
+- Locally the operator runs ``gcloud auth application-default login`` once,
+  which writes credentials to the standard ADC location
+  (``%APPDATA%\\gcloud\\application_default_credentials.json`` on Windows,
+  ``~/.config/gcloud/application_default_credentials.json`` elsewhere).
+  ``GOOGLE_APPLICATION_CREDENTIALS`` still overrides that path if set.
+
+In every case we return ``None`` so the client library resolves ADC itself.
+No service-account key is read from ``secrets/`` -- that file holds project
+configuration (project id, bucket, secret names) only.
 """
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 
-from google.oauth2 import service_account
+def get_gcp_credentials() -> None:
+    """Return ``None`` so callers fall through to Application Default Credentials.
 
-from config.settings import GCS_CREDENTIALS_FILE
-from maintainance_scripts.logging_setup import detect_cloud_run
-
-
-def get_gcp_credentials() -> service_account.Credentials | None:
-    """Return credentials suitable for any ``google.cloud.*`` client.
-
-    ``None`` is a valid return value and tells the client to use ADC, which
-    is the correct behaviour on Cloud Run.
+    Kept as a function (rather than inlining ``None``) so callers retain a
+    single seam for tests and future credential-resolution changes.
     """
-    if detect_cloud_run():
-        return None
-
-    override = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    path = Path(override) if override else GCS_CREDENTIALS_FILE
-    if not path.exists():
-        raise FileNotFoundError(
-            f"GCP credentials file not found: {path}. "
-            "Set GOOGLE_APPLICATION_CREDENTIALS or drop the service-account "
-            "JSON at secrets/gcs_credentials.json."
-        )
-
-    return service_account.Credentials.from_service_account_file(str(path))
+    return None

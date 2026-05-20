@@ -8,8 +8,11 @@ are all healthy and the daily pipeline can be safely scheduled.
 The script runs two steps:
 
 **Step 1 -- GCS roundtrip.**
-    1. Resolves GCP credentials via :func:`maintainance_scripts.gcp_credentials.get_gcp_credentials`
-       (ADC on Cloud Run, service-account JSON locally).
+    1. Resolves GCP credentials via Application Default Credentials (the
+       :func:`maintainance_scripts.gcp_credentials.get_gcp_credentials`
+       helper returns ``None`` so the client picks ADC up itself -- the
+       Cloud Run service account in the container, ``gcloud auth
+       application-default login`` credentials locally).
     2. Instantiates the shared GCS client.
     3. Lists ``gs://<GCS_BUCKET>/`` (one page) -- proves read access.
     4. Writes a throwaway blob at ``_health/ping_<UTC>_<rand>.txt`` -- proves write.
@@ -34,6 +37,9 @@ durable trail next to the source tree.
 
 Usage:
     python -m maintainance_scripts.gcp_ping_test
+
+Bucket and project id are resolved through the shared GCS client, which
+reads ``GCS_BUCKET`` and ``GCP_PROJECT_ID`` from ``config.gcp``.
 """
 
 from __future__ import annotations
@@ -50,8 +56,6 @@ from google.api_core import exceptions as gax
 from google.auth import exceptions as gauth
 
 from config.gcp import (
-    GCP_PROJECT_ID,
-    GCS_BUCKET,
     SECRET_AV_KEY_PREMIUM,
     SECRET_AV_KEY_STANDARD,
 )
@@ -64,12 +68,16 @@ _HEALTH_PREFIX = "_health"
 
 
 def _run_gcs_ping() -> None:
-    if not GCS_BUCKET:
+    client = gcs_client.get_client()
+    bucket = gcs_client.get_bucket()
+    gcs_bucket = bucket.name
+
+    if not gcs_bucket:
         raise RuntimeError(
             "GCS_BUCKET is not configured. Set the GCS_BUCKET environment "
             "variable before running the ping."
         )
-    if not GCP_PROJECT_ID:
+    if not client.project:
         logger.warning(
             "GCP_PROJECT_ID is not set; falling back to the project bound to "
             "the resolved credentials (ADC default)."
@@ -79,11 +87,9 @@ def _run_gcs_ping() -> None:
     blob_name = f"{_HEALTH_PREFIX}/ping_{timestamp}_{uuid4().hex[:8]}.txt"
     payload = f"ping {timestamp}\n".encode("utf-8")
 
-    logger.info(f"Ping target: gs://{GCS_BUCKET}/{blob_name}")
+    logger.info(f"Ping target: gs://{gcs_bucket}/{blob_name}")
 
-    bucket = gcs_client.get_bucket()
-
-    logger.info(f"Listing gs://{GCS_BUCKET}/ (first page) ...")
+    logger.info(f"Listing gs://{gcs_bucket}/ (first page) ...")
     listed = list(bucket.list_blobs(max_results=5))
     logger.info(f"List ok ({len(listed)} blob(s) returned in first page)")
 
@@ -122,7 +128,8 @@ def _run_secret_manager_ping() -> None:
         )
         return
 
-    if not GCP_PROJECT_ID:
+    gcp_project_id = gcs_client.get_client().project
+    if not gcp_project_id:
         raise RuntimeError(
             "Cannot reach Secret Manager: GCP_PROJECT_ID is unset, so the "
             "secret resource path would be 'projects/None/secrets/...'. "
@@ -134,14 +141,14 @@ def _run_secret_manager_ping() -> None:
     from maintainance_scripts.secret_manager_client import get_secret
 
     for tier, name in configured:
-        resource = f"projects/{GCP_PROJECT_ID}/secrets/{name}/versions/latest"
+        resource = f"projects/{gcp_project_id}/secrets/{name}/versions/latest"
         logger.info(f"Fetching Secret Manager secret for AV '{tier}' tier: {resource}")
         try:
             value = get_secret(name)
         except gax.NotFound as exc:
             raise RuntimeError(
                 f"Secret Manager secret '{name}' not found in project "
-                f"'{GCP_PROJECT_ID}'. Create it (`gcloud secrets create {name}`) "
+                f"'{gcp_project_id}'. Create it (`gcloud secrets create {name}`) "
                 f"or check that SECRET_AV_KEY_{tier.upper()} matches the real "
                 f"secret name."
             ) from exc
@@ -171,16 +178,18 @@ def _run_step(label: str, fn) -> int:
         fn()
     except FileNotFoundError as exc:
         logger.error(
-            f"PING FAIL [{label}]: missing credentials file -> {exc}. "
-            "Drop the service-account JSON at secrets/gcs_credentials.json "
-            "or point GOOGLE_APPLICATION_CREDENTIALS at one."
+            f"PING FAIL [{label}]: missing file -> {exc}. "
+            "If this points at a credentials JSON, the ADC override "
+            "GOOGLE_APPLICATION_CREDENTIALS is set to a path that does not "
+            "exist; unset it or run 'gcloud auth application-default login'."
         )
         return 1
     except gauth.DefaultCredentialsError as exc:
         logger.error(
-            f"PING FAIL [{label}]: no credentials resolvable -> {exc}. "
-            "On Cloud Run check the service account binding; locally check "
-            "GOOGLE_APPLICATION_CREDENTIALS."
+            f"PING FAIL [{label}]: no ADC resolvable -> {exc}. "
+            "On Cloud Run check the service account binding; locally run "
+            "'gcloud auth application-default login' (or point "
+            "GOOGLE_APPLICATION_CREDENTIALS at a valid creds file)."
         )
         return 1
     except gax.Forbidden as exc:
@@ -192,8 +201,8 @@ def _run_step(label: str, fn) -> int:
     except gax.NotFound as exc:
         logger.error(
             f"PING FAIL [{label}]: resource not found -> {exc}. "
-            f"Verify GCS_BUCKET={GCS_BUCKET!r} and GCP_PROJECT_ID="
-            f"{GCP_PROJECT_ID!r} match real resources the account can see."
+            "Verify GCS_BUCKET and GCP_PROJECT_ID env vars match real "
+            "resources the account can see."
         )
         return 1
     except gax.GoogleAPICallError as exc:

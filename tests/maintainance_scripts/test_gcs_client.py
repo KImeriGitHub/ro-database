@@ -127,12 +127,11 @@ def fake_storage(monkeypatch):
 
     monkeypatch.setattr(gcs_client.storage, "Client", client_factory)
     monkeypatch.setattr(gcs_client, "get_gcp_credentials", lambda: "FAKE_CREDS")
-    # GCP_PROJECT_ID is read at call-time inside get_client(), so this patch
-    # takes effect. GCS_BUCKET, in contrast, is captured as a function default
-    # at import time -- patching it here would not propagate; tests instead
-    # pass the bucket name explicitly or rely on the consistent default value
-    # across calls within a single test.
+    # Both module-level constants are resolved at call time, so monkeypatching
+    # them here propagates to every helper -- tests can rely on the default
+    # bucket name without having to thread "test-bucket" through every call.
     monkeypatch.setattr(gcs_client, "GCP_PROJECT_ID", "test-project")
+    monkeypatch.setattr(gcs_client, "GCS_BUCKET", "test-bucket")
     return created
 
 
@@ -328,23 +327,50 @@ def test_upload_tree_rejects_non_directory(fake_storage, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_download_tree_skips_same_size_local_files(fake_storage, tmp_path):
-    """Default ``skip_if_same_size=True`` is the cheap append-only sync
-    semantic: do not re-download a parquet the local mirror already has."""
+def test_download_tree_skips_when_local_md5_matches_remote(fake_storage, tmp_path):
+    """Default ``skip_if_same_md5=True`` skips a download only when the local
+    file's MD5 matches the blob's ``md5_hash``. Same byte count but different
+    bytes (e.g. a rewritten ``ingestion_report.parquet``) must NOT be skipped,
+    which is what makes MD5 safer than the old size-only check."""
+    import base64
+    import hashlib
+
+    def md5_b64(payload: bytes) -> str:
+        return base64.b64encode(hashlib.md5(payload).digest()).decode("ascii")
+
     bucket = gcs_client.get_bucket()
-    bucket.add("historical/a.parquet", b"abc")  # size 3
-    bucket.add("historical/b.parquet", b"defgh")  # size 5
+    bucket.add("historical/a.parquet", b"abc", md5=md5_b64(b"abc"))
+    bucket.add("historical/b.parquet", b"defgh", md5=md5_b64(b"defgh"))
+    bucket.add("historical/c.parquet", b"new", md5=md5_b64(b"new"))
 
     local = tmp_path / "mirror"
     (local / "a.parquet").parent.mkdir(parents=True)
-    (local / "a.parquet").write_bytes(b"XYZ")  # same size as remote -> skip
+    (local / "a.parquet").write_bytes(b"abc")  # same bytes -> skip
+    (local / "c.parquet").write_bytes(b"old")  # same size, different bytes -> download
     # b.parquet does not exist locally -> must be downloaded
 
     written = gcs_client.download_tree("historical", local)
 
-    assert written == [local / "b.parquet"]
-    assert (local / "a.parquet").read_bytes() == b"XYZ"  # untouched
+    assert sorted(written) == sorted([local / "b.parquet", local / "c.parquet"])
+    assert (local / "a.parquet").read_bytes() == b"abc"  # untouched
     assert (local / "b.parquet").read_bytes() == b"defgh"
+    assert (local / "c.parquet").read_bytes() == b"new"  # overwrote stale local
+
+
+def test_download_tree_redownloads_when_remote_md5_missing(fake_storage, tmp_path):
+    """Composite GCS objects don't expose ``md5_hash``. Without that, the
+    helper has no way to verify freshness, so it must err on the side of
+    re-downloading rather than silently keeping a possibly-stale local."""
+    bucket = gcs_client.get_bucket()
+    bucket.add("historical/a.parquet", b"abc")  # md5=None by default
+
+    local = tmp_path / "mirror"
+    local.mkdir()
+    (local / "a.parquet").write_bytes(b"abc")  # identical bytes, but remote has no md5
+
+    written = gcs_client.download_tree("historical", local)
+
+    assert written == [local / "a.parquet"]
 
 
 def test_download_tree_strips_prefix(fake_storage, tmp_path):
@@ -360,21 +386,27 @@ def test_download_tree_strips_prefix(fake_storage, tmp_path):
 
 
 def test_download_tree_skip_disabled_overwrites(fake_storage, tmp_path):
-    """With ``skip_if_same_size=False`` the local file is overwritten even
-    if sizes match -- used by callers who need byte-level freshness."""
+    """With ``skip_if_same_md5=False`` the local file is overwritten even
+    when MD5s match -- used by callers who want an unconditional refresh."""
+    import base64
+    import hashlib
+
+    payload = b"abc"
+    md5 = base64.b64encode(hashlib.md5(payload).digest()).decode("ascii")
+
     bucket = gcs_client.get_bucket()
-    bucket.add("historical/a.parquet", b"new")
+    bucket.add("historical/a.parquet", payload, md5=md5)
 
     local = tmp_path / "mirror"
     local.mkdir()
-    (local / "a.parquet").write_bytes(b"old")  # same size, but stale
+    (local / "a.parquet").write_bytes(payload)  # identical to remote
 
     written = gcs_client.download_tree(
-        "historical", local, skip_if_same_size=False
+        "historical", local, skip_if_same_md5=False
     )
 
     assert written == [local / "a.parquet"]
-    assert (local / "a.parquet").read_bytes() == b"new"
+    assert (local / "a.parquet").read_bytes() == payload
 
 
 # ---------------------------------------------------------------------------
