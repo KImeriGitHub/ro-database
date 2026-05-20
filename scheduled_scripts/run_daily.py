@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from asset_catalog_service.update_catalog import update_all as update_catalog_all
 from config.gcp import GCS_BUCKET
 from daily_data_service.setup_daily import run_daily_pull
-from daily_data_service._common import resolve_start_marker
 from historical_data_setup._common import get_av_call_count, reset_av_call_count
 from maintainance_scripts import gcs_client
 from maintainance_scripts.logging_setup import configure_logging
@@ -146,7 +145,7 @@ async def _run(workdir: Path, api_tier: str) -> int:
         return 1
 
     try:
-        await run_daily_pull(
+        _, folder_date = await run_daily_pull(
             catalog_dir=catalog_local,
             daily_dir=daily_local,
             api_tier=api_tier,
@@ -155,13 +154,6 @@ async def _run(workdir: Path, api_tier: str) -> int:
     except Exception:
         logger.exception("run_daily_pull failed")
         return 1
-
-    # resolve_start_marker is idempotent: if the marker was already unlinked
-    # by a full-run finalize it recreates one just to compute today's date
-    # for the upload step. We delete it again afterwards so the next run
-    # starts fresh.
-    _, folder_date, marker = resolve_start_marker(daily_local)
-    marker.unlink(missing_ok=True)
 
     api_calls_used = get_av_call_count()
     _build_and_push_monitoring_report(

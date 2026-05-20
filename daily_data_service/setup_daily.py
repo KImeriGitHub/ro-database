@@ -21,6 +21,7 @@ Usage:
 
 import asyncio
 import sys
+from datetime import date, datetime
 from pathlib import Path
 import logging
 
@@ -129,12 +130,20 @@ async def run_daily_pull(
     endpoints: list[str] | None = None,
     api_tier: str = "premium",
     skip_empty_yield: bool = False,
-) -> None:
+) -> tuple[datetime, date]:
     """Orchestrate the daily pull with cross-endpoint concurrency.
 
     Output lives under ``daily_dir/<folder-date>/``. On a full run (no
     subsetting flags) the ingestion report is saved there and
     ``yield_status.parquet`` is refreshed with the folder-date.
+
+    Returns ``(started_at, folder_date)`` -- the ET start time captured by
+    :func:`resolve_start_marker` and the date the data was written under.
+    Callers (notably ``scheduled_scripts/run_daily.py``) need the
+    ``folder_date`` for the post-pull upload step; returning it here is the
+    only way to guarantee that a long-running pull that straddles the
+    20:00 ET cutoff does not get re-derived against a later wallclock by
+    a second ``resolve_start_marker`` call.
 
     When ``skip_empty_yield`` is True, fundamental endpoints (see
     ``YIELD_SKIP_ENDPOINTS``) skip API calls for symbols whose yield_status
@@ -176,7 +185,7 @@ async def run_daily_pull(
             f"({folder_date}); nothing to pull."
         )
         marker.unlink(missing_ok=True)
-        return
+        return started_at, folder_date
 
     day_root = ensure_daily_folders(daily_dir, folder_date)
 
@@ -210,7 +219,7 @@ async def run_daily_pull(
 
     if not plan:
         logger.info("No endpoint tasks to run.")
-        return
+        return started_at, folder_date
 
     logger.info(
         f"Scheduling {len(plan)} endpoint task(s) concurrently: "
@@ -262,6 +271,8 @@ async def run_daily_pull(
         logger.info(
             "Skipping yield_status finalize (partial run via --asset-types/--endpoints)"
         )
+
+    return started_at, folder_date
 
 
 if __name__ == "__main__":
