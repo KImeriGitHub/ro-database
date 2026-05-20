@@ -37,14 +37,6 @@ def test_project_root_is_absolute():
     assert settings.PROJECT_ROOT.is_absolute()
 
 
-def test_data_trees_hang_off_project_root():
-    root = settings.PROJECT_ROOT
-    assert settings.CATALOG_DIR == root / "catalog"
-    assert settings.HISTORICAL_DIR == root / "historical"
-    assert settings.DAILY_DIR == root / "daily"
-    assert settings.TRANSFORMED_DIR == root / "transformed"
-
-
 def test_secrets_paths_live_under_secrets_dir():
     """API keys and GCS creds must not leak outside ``secrets/`` -- that
     directory is the only one in ``.gitignore`` for credentials."""

@@ -20,6 +20,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from config import settings
+from maintainance_scripts import paths as paths_mod
+from maintainance_scripts.paths import configured_transformed_dir
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -176,9 +178,7 @@ def test_end_to_end_happy_path(tmp_path):
     dest = tmp_path / "transformed"
 
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
     )
     assert r.returncode == 0, f"stderr: {r.stderr}"
@@ -218,9 +218,7 @@ def test_asset_types_filter_only_creates_requested_trees(tmp_path):
     cat, historical, daily = _build_synth_universe(tmp_path)
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -257,9 +255,7 @@ def test_symbols_filter_restricts_to_named_symbols(tmp_path):
 
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--symbols", "AAPL",
@@ -276,9 +272,7 @@ def test_resume_does_not_overwrite_existing_symbol(tmp_path):
     dest = tmp_path / "transformed"
 
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -300,9 +294,7 @@ def test_resume_does_not_overwrite_existing_symbol(tmp_path):
     ], schema=daily_schema).write_parquet(p)
 
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -313,12 +305,15 @@ def test_resume_does_not_overwrite_existing_symbol(tmp_path):
 
 # ── 5. Default --dest-dir resolves under PROJECT_ROOT ─────────────────────────
 
-def test_default_dest_dir_resolves_to_project_root_transformed():
-    """Sanity-check that the CLI's default ``--dest-dir`` is
-    ``<PROJECT_ROOT>/transformed/``. We only inspect ``settings.TRANSFORMED_DIR``
-    here; we do not actually launch the CLI without arguments because it
-    would write into the live repo."""
-    assert settings.TRANSFORMED_DIR == settings.PROJECT_ROOT / "transformed"
+def test_default_dest_dir_falls_back_to_project_root_transformed(monkeypatch, tmp_path):
+    """Sanity-check that the CLI's default ``--dest-dir`` falls back to
+    ``<PROJECT_ROOT>/transformed/`` when ``secrets/dir_location.txt`` is
+    absent. We do not launch the CLI without arguments because it would
+    write into the live repo (or into the user's configured directory)."""
+    monkeypatch.setattr(
+        paths_mod.settings, "DIR_LOCATION_FILE", tmp_path / "missing.txt"
+    )
+    assert configured_transformed_dir() == settings.PROJECT_ROOT / "transformed"
 
 
 # ── 6. Phase 6 orchestrator wiring ────────────────────────────────────────────
@@ -402,9 +397,7 @@ def test_orchestrator_builds_insider_and_sentiment_before_save(tmp_path):
     dest = tmp_path / "transformed"
 
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -441,9 +434,7 @@ def test_orchestrator_includes_symbol_with_only_insider(tmp_path):
 
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--skip-financials",
@@ -463,9 +454,7 @@ def test_rebuild_with_asset_types_stocks_wipes_and_rebuilds(tmp_path):
 
     # First run.
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--skip-financials",
@@ -488,9 +477,7 @@ def test_rebuild_with_asset_types_stocks_wipes_and_rebuilds(tmp_path):
     ], schema=daily_schema).write_parquet(p)
 
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--rebuild",
@@ -504,9 +491,7 @@ def test_rebuild_with_asset_types_stocks_does_not_touch_other_asset_trees(tmp_pa
     cat, historical, daily = _build_synth_universe(tmp_path)
     dest = tmp_path / "transformed"
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--skip-financials",
     )
@@ -523,9 +508,7 @@ def test_rebuild_with_asset_types_stocks_does_not_touch_other_asset_trees(tmp_pa
     pre = {t: t.stat().st_mtime_ns for t in targets if t.exists()}
 
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--rebuild",
@@ -554,9 +537,7 @@ def test_run_writes_last_processed_daily_date_into_each_symbol_metadata(tmp_path
 
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--skip-financials",
     )
@@ -578,9 +559,7 @@ def test_run_writes_null_last_processed_when_daily_dir_empty(tmp_path):
     # _build_synth_universe is just a Path with no contents.
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--skip-financials",
     )
@@ -646,9 +625,7 @@ def test_incremental_run_matches_full_rebuild_on_same_data(tmp_path):
     _seed_daily_prices(daily_a, snap_b, date(2026, 4, 17), close=103.0)
     dest_a = tmp_path / "a" / "transformed"
     r_a = _run_cli(
-        "--catalog-dir", str(cat_a),
-        "--historical-dir", str(hist_a),
-        "--daily-dir", str(daily_a),
+        "--root", str(cat_a.parent),
         "--dest-dir", str(dest_a),
         "--skip-financials",
     )
@@ -659,9 +636,7 @@ def test_incremental_run_matches_full_rebuild_on_same_data(tmp_path):
     _seed_daily_prices(daily_b, snap_a, date(2026, 4, 16), close=101.5)
     dest_b = tmp_path / "b" / "transformed"
     r_b1 = _run_cli(
-        "--catalog-dir", str(cat_b),
-        "--historical-dir", str(hist_b),
-        "--daily-dir", str(daily_b),
+        "--root", str(cat_b.parent),
         "--dest-dir", str(dest_b),
         "--skip-financials",
     )
@@ -676,9 +651,7 @@ def test_incremental_run_matches_full_rebuild_on_same_data(tmp_path):
     # Now add the second daily folder and run incrementally.
     _seed_daily_prices(daily_b, snap_b, date(2026, 4, 17), close=103.0)
     r_b2 = _run_cli(
-        "--catalog-dir", str(cat_b),
-        "--historical-dir", str(hist_b),
-        "--daily-dir", str(daily_b),
+        "--root", str(cat_b.parent),
         "--dest-dir", str(dest_b),
         "--skip-financials",
     )
@@ -731,9 +704,7 @@ def test_incremental_skip_when_no_new_daily_folders(tmp_path):
     dest = tmp_path / "transformed"
 
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--skip-financials",
     )
@@ -743,9 +714,7 @@ def test_incremental_skip_when_no_new_daily_folders(tmp_path):
     mtime_before = meta_path.stat().st_mtime_ns
 
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--skip-financials",
     )

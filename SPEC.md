@@ -112,6 +112,17 @@ All runtime dependencies (GCP client libraries, dataframe stack, HTML/parquet to
 
 `maintainance_scripts.get_api_key.get_alpha_vantage_key(tier)` tries the local `secrets/alpha_vantage_keys` file first. If the file is missing, the tier entry is absent, or the value is still a placeholder, it falls back to GCP Secret Manager **only when** `USE_SECRET_MANAGER_FOR_AV_KEYS=true`. The secret names it reads come from `SECRET_AV_KEY_STANDARD` and `SECRET_AV_KEY_PREMIUM` (see "GCP configuration" above). The container runs with the flag on; local dev keeps the default of off so runs fail loudly when the local file is misconfigured.
 
+### Local path configuration
+
+By default the local database trees (`catalog/`, `historical/`, `daily/`) and the transformation output live under the repo root. To put either somewhere else (e.g. a fast SSD outside the checkout), create `secrets/dir_location.txt` with one or both keys:
+
+```
+database_dir=/path/to/local/database
+transformation_dir=/path/to/local/transformation
+```
+
+Same parser as `alpha_vantage_keys`: one `key=value` per line, `#` comments and blank lines ignored. `maintainance_scripts.paths.configured_database_dir()` / `configured_transformed_dir()` consume this file and are the default for `--root` in [data_transformation/transform.py](data_transformation/transform.py) and for `--local-root` in [scheduled_scripts/push_historical_to_gcs.py](scheduled_scripts/push_historical_to_gcs.py) / [scheduled_scripts/sync_gcs_to_local.py](scheduled_scripts/sync_gcs_to_local.py). A missing file or missing key falls back to `PROJECT_ROOT` (database) and `<PROJECT_ROOT>/transformed/` (transformation), so existing checkouts keep working with no extra setup.
+
 ### Health check
 
 After a fresh deploy (new container, new project, new local machine), run `python -m maintainance_scripts.gcp_ping_test` with the same env vars the pipeline will use. The script exercises the GCS bucket end-to-end (list / write / read-back / delete a throwaway blob under `_health/`) and, when secret names are configured, fetches each AV-key secret to confirm Secret Manager access. Each failure mode (missing creds, IAM denial, wrong bucket/project, secret missing or unversioned, network egress blocked) maps to a distinct error message. Logs land in `logs/<UTC>_gcp_ping_test.log` and on stdout. Enable the Cloud Scheduler triggers only after the ping logs `PING OK`.
@@ -122,7 +133,8 @@ After a fresh deploy (new container, new project, new local machine), run `pytho
 ```
 secrets/                      # NOT IN GIT - optional locally; container pulls from Secret Manager
 ├── alpha_vantage_keys        # Alpha Vantage API keys (standard= / premium=)
-└── gcs_credentials.json      # GCP service-account key (local dev only; Cloud Run uses ADC)
+├── gcs_credentials.json      # GCP service-account key (local dev only; Cloud Run uses ADC)
+└── dir_location.txt          # Optional local-path overrides (database_dir= / transformation_dir=)
 
 config/
 ├── settings.py               # Local paths, AV rate-limit constants

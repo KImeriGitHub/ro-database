@@ -46,16 +46,6 @@ GCS_DAILY_PREFIX = "daily"
 # the build pipeline uses it as the image/service name.
 CLOUD_RUN_JOB_NAME = os.environ.get("CLOUD_RUN_JOB_NAME")
 
-_image_env = os.environ.get("CONTAINER_IMAGE")
-if _image_env:
-    CONTAINER_IMAGE: str | None = _image_env
-elif GCP_REGION and GCP_PROJECT_ID and CLOUD_RUN_JOB_NAME:
-    CONTAINER_IMAGE = (
-        f"{GCP_REGION}-docker.pkg.dev/{GCP_PROJECT_ID}/ro/{CLOUD_RUN_JOB_NAME}:latest"
-    )
-else:
-    CONTAINER_IMAGE = None
-
 # Secret Manager resource names. The container reads API keys from Secret
 # Manager instead of a mounted file; the names are stable across revisions.
 # One secret per tier, each holding a single API key as its payload.

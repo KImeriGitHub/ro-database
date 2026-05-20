@@ -26,8 +26,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import settings
 from maintainance_scripts.logging_setup import configure_logging
+from maintainance_scripts.paths import (
+    configured_database_dir,
+    configured_transformed_dir,
+    local_catalog_dir,
+    local_daily_dir,
+    local_historical_dir,
+)
 
 import polars as pl
 
@@ -55,10 +61,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "AssetData instances under <dest>/<asset_type>/data_<SYMBOL>/."
         ),
     )
-    p.add_argument("--catalog-dir", type=Path, default=settings.CATALOG_DIR)
-    p.add_argument("--historical-dir", type=Path, default=settings.HISTORICAL_DIR)
-    p.add_argument("--daily-dir", type=Path, default=settings.DAILY_DIR)
-    p.add_argument("--dest-dir", type=Path, default=settings.TRANSFORMED_DIR)
+    p.add_argument(
+        "--root",
+        type=Path,
+        default=configured_database_dir(),
+        help=(
+            "Local root holding catalog/, historical/, daily/. The CLI "
+            "reads from <root>/{catalog,historical,daily}/ via "
+            "maintainance_scripts.paths.local_*_dir helpers. Defaults to "
+            "the database_dir entry in secrets/dir_location.txt, or "
+            "settings.PROJECT_ROOT when that file/key is absent."
+        ),
+    )
+    p.add_argument(
+        "--dest-dir",
+        type=Path,
+        default=configured_transformed_dir(),
+        help=(
+            "Destination for transformed output. Defaults to the "
+            "transformation_dir entry in secrets/dir_location.txt, or "
+            "<PROJECT_ROOT>/transformed/ when that file/key is absent."
+        ),
+    )
     p.add_argument(
         "--asset-types",
         nargs="+",
@@ -145,13 +169,18 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
     args = parse_args(argv)
 
-    args.dest_dir.mkdir(parents=True, exist_ok=True)
+    catalog_dir = local_catalog_dir(args.root)
+    historical_dir = local_historical_dir(args.root)
+    daily_dir = local_daily_dir(args.root)
+    dest_dir = args.dest_dir
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
     asset_types_filter = set(args.asset_types) if args.asset_types else None
     symbols_filter = set(args.symbols) if args.symbols else None
 
     if args.rebuild:
-        _wipe_for_rebuild(args.dest_dir, asset_types_filter, symbols_filter)
+        _wipe_for_rebuild(dest_dir, asset_types_filter, symbols_filter)
 
     report = TransformationReport()
 
@@ -161,15 +190,15 @@ def main(argv: list[str] | None = None) -> int:
     # new. None when daily/ is empty (historical-only state); the next
     # incremental dispatch then routes every symbol through the fresh
     # path.
-    all_daily_dates = enumerate_daily_dates(args.daily_dir)
+    all_daily_dates = enumerate_daily_dates(daily_dir)
     last_processed_daily_date = all_daily_dates[-1] if all_daily_dates else None
 
     # ---- Phase 1: assets_overview.parquet ---------------------------------
     overview_path = write_assets_overview(
-        args.catalog_dir,
-        args.dest_dir,
-        daily_dir=args.daily_dir,
-        historical_dir=args.historical_dir,
+        catalog_dir,
+        dest_dir,
+        daily_dir=daily_dir,
+        historical_dir=historical_dir,
     )
     overview = pl.read_parquet(overview_path)
 
@@ -182,9 +211,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         n = transform_simple_price_daily(
             asset_type,
-            args.historical_dir,
-            args.daily_dir,
-            args.dest_dir,
+            historical_dir,
+            daily_dir,
+            dest_dir,
             overview,
             report,
             symbols_filter=symbols_filter,
@@ -199,9 +228,9 @@ def main(argv: list[str] | None = None) -> int:
             continue
         n = transform_stocks_or_etfs(
             asset_type,
-            args.historical_dir,
-            args.daily_dir,
-            args.dest_dir,
+            historical_dir,
+            daily_dir,
+            dest_dir,
             overview,
             report,
             symbols_filter=symbols_filter,
@@ -215,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- Phase 5 (etf_profile) and Phase 6 (stock-only frames): TODO -----
 
-    report_path = report.flush(args.dest_dir)
+    report_path = report.flush(dest_dir)
     logger.info("wrote %s rows=%d", report_path, report.to_frame().height)
     return 0
 

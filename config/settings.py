@@ -12,11 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SECRETS_DIR = PROJECT_ROOT / "secrets"
 ALPHA_VANTAGE_KEYS_FILE = SECRETS_DIR / "alpha_vantage_keys"
 GCS_CREDENTIALS_FILE = SECRETS_DIR / "gcs_credentials.json"
-
-CATALOG_DIR = PROJECT_ROOT / "catalog"
-HISTORICAL_DIR = PROJECT_ROOT / "historical"
-DAILY_DIR = PROJECT_ROOT / "daily"
-TRANSFORMED_DIR = PROJECT_ROOT / "transformed"
+DIR_LOCATION_FILE = SECRETS_DIR / "dir_location.txt"
 
 # Alpha Vantage hard cap is 75 calls/min on the premium plan; we configure the
 # sliding window to 70 and leave 5 calls as a safety margin for retries and

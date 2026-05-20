@@ -132,9 +132,8 @@ Norgate also offers survivorship bias-free data with excellent historical index 
 - **Add Polygon.io or Databento** if the project evolves toward live trading or HFT requiring real-time streaming or order book depth.
 - **EDGAR XBRL ingestion** as a direct SEC filing pipeline to cross-validate Alpha Vantage fundamentals and capture restatements at the source.
 - **Consistency tests** that validate raw and transformed data against independent sources.
-- **If institutional access becomes available**, integrate CRSP/Compustat via WRDS to replace the homegrown PIT layer.
-- **Schedule local sync** of the GCS bucket before market open.
 - **GCS lifecycle rules** to move raw data older than 1 year to Nearline/Coldline storage.
+- **Upgrade Alpha Vantage premium key** to a higher rate-limit tier and retire the yield-status tracking layer. Today empty AV responses (which can occur when AV's servers misbehave even when data should exist) get cached as "no yield" and skip future pulls; on PIT-sensitive endpoints (fundamentals) this risks permanent holes in the daily snapshot history.
 
 ## Getting started
 

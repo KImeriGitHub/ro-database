@@ -19,10 +19,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import settings
 from maintainance_scripts import gcs_client
 from maintainance_scripts.logging_setup import configure_logging
 from maintainance_scripts.paths import (
+    configured_database_dir,
     gcs_catalog_prefix,
     gcs_daily_prefix,
     gcs_historical_prefix,
@@ -51,8 +51,11 @@ def main() -> int:
     configure_logging()
     parser = argparse.ArgumentParser(description="Download GCS bucket to local mirror")
     parser.add_argument(
-        "--local-root", type=Path, default=settings.PROJECT_ROOT,
-        help="Local destination root (default: project root)",
+        "--local-root", type=Path, default=configured_database_dir(),
+        help=(
+            "Local destination root (default: database_dir from "
+            "secrets/dir_location.txt, or PROJECT_ROOT when unset)."
+        ),
     )
     parser.add_argument(
         "--only", nargs="+", default=list(TREES.keys()), choices=list(TREES.keys()),

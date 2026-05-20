@@ -848,9 +848,7 @@ python data_transformation/transform.py
 
 # Custom paths
 python data_transformation/transform.py \
-    --catalog-dir /path/to/catalog \
-    --historical-dir /path/to/historical \
-    --daily-dir /path/to/daily \
+    --root /path/to/project_root \
     --dest-dir /path/to/transformed
 
 # Subset (skip finalize semantics not relevant here, but useful for partial

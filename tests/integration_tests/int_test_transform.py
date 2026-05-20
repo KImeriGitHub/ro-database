@@ -29,6 +29,7 @@ from data_transformation.transform import main as transform_main
 from tests.integration_tests._helpers import (
     CATALOG_DIR,
     DAILY_DIR,
+    DATABASE_DIR,
     HISTORICAL_DIR,
     TRANSFORMATION_DIR,
     configure_int_test_logging,
@@ -161,9 +162,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     cli_args = [
-        "--catalog-dir", str(CATALOG_DIR),
-        "--historical-dir", str(HISTORICAL_DIR),
-        "--daily-dir", str(DAILY_DIR),
+        "--root", str(DATABASE_DIR),
         "--dest-dir", str(TRANSFORMATION_DIR),
     ]
     if args.rebuild:

@@ -1146,9 +1146,7 @@ def test_cli_skip_financials_writes_empty_placeholders(tmp_path):
            _EARNINGS_Q_SCHEMA)
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--skip-financials",
@@ -1176,9 +1174,7 @@ def test_cli_rebuild_backfills_financials(tmp_path):
 
     # First run: skip-financials, leaving empty placeholders.
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--skip-financials",
@@ -1203,9 +1199,7 @@ def test_cli_rebuild_backfills_financials(tmp_path):
 
     # Re-run with --rebuild: wipes <dest>/stocks/, rebuilds with financials.
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--rebuild",
@@ -1628,9 +1622,7 @@ def test_cli_writes_report_table_parquet_files_next_to_assetdata(tmp_path):
            [_earnings_a(past_fde)], _EARNINGS_A_SCHEMA)
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -1676,9 +1668,7 @@ def test_cli_skip_financials_does_not_write_report_table_cache(tmp_path):
            _EARNINGS_Q_SCHEMA)
     dest = tmp_path / "transformed"
     r = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--skip-financials",
@@ -1700,9 +1690,7 @@ def test_cli_rebuild_wipes_report_table_cache(tmp_path):
     dest = tmp_path / "transformed"
 
     r1 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
     )
@@ -1712,9 +1700,7 @@ def test_cli_rebuild_wipes_report_table_cache(tmp_path):
     mtime_before = rt_q_path.stat().st_mtime_ns
 
     r2 = _run_cli(
-        "--catalog-dir", str(cat),
-        "--historical-dir", str(historical),
-        "--daily-dir", str(daily),
+        "--root", str(cat.parent),
         "--dest-dir", str(dest),
         "--asset-types", "stocks",
         "--rebuild",
@@ -1792,9 +1778,7 @@ def test_cli_incremental_financials_matches_full_rebuild(tmp_path_factory):
     )
     dest_a = root_a / "transformed"
     r_a = _run_cli(
-        "--catalog-dir", str(cat_a),
-        "--historical-dir", str(hist_a),
-        "--daily-dir", str(daily_a),
+        "--root", str(cat_a.parent),
         "--dest-dir", str(dest_a),
         "--asset-types", "stocks",  # no metadata exists -> fresh dispatch
     )
@@ -1809,9 +1793,7 @@ def test_cli_incremental_financials_matches_full_rebuild(tmp_path_factory):
            [_is_row(past_fde, past_rd, total_revenue=2.5e9)], _IS_SCHEMA)
     dest_b = root_b / "transformed"
     r_b1 = _run_cli(
-        "--catalog-dir", str(cat_b),
-        "--historical-dir", str(hist_b),
-        "--daily-dir", str(daily_b),
+        "--root", str(cat_b.parent),
         "--dest-dir", str(dest_b),
         "--asset-types", "stocks",
     )
@@ -1823,9 +1805,7 @@ def test_cli_incremental_financials_matches_full_rebuild(tmp_path_factory):
         new_price_row_date=date(2026, 4, 16),
     )
     r_b2 = _run_cli(
-        "--catalog-dir", str(cat_b),
-        "--historical-dir", str(hist_b),
-        "--daily-dir", str(daily_b),
+        "--root", str(cat_b.parent),
         "--dest-dir", str(dest_b),
         "--asset-types", "stocks",
     )

@@ -40,6 +40,63 @@ def local_daily_date_dir(folder_date: date, root: Path | None = None) -> Path:
     return local_daily_dir(root) / folder_date.isoformat()
 
 
+def local_transformed_dir(root: Path | None = None) -> Path:
+    return (root or settings.PROJECT_ROOT) / "transformed"
+
+
+# ---------------------------------------------------------------------------
+# User-configured local roots (secrets/dir_location.txt)
+# ---------------------------------------------------------------------------
+
+_DIR_LOCATION_KEYS = ("database_dir", "transformation_dir")
+
+
+def _read_dir_location() -> dict[str, Path]:
+    """Parse ``secrets/dir_location.txt`` into a ``{key: Path}`` mapping.
+
+    File format mirrors ``secrets/alpha_vantage_keys`` -- one ``key=value``
+    pair per line, ``#`` comments and blank lines ignored. Missing file or
+    missing keys are not errors; callers fall back to PROJECT_ROOT.
+    """
+    if not settings.DIR_LOCATION_FILE.exists():
+        return {}
+    out: dict[str, Path] = {}
+    for line in settings.DIR_LOCATION_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key in _DIR_LOCATION_KEYS and value:
+            out[key] = Path(value)
+    return out
+
+
+def configured_database_dir() -> Path:
+    """Local root holding ``catalog/``, ``historical/``, ``daily/``.
+
+    Read from ``secrets/dir_location.txt`` (``database_dir`` key). Falls
+    back to ``settings.PROJECT_ROOT`` when the file or key is absent, so
+    development checkouts keep working without any extra setup.
+    """
+    return _read_dir_location().get("database_dir", settings.PROJECT_ROOT)
+
+
+def configured_transformed_dir() -> Path:
+    """Destination for ``data_transformation`` output.
+
+    Read from ``secrets/dir_location.txt`` (``transformation_dir`` key).
+    Falls back to ``<PROJECT_ROOT>/transformed/`` when the file or key
+    is absent.
+    """
+    return _read_dir_location().get(
+        "transformation_dir", settings.PROJECT_ROOT / "transformed"
+    )
+
+
 # ---------------------------------------------------------------------------
 # GCS URIs
 # ---------------------------------------------------------------------------
