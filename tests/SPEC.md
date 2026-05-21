@@ -88,6 +88,7 @@ tests/
 │   ├── int_test_adjust_weekly.py    # adjust_weekly + monitor (weekend mode)
 │   ├── int_test_transform.py        # transform.py + per-symbol output presence check
 │   ├── int_helper_reduce_catalog.py # standalone re-trim of database/catalog/
+│   ├── _helper_build_frd_test_dir.py # populate frd_dir/ from Alpha Vantage (FRD-shaped CSVs)
 │   ├── database/                    # populated by the scripts; persisted across runs
 │   ├── frd_dir/                     # FRD CSVs (pre-populated for FRD-covered subset)
 │   └── transformation/              # transform.py output
@@ -202,6 +203,8 @@ Standalone scripts (not pytest) that exercise each major pipeline against a real
 **Persistence.** None of the scripts wipe `database/` between runs. They are designed for chained execution (`init -> historical -> daily -> weekly -> transform`) and for manual inspection of intermediate state. Pass `--wipe` to `int_test_init_catalog.py` to start the catalog from scratch.
 
 **Opting out of catalog reduction.** `int_test_init_catalog.py`, `int_test_update_catalog.py`, `int_test_run_daily.py`, and `int_test_adjust_weekly.py` each accept `--no-reduce` to skip the post-run trim. To trim a catalog later (e.g. after a `--no-reduce` run, or after a daily/weekly finalize that appended new symbols), run `int_helper_reduce_catalog.py`, which only calls `_helpers.reduce_catalogs` against `database/catalog/`.
+
+**Rebuilding `frd_dir/`.** `_helper_build_frd_test_dir.py` populates `tests/integration_tests/frd_dir/` with FirstRateData-shaped CSVs (`catalog_stocks.csv`, `catalog_etfs.csv`, plus `{SYMBOL}_1min.csv` and three `{SYMBOL}_1day_*.csv` per symbol) synthesised from Alpha Vantage. By default it only fetches files that are missing -- existing ones are presumed fine. Pass `--wipe` to clear the destination first, or `--cutoff-year` to shorten the run (default 2000).
 
 **Suggested run order**
 
