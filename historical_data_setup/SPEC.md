@@ -135,10 +135,10 @@ For each symbol, up to four CSV files may be present:
 
 | File | Used by | Description |
 |------|---------|-------------|
-| `{SYMBOL}_1min.csv` | `prices/` | 1-minute intraday bars (unadjusted) |
-| `{SYMBOL}_1day_unadjusted.csv` | `prices_daily/` | Daily bars, no adjustments |
-| `{SYMBOL}_1day_splitadjusted.csv` | `prices_daily/` | Daily bars, split-adjusted |
-| `{SYMBOL}_1day_splitdivadjusted.csv` | `prices_daily/` | Daily bars, split- and dividend-adjusted |
+| `{SYMBOL}_1min.csv` | `prices/` | 1-minute intraday bars (unadjusted); timezone ET |
+| `{SYMBOL}_1day_unadjusted.csv` | `prices_daily/` | Daily bars, no adjustments; timezone ET |
+| `{SYMBOL}_1day_splitadjusted.csv` | `prices_daily/` | Daily bars, split-adjusted; timezone ET|
+| `{SYMBOL}_1day_splitdivadjusted.csv` | `prices_daily/` | Daily bars, split- and dividend-adjusted; timezone ET |
 
 For `prices/`, only `{SYMBOL}_1min.csv` is required. For `prices_daily/`, all three daily files (`_1day_unadjusted`, `_1day_splitadjusted`, `_1day_splitdivadjusted`) must be present; if any is missing the symbol falls back to AV.
 
@@ -154,6 +154,7 @@ timestamp,open,high,low,close,volume
 
 - **1-min files:** `YYYY-MM-DD HH:MM:SS` (e.g. `2026-03-16 04:03:00`)
 - **Daily files:** `YYYY-MM-DD` (e.g. `2026-03-16`)
+- Timezone ET
 
 ### SplitCoefficient and DividendAmount derivation
 
