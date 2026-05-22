@@ -6,10 +6,10 @@ optionally incorporating FirstRate Data for survivorship bias-free coverage.
 
 Usage:
     # AV only (~10k OVERVIEW queries for stock sectors, ~3 hours)
-    python asset_catalog_service\init_catalog.py [--catalog-dir PATH]
+    python asset_catalog_service/init_catalog.py [--catalog-dir PATH]
 
     # With FirstRate Data
-    python asset_catalog_service\init_catalog.py --stocks-dir PATH --etfs-dir PATH
+    python asset_catalog_service/init_catalog.py --stocks-dir PATH --etfs-dir PATH
 
 """
 
