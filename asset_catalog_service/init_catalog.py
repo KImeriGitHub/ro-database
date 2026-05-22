@@ -6,10 +6,11 @@ optionally incorporating FirstRate Data for survivorship bias-free coverage.
 
 Usage:
     # AV only (~10k OVERVIEW queries for stock sectors, ~3 hours)
-    python init_catalog.py [--catalog-dir PATH]
+    python asset_catalog_service\init_catalog.py [--catalog-dir PATH]
 
     # With FirstRate Data
-    python init_catalog.py --stocks-dir PATH --etfs-dir PATH
+    python asset_catalog_service\init_catalog.py --stocks-dir PATH --etfs-dir PATH
+
 """
 
 import sys
@@ -19,6 +20,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
+from maintainance_scripts.paths import configured_database_dir, local_catalog_dir
 
 from asset_catalog_service.updates import (
     init_stocks_etfs,
@@ -41,7 +43,7 @@ def init_all(
 ) -> None:
     """Run initial catalog setup in the correct order."""
     if catalog_dir is None:
-        catalog_dir = Path(__file__).resolve().parent.parent / "catalog"
+        catalog_dir = local_catalog_dir(configured_database_dir())
     catalog_dir.mkdir(parents=True, exist_ok=True)
 
     # Validate FirstRate CSVs before any API calls or writes.
@@ -81,7 +83,10 @@ if __name__ == "__main__":
         "--catalog-dir",
         type=Path,
         default=None,
-        help="Catalog directory (default: <project>/catalog)",
+        help=(
+            "Catalog directory (default: <database_dir>/catalog from "
+            "secrets/dir_location.txt, or <project>/catalog when unset)."
+        ),
     )
     parser.add_argument(
         "--stocks-dir",

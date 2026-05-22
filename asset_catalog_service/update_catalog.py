@@ -15,6 +15,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
+from maintainance_scripts.paths import configured_database_dir, local_catalog_dir
 
 from asset_catalog_service.updates import (
     update_stocks_etfs,
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 def update_all(catalog_dir: Path | None = None) -> None:
     """Run every catalog update in the correct order."""
     if catalog_dir is None:
-        catalog_dir = Path(__file__).resolve().parent.parent / "catalog"
+        catalog_dir = local_catalog_dir(configured_database_dir())
     catalog_dir.mkdir(parents=True, exist_ok=True)
 
     api_key = get_alpha_vantage_key()
@@ -65,7 +66,10 @@ if __name__ == "__main__":
         "--catalog-dir",
         type=Path,
         default=None,
-        help="Catalog directory (default: <project>/catalog)",
+        help=(
+            "Catalog directory (default: <database_dir>/catalog from "
+            "secrets/dir_location.txt, or <project>/catalog when unset)."
+        ),
     )
     args = parser.parse_args()
     update_all(args.catalog_dir)
