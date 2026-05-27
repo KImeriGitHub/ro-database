@@ -30,7 +30,7 @@ from maintainance_scripts.paths import (
 logger = logging.getLogger(__name__)
 
 
-def push(local_root: Path, include_catalog: bool, force: bool) -> None:
+def push(local_root: Path, include_catalog: bool, force: bool, workers: int = 2) -> None:
     hist_local = local_root / "historical"
     if not hist_local.exists():
         raise FileNotFoundError(f"historical/ not found at {hist_local}")
@@ -49,13 +49,13 @@ def push(local_root: Path, include_catalog: bool, force: bool) -> None:
             )
         logger.info(f"Uploading {len(only_local)} new blobs under {hist_prefix}/")
 
-    gcs_client.upload_tree(hist_local, hist_prefix)
+    gcs_client.upload_tree(hist_local, hist_prefix, workers=workers)
 
     if include_catalog:
         cat_local = local_root / "catalog"
         if cat_local.exists():
             logger.info("Uploading catalog/ alongside historical/")
-            gcs_client.upload_tree(cat_local, gcs_catalog_prefix())
+            gcs_client.upload_tree(cat_local, gcs_catalog_prefix(), workers=workers)
         else:
             logger.warning(f"catalog/ not found at {cat_local}, skipping")
 
@@ -78,8 +78,17 @@ def main() -> int:
         "--force", action="store_true",
         help="Overwrite blobs even if sizes differ",
     )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Concurrent upload workers (default: 1). Raise on a fast link.",
+    )
     args = parser.parse_args()
-    push(args.local_root, include_catalog=not args.skip_catalog, force=args.force)
+    push(
+        args.local_root,
+        include_catalog=not args.skip_catalog,
+        force=args.force,
+        workers=args.workers,
+    )
     return 0
 
 

@@ -37,13 +37,13 @@ TREES = {
 }
 
 
-def sync(local_root: Path, which: list[str]) -> None:
+def sync(local_root: Path, which: list[str], workers: int = 2) -> None:
     for name in which:
         prefix_fn, local_fn = TREES[name]
         prefix = prefix_fn() if name != "daily" else prefix_fn(None)
         dest = local_fn(local_root)
         logger.info(f"Syncing gs://.../{prefix}/ -> {dest}")
-        written = gcs_client.download_tree(prefix, dest)
+        written = gcs_client.download_tree(prefix, dest, workers=workers)
         logger.info(f"  {len(written)} new/changed files")
 
 
@@ -61,8 +61,12 @@ def main() -> int:
         "--only", nargs="+", default=list(TREES.keys()), choices=list(TREES.keys()),
         help="Subset of trees to sync (default: all)",
     )
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Concurrent download workers per tree (default: 1). Raise on a fast link.",
+    )
     args = parser.parse_args()
-    sync(args.local_root, args.only)
+    sync(args.local_root, args.only, workers=args.workers)
     return 0
 
 

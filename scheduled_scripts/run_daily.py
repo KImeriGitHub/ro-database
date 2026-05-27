@@ -45,26 +45,26 @@ from monitoring_service.report import (
 logger = logging.getLogger(__name__)
 
 
-def _pull_catalog(workdir: Path) -> Path:
+def _pull_catalog(workdir: Path, workers: int) -> Path:
     catalog_local = workdir / "catalog"
     logger.info(f"Pulling catalog/ to {catalog_local}")
-    gcs_client.download_tree(gcs_catalog_prefix(), catalog_local)
+    gcs_client.download_tree(gcs_catalog_prefix(), catalog_local, workers=workers)
     return catalog_local
 
 
-def _push_daily_folder(daily_local: Path, folder_date: date) -> None:
+def _push_daily_folder(daily_local: Path, folder_date: date, workers: int) -> None:
     prefix = gcs_daily_prefix(folder_date)
     date_dir = daily_local / folder_date.isoformat()
     if not date_dir.exists():
         logger.info(f"No daily output at {date_dir}; nothing to upload.")
         return
     logger.info(f"Uploading {date_dir} to gs://{GCS_BUCKET}/{prefix}/")
-    gcs_client.upload_tree(date_dir, prefix)
+    gcs_client.upload_tree(date_dir, prefix, workers=workers)
 
 
-def _push_catalog(catalog_local: Path) -> None:
+def _push_catalog(catalog_local: Path, workers: int) -> None:
     logger.info(f"Uploading updated catalog/ from {catalog_local}")
-    gcs_client.upload_tree(catalog_local, gcs_catalog_prefix())
+    gcs_client.upload_tree(catalog_local, gcs_catalog_prefix(), workers=workers)
 
 
 def _try_pull_previous_monitoring_report(
@@ -131,8 +131,8 @@ def _build_and_push_monitoring_report(
             gcs_client.upload_file(local_path, f"{prefix}/{fname}")
 
 
-async def _run(workdir: Path, api_tier: str) -> int:
-    catalog_local = _pull_catalog(workdir)
+async def _run(workdir: Path, api_tier: str, workers: int) -> int:
+    catalog_local = _pull_catalog(workdir, workers)
     daily_local = workdir / "daily"
     daily_local.mkdir(parents=True, exist_ok=True)
 
@@ -160,8 +160,8 @@ async def _run(workdir: Path, api_tier: str) -> int:
         catalog_local, daily_local, folder_date, api_calls_used,
     )
 
-    _push_daily_folder(daily_local, folder_date)
-    _push_catalog(catalog_local)
+    _push_daily_folder(daily_local, folder_date, workers)
+    _push_catalog(catalog_local, workers)
     return 0
 
 
@@ -171,14 +171,18 @@ def main() -> int:
     parser.add_argument("--workdir", type=Path, default=None,
                         help="Working directory (default: a tempdir)")
     parser.add_argument("--api-tier", default="premium", choices=("standard", "premium"))
+    parser.add_argument(
+        "--workers", type=int, default=1,
+        help="Concurrent GCS download/upload workers (default: 1)",
+    )
     args = parser.parse_args()
 
     if args.workdir is not None:
         args.workdir.mkdir(parents=True, exist_ok=True)
-        return asyncio.run(_run(args.workdir, args.api_tier))
+        return asyncio.run(_run(args.workdir, args.api_tier, args.workers))
 
     with tempfile.TemporaryDirectory(prefix="ro-daily-") as tmp:
-        return asyncio.run(_run(Path(tmp), args.api_tier))
+        return asyncio.run(_run(Path(tmp), args.api_tier, args.workers))
 
 
 if __name__ == "__main__":

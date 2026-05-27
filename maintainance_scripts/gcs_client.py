@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -113,6 +114,7 @@ def upload_tree(
     prefix: str,
     bucket_name: str | None = None,
     include_hidden: bool = True,
+    workers: int = 2,
 ) -> list[str]:
     """Recursively upload *local_root* under bucket ``prefix/``.
 
@@ -120,21 +122,35 @@ def upload_tree(
     this is a push-only helper. For hidden files (``.setup_started_at``),
     pass ``include_hidden=True`` so the marker's mtime is preserved on the
     next resume of a historical run.
+
+    *workers* controls how many files are uploaded in parallel. Same shape
+    as ``download_tree``: many small parquet files are latency-bound, so a
+    small thread pool gives a multi-x speedup. Default is 2.
     """
     if not local_root.is_dir():
         raise NotADirectoryError(local_root)
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
 
-    uploaded: list[str] = []
+    get_bucket(bucket_name)
+    pairs: list[tuple[Path, str]] = []
     for path in local_root.rglob("*"):
         if not path.is_file():
             continue
         if not include_hidden and path.name.startswith("."):
             continue
         rel = path.relative_to(local_root).as_posix()
-        blob_name = f"{prefix}/{rel}"
+        pairs.append((path, f"{prefix}/{rel}"))
+
+    def _process(item: tuple[Path, str]) -> str:
+        path, blob_name = item
         upload_file(path, blob_name, bucket_name=bucket_name)
-        uploaded.append(blob_name)
-    return uploaded
+        return blob_name
+
+    if workers == 1:
+        return [_process(p) for p in pairs]
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(_process, pairs))
 
 
 def _local_md5_b64(path: Path) -> str:
@@ -156,6 +172,7 @@ def download_tree(
     local_root: Path,
     bucket_name: str | None = None,
     skip_if_same_md5: bool = True,
+    workers: int = 2,
 ) -> list[Path]:
     """Recursively download every blob under ``prefix/`` into *local_root*.
 
@@ -166,13 +183,23 @@ def download_tree(
     different content. A blob whose ``md5_hash`` is missing (composite
     objects don't expose one) is always re-downloaded since there is no
     way to verify freshness from the metadata alone.
+
+    *workers* controls how many blobs are fetched in parallel. For trees
+    with many small parquet files (the historical and daily layouts), total
+    runtime is dominated by per-request latency, so a small thread pool
+    typically gives a multi-x speedup. Default is 2 to stay gentle on the
+    GCS quota and local IO; raise it on a fast link.
     """
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
     local_root.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for info in list_blobs(prefix, bucket_name=bucket_name):
+    get_bucket(bucket_name)
+    infos = list(list_blobs(prefix, bucket_name=bucket_name))
+
+    def _process(info: BlobInfo) -> Path | None:
         rel = info.name[len(prefix) + 1:] if info.name.startswith(prefix + "/") else info.name
         if not rel:
-            continue
+            return None
         dest = local_root / rel
         if (
             skip_if_same_md5
@@ -180,10 +207,16 @@ def download_tree(
             and info.md5_hash is not None
             and _local_md5_b64(dest) == info.md5_hash
         ):
-            continue
+            return None
         download_file(info.name, dest, bucket_name=bucket_name)
-        written.append(dest)
-    return written
+        return dest
+
+    if workers == 1:
+        results: Iterable[Path | None] = (_process(info) for info in infos)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_process, infos))
+    return [p for p in results if p is not None]
 
 
 def diff_local_vs_remote(
