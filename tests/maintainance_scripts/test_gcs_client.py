@@ -38,7 +38,9 @@ class _FakeBlob:
         self.updated: datetime | None = None
         self._content: bytes | None = None
 
-    def upload_from_filename(self, path: str, content_type: str | None = None):
+    def upload_from_filename(self, path: str, content_type: str | None = None,
+                             **kwargs):
+        # Real blob accepts timeout=/retry=; the fake ignores transport knobs.
         data = Path(path).read_bytes()
         self._content = data
         self.size = len(data)
@@ -48,7 +50,7 @@ class _FakeBlob:
         )
         self.bucket.blobs[self.name] = self
 
-    def download_to_filename(self, path: str):
+    def download_to_filename(self, path: str, **kwargs):
         if self._content is None:
             raise FileNotFoundError(self.name)
         local = Path(path)
@@ -320,6 +322,70 @@ def test_upload_tree_rejects_non_directory(fake_storage, tmp_path):
     not_a_dir.write_bytes(b"x")
     with pytest.raises(NotADirectoryError):
         gcs_client.upload_tree(not_a_dir, "historical")
+
+
+def test_upload_tree_skips_blobs_already_present_with_matching_md5(fake_storage, tmp_path):
+    """Default ``skip_if_same_md5=True`` makes the push resumable: a blob that
+    already exists with a matching MD5 is not re-uploaded, so re-running an
+    interrupted push only sends what is missing or changed."""
+    import base64
+    import hashlib
+
+    def md5_b64(payload: bytes) -> str:
+        return base64.b64encode(hashlib.md5(payload).digest()).decode("ascii")
+
+    bucket = gcs_client.get_bucket()
+    bucket.add("historical/a.parquet", b"abc", md5=md5_b64(b"abc"))  # match -> skip
+    bucket.add("historical/c.parquet", b"old", md5=md5_b64(b"old"))  # differs -> re-upload
+
+    root = tmp_path / "historical"
+    root.mkdir()
+    (root / "a.parquet").write_bytes(b"abc")
+    (root / "b.parquet").write_bytes(b"defgh")  # absent remotely -> upload
+    (root / "c.parquet").write_bytes(b"new")     # same size, new bytes -> upload
+
+    uploaded = gcs_client.upload_tree(root, "historical")
+
+    assert sorted(uploaded) == ["historical/b.parquet", "historical/c.parquet"]
+    assert {u["blob"] for u in bucket.uploads} == {
+        "historical/b.parquet",
+        "historical/c.parquet",
+    }
+    assert bucket.blobs["historical/c.parquet"]._content == b"new"
+
+
+def test_upload_tree_reuploads_when_remote_md5_missing(fake_storage, tmp_path):
+    """A remote blob without ``md5_hash`` (e.g. a composite object) can't be
+    verified, so it must be re-uploaded rather than silently skipped."""
+    bucket = gcs_client.get_bucket()
+    bucket.add("historical/a.parquet", b"abc")  # md5=None by default
+
+    root = tmp_path / "historical"
+    root.mkdir()
+    (root / "a.parquet").write_bytes(b"abc")
+
+    uploaded = gcs_client.upload_tree(root, "historical")
+
+    assert uploaded == ["historical/a.parquet"]
+
+
+def test_upload_tree_skip_disabled_reuploads_everything(fake_storage, tmp_path):
+    """With ``skip_if_same_md5=False`` a matching blob is uploaded anyway."""
+    import base64
+    import hashlib
+
+    payload = b"abc"
+    md5 = base64.b64encode(hashlib.md5(payload).digest()).decode("ascii")
+    bucket = gcs_client.get_bucket()
+    bucket.add("historical/a.parquet", payload, md5=md5)
+
+    root = tmp_path / "historical"
+    root.mkdir()
+    (root / "a.parquet").write_bytes(payload)
+
+    uploaded = gcs_client.upload_tree(root, "historical", skip_if_same_md5=False)
+
+    assert uploaded == ["historical/a.parquet"]
 
 
 # ---------------------------------------------------------------------------

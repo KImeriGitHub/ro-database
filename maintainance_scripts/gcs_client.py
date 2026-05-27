@@ -21,13 +21,23 @@ from typing import Iterable, Iterator
 
 from google.cloud import storage
 from google.cloud.storage import Blob, Bucket, Client
+from google.cloud.storage.retry import DEFAULT_RETRY
+from requests.adapters import HTTPAdapter
 
 from config.gcp import GCS_BUCKET, GCP_PROJECT_ID
 from maintainance_scripts.gcp_credentials import get_gcp_credentials
 
 logger = logging.getLogger(__name__)
 
+# Per-request ceiling (seconds) and total retry budget for a single blob
+# transfer. The library defaults (60s request, 120s retry deadline) are too
+# tight for large parquets on a slow uplink: a stalled chunk write blows the
+# 120s deadline and aborts the whole tree. These give a slow file room to land.
+_TRANSFER_TIMEOUT = 300.0
+_TRANSFER_RETRY = DEFAULT_RETRY.with_timeout(600.0)
+
 _client: Client | None = None
+_pool_size = 0
 
 
 def get_client() -> Client:
@@ -37,6 +47,34 @@ def get_client() -> Client:
         creds = get_gcp_credentials()
         _client = storage.Client(project=GCP_PROJECT_ID, credentials=creds)
     return _client
+
+
+def _ensure_pool_size(size: int) -> None:
+    """Grow the shared client's HTTPS connection pool to hold *size* sockets.
+
+    ``storage.Client`` mounts urllib3's default adapter (``pool_maxsize=10``).
+    Running more upload/download workers than that overflows the pool, so every
+    extra transfer discards and re-opens a TLS connection on each request. That
+    churn shows up as repeated "Connection pool is full" warnings and
+    destabilises the sockets into write timeouts. Mounting a right-sized adapter
+    lets each worker keep a warm connection.
+
+    Called from the main thread before any worker pool starts, so no locking is
+    needed. The floor of 10 keeps us at or above the library default.
+    """
+    global _pool_size
+    size = max(size, 10)
+    if size <= _pool_size:
+        return
+    # ``_http`` is a private google-cloud attribute (a requests.Session). Guard
+    # against it being absent or unmountable so a stubbed client stays usable.
+    http = getattr(get_client(), "_http", None)
+    if http is None or not hasattr(http, "mount"):
+        return
+    adapter = HTTPAdapter(pool_connections=size, pool_maxsize=size)
+    http.mount("https://", adapter)
+    http.mount("http://", adapter)
+    _pool_size = size
 
 
 def get_bucket(bucket_name: str | None = None) -> Bucket:
@@ -87,7 +125,12 @@ def upload_file(
     """Upload *local_path* to ``gs://bucket/blob_name``. Returns the blob."""
     bucket = get_bucket(bucket_name)
     blob = bucket.blob(blob_name)
-    blob.upload_from_filename(str(local_path), content_type=content_type)
+    blob.upload_from_filename(
+        str(local_path),
+        content_type=content_type,
+        timeout=_TRANSFER_TIMEOUT,
+        retry=_TRANSFER_RETRY,
+    )
     logger.info(f"Uploaded {local_path} to gs://{bucket.name}/{blob_name}")
     return blob
 
@@ -101,7 +144,9 @@ def download_file(
     bucket = get_bucket(bucket_name)
     blob = bucket.blob(blob_name)
     local_path.parent.mkdir(parents=True, exist_ok=True)
-    blob.download_to_filename(str(local_path))
+    blob.download_to_filename(
+        str(local_path), timeout=_TRANSFER_TIMEOUT, retry=_TRANSFER_RETRY
+    )
     return local_path
 
 
@@ -115,17 +160,27 @@ def upload_tree(
     bucket_name: str | None = None,
     include_hidden: bool = True,
     workers: int = 2,
+    skip_if_same_md5: bool = True,
 ) -> list[str]:
     """Recursively upload *local_root* under bucket ``prefix/``.
 
-    Returns the list of uploaded blob names. Files are never downloaded first;
-    this is a push-only helper. For hidden files (``.setup_started_at``),
-    pass ``include_hidden=True`` so the marker's mtime is preserved on the
-    next resume of a historical run.
+    Returns the list of blob names actually uploaded. Files are never
+    downloaded first; this is a push-only helper. For hidden files
+    (``.setup_started_at``), pass ``include_hidden=True`` so the marker's mtime
+    is preserved on the next resume of a historical run.
+
+    When *skip_if_same_md5* is True (the default), a blob that already exists
+    with a matching MD5 is left untouched. This makes the push resumable: if a
+    large run is interrupted (network blip, write timeout), re-running uploads
+    only what is missing instead of re-pushing every file from scratch. Mirrors
+    ``download_tree``'s skip logic. Existing blob metadata is fetched in one
+    ``list_blobs`` pass rather than a per-file ``exists()`` round-trip.
 
     *workers* controls how many files are uploaded in parallel. Same shape
     as ``download_tree``: many small parquet files are latency-bound, so a
-    small thread pool gives a multi-x speedup. Default is 2.
+    small thread pool gives a multi-x speedup. Default is 2. The shared
+    client's connection pool is grown to match so workers do not contend over
+    too few sockets.
     """
     if not local_root.is_dir():
         raise NotADirectoryError(local_root)
@@ -142,15 +197,29 @@ def upload_tree(
         rel = path.relative_to(local_root).as_posix()
         pairs.append((path, f"{prefix}/{rel}"))
 
-    def _process(item: tuple[Path, str]) -> str:
+    remote_md5: dict[str, str | None] = {}
+    if skip_if_same_md5:
+        remote_md5 = {
+            info.name: info.md5_hash
+            for info in list_blobs(prefix, bucket_name=bucket_name)
+        }
+
+    _ensure_pool_size(workers)
+
+    def _process(item: tuple[Path, str]) -> str | None:
         path, blob_name = item
+        remote = remote_md5.get(blob_name)
+        if remote is not None and _local_md5_b64(path) == remote:
+            return None
         upload_file(path, blob_name, bucket_name=bucket_name)
         return blob_name
 
     if workers == 1:
-        return [_process(p) for p in pairs]
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(_process, pairs))
+        results: Iterable[str | None] = (_process(p) for p in pairs)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(_process, pairs))
+    return [b for b in results if b is not None]
 
 
 def _local_md5_b64(path: Path) -> str:
@@ -194,6 +263,7 @@ def download_tree(
         raise ValueError(f"workers must be >= 1, got {workers}")
     local_root.mkdir(parents=True, exist_ok=True)
     get_bucket(bucket_name)
+    _ensure_pool_size(workers)
     infos = list(list_blobs(prefix, bucket_name=bucket_name))
 
     def _process(info: BlobInfo) -> Path | None:
