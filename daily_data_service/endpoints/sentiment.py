@@ -57,7 +57,9 @@ async def fetch_sentiment(
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     all_catalog_symbols: set[str] = set(catalog["symbol"].to_list())
     active_symbols: set[str] = set(
-        catalog.filter(pl.col("status") == "Active")["symbol"].to_list()
+        catalog.filter(
+            pl.col("status").is_in(["Active", "Corrupted"])
+        )["symbol"].to_list()
     )
     if symbols_filter is not None:
         active_symbols &= symbols_filter

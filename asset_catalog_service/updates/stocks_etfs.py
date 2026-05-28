@@ -593,10 +593,13 @@ def _update_listing(
             .join(fresh_common, on="symbol", how="left")
         )
 
-        # 3a. ipoDate moved earlier (both non-null) -> update + Corrupted
-        # Fresh later than existing is ignored: we keep the earliest known
-        # date so we never lose a prior issuer's data window.  Without the
-        # update, the same change would be re-detected on every run.
+        # 3a. ipoDate moved earlier (both non-null) -> update the date only.
+        # Status is left untouched: the catalog already tolerates re-issued
+        # tickers (see _collapse_listings), so an earlier ipoDate is treated
+        # as new information, not corruption.  Fresh later than existing is
+        # ignored: we keep the earliest known date so we never lose a prior
+        # issuer's data window.  Without the update, the same change would
+        # be re-detected on every run.
         ipo_changed = merged.filter(
             pl.col("ipoDate").is_not_null()
             & pl.col("_ipo_new").is_not_null()
@@ -605,8 +608,7 @@ def _update_listing(
         if ipo_changed.height > 0:
             ipo_syms = ipo_changed["symbol"].to_list()
             logger.info(
-                f"{label}: {len(ipo_syms)} ipoDate moved earlier, "
-                f"updating and marking Corrupted:"
+                f"{label}: {len(ipo_syms)} ipoDate moved earlier, updating:"
             )
             for row in ipo_changed.iter_rows(named=True):
                 logger.info(
@@ -622,10 +624,6 @@ def _update_listing(
                     .then(pl.col("_ipo_upd"))
                     .otherwise(pl.col("ipoDate"))
                     .alias("ipoDate"),
-                    pl.when(pl.col("symbol").is_in(ipo_syms))
-                    .then(pl.lit("Corrupted"))
-                    .otherwise(pl.col("status"))
-                    .alias("status"),
                 )
                 .drop("_ipo_upd")
             )
@@ -704,10 +702,6 @@ def _update_listing(
         # 30 days of being missing); block 2b only fires when the symbol has
         # vanished from both lists, while this fires when AV explicitly
         # confirms the delisting.
-        #
-        # ``merged.status`` is the original existing value (pre-3a), so a
-        # Corrupted flag that 3a just set on this run does not satisfy the
-        # re-listed predicate and stays in place.
         relisted = merged.filter(
             pl.col("status").is_in(["Corrupted", "Delisted"])
             & (pl.col("_status_new") == "Active")

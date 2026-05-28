@@ -1,9 +1,10 @@
 """Daily pull of insider transactions (INSIDER_TRANSACTIONS).
 
 Truncates to ``transactionDate >= folder_date - 1 year``. Daily runs query
-``status == "Active"`` symbols only; the weekend retry pass calls with
-``active_only=False`` so delisted stocks flagged in the ingestion report or
-``yield_status`` False cells get re-fetched too.
+``status in {"Active", "Corrupted"}`` symbols (i.e. excluding only
+``Delisted``); the weekend retry pass calls with ``active_only=False`` so
+even ``Delisted`` stocks flagged in the ingestion report or ``yield_status``
+False cells get re-fetched.
 """
 
 import logging
@@ -45,7 +46,7 @@ async def fetch_insider(
 ) -> None:
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     if active_only:
-        catalog = catalog.filter(pl.col("status") == "Active")
+        catalog = catalog.filter(pl.col("status").is_in(["Active", "Corrupted"]))
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / "insider"

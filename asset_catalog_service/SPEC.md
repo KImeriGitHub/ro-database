@@ -63,13 +63,12 @@ update_all()
   - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
   - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
 - `ipoDate` changes for an existing symbol:
-  - Moved earlier (both non-null, fresh < existing): `ipoDate` updated to the earlier value and `status` set to `Corrupted` (data integrity concern). A later fresh `ipoDate` is ignored so the earliest known data window is preserved and the same row is not re-flagged on every run.
-  - Filled (existing was null, fresh has a value): `ipoDate` updated without flagging `Corrupted`.
+  - Moved earlier (both non-null, fresh < existing): `ipoDate` updated to the earlier value; `status` is left untouched. A later fresh `ipoDate` is ignored so the earliest known data window is preserved and the same row is not re-flagged on every run.
+  - Filled (existing was null, fresh has a value): `ipoDate` updated.
 - `delistingDate` changed: updated to the new value and logged.
 - Status sync against the fresh LISTING_STATUS:
   - `Corrupted` or `Delisted` symbol back in the active list: `status` -> `Active`, `delistingDate` cleared.
   - `Active` symbol now in the delisted list (stocks/ETFs only): `status` -> `Delisted` (skips the 30-day Corrupted -> Delisted timer). Indices/forex/crypto have no equivalent path because their source endpoints publish only currently-listed instruments.
-  - A same-run `Corrupted` flag from an earlier-`ipoDate` change is preserved (the sync reads the pre-update status).
 
 ### etfs.parquet
 
@@ -281,7 +280,7 @@ Single-fetch endpoints (LISTING_STATUS, OVERVIEW, INDEX_CATALOG, physical_curren
 - **FirstRate precedence:** When both sources provide data for the same symbol, FirstRate wins. This reflects that FirstRate Data is a curated, purchased dataset with better delisting coverage. Disagreements are logged for review.
 - **Sector via OVERVIEW:** The `LISTING_STATUS` endpoint does not return sector information. Sectors require a per-symbol `OVERVIEW` query. FirstRate Data provides sectors in bulk, avoiding thousands of API calls.
 - **Corrupted vs Delisted:** A missing symbol is first marked `Corrupted` (with today's date). Only after 30+ days of continuous absence does it become `Delisted`. This two-stage approach avoids prematurely marking symbols as delisted due to transient API issues.
-- **ipoDate as integrity signal:** If Alpha Vantage moves a stock's IPO date earlier, the symbol is marked `Corrupted` for manual review and the new earlier date is written to the catalog so the change is not re-detected on every subsequent run. A fresh ipoDate that is *later* than the stored value is ignored: under the min-ipoDate fetch rule (below) any persisted earlier date is the truthful boundary, and a later AV value typically means a delisted-row contribution dropped out of the response.
+- **ipoDate moves earlier are absorbed silently:** If Alpha Vantage reports an earlier IPO date for a known symbol, the new earlier date is written to the catalog (so the change is not re-detected on every subsequent run) but `status` is left untouched. The catalog already tolerates re-issued tickers via the min-ipoDate fetch rule (below), so an earlier date is treated as new information rather than a data-integrity concern. A fresh ipoDate that is *later* than the stored value is ignored: any persisted earlier date is the truthful boundary, and a later AV value typically means a delisted-row contribution dropped out of the response.
 - **Re-issued tickers (active wins, earliest ipoDate kept):** AV's `LISTING_STATUS` can return the same `symbol` string twice when a ticker was reused: once in `state=delisted` for the original company (with its old `ipoDate` and a `delistingDate`) and once in `state=active` for the new company that now trades under it (with a newer `ipoDate` and null `delistingDate`). `_fetch_av_listings` deduplicates by symbol with the active row winning for `name`/`status`/`delistingDate`, but `ipoDate` is set to the minimum across the active and delisted rows. This keeps the catalog pointing at the currently-trading entity (so the yield-aware pipeline does not skip a live ticker) while preserving the earliest date for which any data may exist under the ticker, e.g. for survivorship-bias-aware queries against `historical/`. Note: `symbol` is treated as a primary key throughout the catalog, so representing both issuers as separate rows would require a richer key (e.g. `symbol + ipoDate`) and is out of scope.
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
 - **Yield status init only:** This script only initialises `yield_status.parquet`. The actual yield tracking (marking which symbols return data for which endpoints) is updated through `ingestion_report.parquet` at the end of the daily or historical data pipeline.

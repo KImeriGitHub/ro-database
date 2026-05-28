@@ -79,7 +79,7 @@ async def fetch_fundamental_endpoint_daily(
     """
     catalog = read_catalog_symbols(catalog_dir, asset_type)
     if active_only:
-        catalog = catalog.filter(pl.col("status") == "Active")
+        catalog = catalog.filter(pl.col("status").is_in(["Active", "Corrupted"]))
     if symbols_filter is not None:
         catalog = catalog.filter(pl.col("symbol").is_in(list(symbols_filter)))
     output_dir = daily_dir / asset_type / endpoint

@@ -126,9 +126,9 @@ def test_daily_stocks_new_and_vanished(mock_fetch_text, mock_fetch_sector):
     msft = stocks.filter(pl.col("symbol") == "MSFT")
     assert msft["status"].to_list()[0] == "Corrupted"
 
-    # AAPL ipoDate moved earlier -> updated and marked Corrupted
+    # AAPL ipoDate moved earlier -> date updated, status preserved
     aapl = stocks.filter(pl.col("symbol") == "AAPL")
-    assert aapl["status"].to_list()[0] == "Corrupted"
+    assert aapl["status"].to_list()[0] == "Active"
     assert aapl["ipoDate"].to_list()[0] == date(1979, 1, 1)
 
 
@@ -257,7 +257,7 @@ def test_daily_reissued_ticker_keeps_min_ipo(mock_fetch_text):
     grml = stocks.filter(pl.col("symbol") == "GRML")
     assert grml.height == 1
     assert grml["ipoDate"].to_list()[0] == date(2022, 4, 29)
-    assert grml["status"].to_list()[0] == "Corrupted"
+    assert grml["status"].to_list()[0] == "Active"
 
     # Second run with identical input must be a no-op (no re-detect).
     mock_fetch_text.side_effect = [active, delisted]

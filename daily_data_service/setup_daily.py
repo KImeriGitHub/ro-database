@@ -98,11 +98,14 @@ YIELD_SKIP_ENDPOINTS = {
 }
 
 # Endpoints that honour ``active_only``: stock/ETF endpoints that filter the
-# catalog to ``status == "Active"`` by default. Daily runs leave the flag at
-# True; the weekend retry pass calls with ``active_only=False`` so delisted
-# symbols flagged for retry are queried. Endpoints whose catalogs have no
-# active/delisted distinction (forex, indices, cryptocurrencies, commodities,
-# economic) are not listed and ignore the flag.
+# catalog to ``status in {"Active", "Corrupted"}`` (i.e. exclude only
+# ``Delisted``) by default. Daily runs leave the flag at True so that
+# Corrupted symbols -- a transient state pending the 30-day promotion to
+# Delisted -- keep getting retried. The weekend retry pass calls with
+# ``active_only=False`` so even Delisted symbols flagged for retry are
+# queried. Endpoints whose catalogs have no active/delisted distinction
+# (forex, indices, cryptocurrencies, commodities, economic) are not listed
+# and ignore the flag.
 ACTIVE_ONLY_ENDPOINTS = {
     "prices", "prices_daily",
     "income_statement", "balance_sheet", "cash_flow",

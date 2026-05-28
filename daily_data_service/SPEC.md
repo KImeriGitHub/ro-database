@@ -6,13 +6,13 @@ Weekday runs can skip fundamental queries for symbols known to return empty data
 
 ## Status filtering (active vs delisted)
 
-Stock/ETF endpoints honour an `active_only: bool = True` kwarg that filters the catalog to `status == "Active"` before the per-symbol loop:
+Stock/ETF endpoints honour an `active_only: bool = True` kwarg that filters the catalog to `status in {"Active", "Corrupted"}` before the per-symbol loop -- i.e. it excludes only `Delisted`:
 
-- **Daily run** ([`setup_daily.py`](setup_daily.py)) leaves the default in place, so only active stocks/ETFs are queried. This keeps the weekday call budget off chronically-empty delisted tickers.
-- **Weekend retry** ([`adjust_weekly.py`](adjust_weekly.py)) passes `active_only=False` for every endpoint listed in `ACTIVE_ONLY_ENDPOINTS` (`prices`, `prices_daily`, the five fundamentals, `insider`, `etf_profile`), so delisted symbols flagged in `yield_status` False cells or in-window ingestion reports actually get re-fetched.
+- **Daily run** ([`setup_daily.py`](setup_daily.py)) leaves the default in place, so confirmed-delisted stocks/ETFs are skipped to keep the weekday call budget off chronically-empty tickers. `Corrupted` symbols (vanished from `LISTING_STATUS` but not yet aged into `Delisted`) **are** queried each day -- the status is meant to be transient, and we want a few successful pulls to either revive the symbol (back to `Active`) or carry data right up until the 30-day promotion to `Delisted`.
+- **Weekend retry** ([`adjust_weekly.py`](adjust_weekly.py)) passes `active_only=False` for every endpoint listed in `ACTIVE_ONLY_ENDPOINTS` (`prices`, `prices_daily`, the five fundamentals, `insider`, `etf_profile`), so even `Delisted` symbols flagged in `yield_status` False cells or in-window ingestion reports actually get re-fetched.
 - **Other asset types** (`forex`, `indices`, `cryptocurrencies`, `commodities`, `economic`) do not accept the flag; their catalogs only carry currently-listed instruments and the SPEC already states they are queried regardless of `status`.
 
-`sentiment` is a single global paginated call, not a per-symbol query; daily and weekend runs both pull every catalog ticker and only the per-symbol parquet split is restricted to active stocks (master `ALL_MESSAGES.parquet` always carries every catalog symbol).
+`sentiment` is a single global paginated call, not a per-symbol query; daily and weekend runs both pull every catalog ticker and only the per-symbol parquet split is restricted to non-delisted stocks (master `ALL_MESSAGES.parquet` always carries every catalog symbol).
 
 ## Relationship to historical_data_setup
 
@@ -42,7 +42,7 @@ daily/
     │   ├── cash_flow/
     │   ├── earnings/
     │   ├── earnings_estimates/
-    │   ├── insider/                # stocks_SYMBOL.parquet (daily: active only, weekend retry: active + delisted), INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
+    │   ├── insider/                # stocks_SYMBOL.parquet (daily: Active + Corrupted, weekend retry: + Delisted), INSIDER_TRANSACTIONS truncated to transactionDate >= folder-date - 1 year
     │   └── sentiment/              # ALL_MESSAGES.parquet + stocks_SYMBOL.parquet
     ├── etfs/
     │   ├── prices/
@@ -116,7 +116,7 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 - **prices (intraday)**: the `month` parameter is intentionally **omitted**. With `outputsize=full`, Alpha Vantage returns the trailing 30 days of 1-min bars regardless of month boundary, which cleanly covers any reasonable window including cross-month rollovers.
 - **7-day floor on every daily-interval endpoint**: the lower bound is `min(previous-date, folder-date - 7d)` for `prices`, `prices_daily`, `forex`, `cryptocurrencies`, `indices`, the daily group of `commodities`, and the daily indicators of `economic`. The trailing-week floor serves two purposes: (1) a successful run recovers the last few days of bars even when intermediate runs failed for a particular symbol, and (2) the overlap acts as a data cushion that re-pulls bars already on disk, so revisions or restatements to recent history surface as `dedup_value_discrepancy_over_1pct` entries in the discrepancy log when downstream aggregation dedups `(symbol, Date)`. `previous-date` is preserved when it is older than `folder-date - 7d` (long outage), so the window only widens, never narrows. Consequence: neighbouring `daily/<date>/` parquets for these endpoints overlap by up to 6 days; aggregators across daily folders must dedup on `(symbol, Date)` (the `data_transformation` frames already do, via `dedup_with_discrepancy_log`). Monthly commodities keep their existing 1-year window; non-daily economic indicators use a 5-year window.
 - **prices_daily / forex `outputsize=compact`**: returns the trailing ~100 data points, which comfortably covers the 7-day floor and saves payload.
-- **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to `min(previous-date, folder-date - 7d) 00:00 UTC`, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `stocks_SYMBOL.parquet` files for active symbols (same logic as historical). The 7-day floor mirrors the price endpoints so a successful run recovers the last week of articles even after intermediate failures; downstream consumers must dedup on `(url, ticker)`.
+- **sentiment**: `ALL_MESSAGES.parquet` is built first (paginated backward from current UTC to `min(previous-date, folder-date - 7d) 00:00 UTC`, inclusive), then filtered to catalog symbols, deduplicated on `(url, ticker)`, and split into per-symbol `stocks_SYMBOL.parquet` files for non-delisted symbols (`status in {"Active", "Corrupted"}`; same active-set semantics as the other stock endpoints). The 7-day floor mirrors the price endpoints so a successful run recovers the last week of articles even after intermediate failures; downstream consumers must dedup on `(url, ticker)`.
 - **etf_profile**: one row per ETF; the `date` field is the folder-date (not the run-time date).
 - **commodities / economic**: the "daily group" vs "other" split mirrors the per-symbol interval choice already baked into the historical endpoints; the monthly commodities row uses a 1-year window and non-daily economic indicators use a 5-year window because `(previous-date, folder-date]` would usually be empty.
 - **earnings `reportedDate`**: the `EARNINGS` endpoint exposes the column as `reportedDate` (with "ed") and our daily parquets preserve that name. The unrelated `EARNINGS_CALENDAR` endpoint (used only by `daily/<date>/earnings_calendar.parquet` and `historical/earnings_calendar.parquet`) calls it `reportDate` in its CSV; that one is renamed to `reportedDate` at ingest so downstream code only ever sees `reportedDate`.
@@ -289,7 +289,7 @@ All retried results land under `daily/<folder_date>/`, regardless of which sourc
 - **Fundamentals** (`income_statement`, `balance_sheet`, `cash_flow`, `earnings`, `earnings_estimates`): skip only when **both** `<prefix>_SYMBOL_annual.parquet` and `<prefix>_SYMBOL_quarterly.parquet` exist. If one is missing, the symbol is re-queried and both files are (re)written.
 - **Sentiment**: handled specially (see below).
 
-The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call, and passes `active_only=False` for every endpoint in `ACTIVE_ONLY_ENDPOINTS` so delisted symbols flagged for retry are queried (the weekday daily run leaves `active_only=True`).
+The retry pass disables `skip_empty_yield` so fundamentals flagged False by a weekday run actually make an API call, and passes `active_only=False` for every endpoint in `ACTIVE_ONLY_ENDPOINTS` so even `Delisted` symbols flagged for retry are queried (the weekday daily run leaves `active_only=True`, which already includes `Corrupted`).
 
 ### `symbols_filter` on endpoint functions
 
