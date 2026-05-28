@@ -13,7 +13,6 @@ from pathlib import Path
 
 from config import settings
 from config.gcp import (
-    GCS_BUCKET,
     GCS_CATALOG_PREFIX,
     GCS_DAILY_PREFIX,
     GCS_HISTORICAL_PREFIX,
@@ -98,12 +97,8 @@ def configured_transformed_dir() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# GCS URIs
+# GCS prefixes
 # ---------------------------------------------------------------------------
-
-def gcs_uri(blob_name: str, bucket: str = GCS_BUCKET) -> str:
-    return f"gs://{bucket}/{blob_name}"
-
 
 def gcs_catalog_prefix() -> str:
     return GCS_CATALOG_PREFIX

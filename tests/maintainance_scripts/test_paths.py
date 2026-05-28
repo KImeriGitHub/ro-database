@@ -112,18 +112,8 @@ def test_configured_paths_ignore_comments_blanks_and_unknown_keys(monkeypatch, t
 
 
 # ---------------------------------------------------------------------------
-# GCS URI / prefix helpers
+# GCS prefix helpers
 # ---------------------------------------------------------------------------
-
-
-def test_gcs_uri_uses_default_bucket():
-    from config.gcp import GCS_BUCKET
-    assert paths.gcs_uri("catalog/stocks.parquet") == f"gs://{GCS_BUCKET}/catalog/stocks.parquet"
-
-
-def test_gcs_uri_with_explicit_bucket():
-    assert paths.gcs_uri("daily/2026-04-18/", bucket="other-bucket") == \
-        "gs://other-bucket/daily/2026-04-18/"
 
 
 def test_gcs_daily_prefix_appends_iso_date():
