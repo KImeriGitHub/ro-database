@@ -6,7 +6,7 @@ local mirror matches what the container has been writing.
 
 Examples:
     python scheduled_scripts/sync_gcs_to_local.py
-    python scheduled_scripts/sync_gcs_to_local.py --only daily
+    python scheduled_scripts/sync_gcs_to_local.py --only daily --workers 8 --from-date 2026-05-01
     python scheduled_scripts/sync_gcs_to_local.py --only daily --workers 8
 """
 
