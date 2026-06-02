@@ -17,7 +17,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 from google.cloud import storage
 from google.cloud.storage import Blob, Bucket, Client
@@ -242,6 +242,7 @@ def download_tree(
     bucket_name: str | None = None,
     skip_if_same_md5: bool = True,
     workers: int = 2,
+    name_filter: Callable[[str], bool] | None = None,
 ) -> list[Path]:
     """Recursively download every blob under ``prefix/`` into *local_root*.
 
@@ -258,6 +259,10 @@ def download_tree(
     runtime is dominated by per-request latency, so a small thread pool
     typically gives a multi-x speedup. Default is 2 to stay gentle on the
     GCS quota and local IO; raise it on a fast link.
+
+    *name_filter*, when given, receives each blob's path relative to *prefix*
+    and returns whether to download it. Used to restrict the ``daily/`` tree
+    to a date range without listing every date folder separately.
     """
     if workers < 1:
         raise ValueError(f"workers must be >= 1, got {workers}")
@@ -269,6 +274,8 @@ def download_tree(
     def _process(info: BlobInfo) -> Path | None:
         rel = info.name[len(prefix) + 1:] if info.name.startswith(prefix + "/") else info.name
         if not rel:
+            return None
+        if name_filter is not None and not name_filter(rel):
             return None
         dest = local_root / rel
         if (

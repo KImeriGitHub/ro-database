@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -37,13 +38,36 @@ TREES = {
 }
 
 
-def sync(local_root: Path, which: list[str], workers: int = 2) -> None:
+def _parse_date(value: str) -> date:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
+
+
+def sync(
+    local_root: Path,
+    which: list[str],
+    workers: int = 2,
+    from_date: date | None = None,
+) -> None:
     for name in which:
         prefix_fn, local_fn = TREES[name]
         prefix = prefix_fn() if name != "daily" else prefix_fn(None)
         dest = local_fn(local_root)
-        logger.info(f"Syncing gs://.../{prefix}/ -> {dest}")
-        written = gcs_client.download_tree(prefix, dest, workers=workers)
+        name_filter = None
+        if name == "daily" and from_date is not None:
+            cutoff = from_date.isoformat()
+            # daily blobs are <date>/.../file.parquet; ISO dates sort
+            # lexicographically, so a string compare on the leading folder
+            # keeps only days on or after the cutoff.
+            name_filter = lambda rel, cutoff=cutoff: rel.split("/", 1)[0] >= cutoff
+            logger.info(f"Syncing gs://.../{prefix}/ (from {cutoff}) -> {dest}")
+        else:
+            logger.info(f"Syncing gs://.../{prefix}/ -> {dest}")
+        written = gcs_client.download_tree(
+            prefix, dest, workers=workers, name_filter=name_filter
+        )
         logger.info(f"  {len(written)} new/changed files")
 
 
@@ -65,8 +89,15 @@ def main() -> int:
         "--workers", type=int, default=1,
         help="Concurrent download workers per tree (default: 1). Raise on a fast link.",
     )
+    parser.add_argument(
+        "--from-date", type=_parse_date, default=None, metavar="YYYY-MM-DD",
+        help=(
+            "Only download daily/ folders dated on or after this date. "
+            "Has no effect on catalog/ or historical/."
+        ),
+    )
     args = parser.parse_args()
-    sync(args.local_root, args.only, workers=args.workers)
+    sync(args.local_root, args.only, workers=args.workers, from_date=args.from_date)
     return 0
 
 
