@@ -235,6 +235,12 @@ Identical to historical: one `asyncio` task per `(asset_type, endpoint)` pair, a
 
 In practice, the daily call volume is a tiny fraction of a full historical pull (most endpoints do one call per symbol at most, and truncation is applied client-side after the fetch), so the budget is never the bottleneck -- wall-clock is dominated by intraday `prices` and `sentiment` paging.
 
+### Two-phase ordering (financials last)
+
+Both `setup_daily.py` and `adjust_weekly.py` run endpoints in two sequential phases: Phase 1 is every non-financial endpoint, Phase 2 is the five fundamental statements (`FINANCIAL_ENDPOINTS`). Tasks within a phase still run concurrently under the shared rate limiter, so total API throughput is unchanged -- only the start order differs. This finishes the time-sensitive data (prices, sentiment) first, so a run truncated by a timeout still captures it.
+
+`run_daily_pull` accepts an optional `on_phase_complete` callback awaited after Phase 1 with `("non_financial", folder_date)`. `run_daily.py` uses it to push the partial `daily/<folder_date>/` folder to GCS (in a worker thread); `upload_tree`'s MD5 skip means this partial push and the final push only move new/changed files. `adjust_weekly.py` uses the same ordering but no callback (it uploads once, at the end).
+
 ## Ingestion report
 
 Same schema as historical's `ingestion_report.parquet`. Saved at `daily/YYYY-MM-DD/ingestion_report.parquet`:

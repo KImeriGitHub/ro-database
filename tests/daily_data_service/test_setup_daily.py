@@ -63,6 +63,22 @@ def _make_recording_stub(calls: list[dict]):
     return _stub
 
 
+def _make_ordered_recording_map(events: list):
+    """ENDPOINT_MAP whose every endpoint appends its own name to *events* at
+    await time, so the list reflects the real cross-phase dispatch order."""
+    endpoint_map = {}
+    for ep in sd.ENDPOINT_MAP:
+        def _make(ep_name):
+            def _stub(**kwargs):
+                async def _go():
+                    events.append(ep_name)
+                    return None
+                return _go()
+            return _stub
+        endpoint_map[ep] = _make(ep)
+    return endpoint_map
+
+
 # ---------------------------------------------------------------------------
 # Folder-date computation lives in ``_common.compute_folder_date``; here we
 # instead patch ``resolve_start_marker`` to inject a deterministic
@@ -192,6 +208,75 @@ def test_run_daily_pull_subsets_by_endpoints(workdir: Path):
 
     asset_types = sorted({c["asset_type"] for c in calls})
     assert asset_types == ["etfs", "stocks"]
+
+
+# ---------------------------------------------------------------------------
+# Two-phase ordering: financials last + on_phase_complete callback
+# ---------------------------------------------------------------------------
+
+
+def test_financials_run_in_second_phase_after_callback(workdir: Path):
+    """Every non-financial endpoint dispatches before ``on_phase_complete``
+    fires; every financial endpoint dispatches after. The callback is awaited
+    exactly once with ``("non_financial", folder_date)``."""
+    folder_date = date(2026, 4, 17)
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_yield_status(catalog, date(2026, 4, 14))
+
+    events: list = []
+    endpoint_map = _make_ordered_recording_map(events)
+    callback_args: list = []
+
+    async def on_phase(phase, fd):
+        # Drop a sentinel into the same ordered list to mark the boundary.
+        events.append(("__callback__", phase))
+        callback_args.append((phase, fd))
+
+    with _patch_resolve_marker(daily, folder_date), \
+         patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
+         patch.object(sd, "ENDPOINT_MAP", endpoint_map):
+        _run(sd.run_daily_pull(
+            catalog_dir=catalog, daily_dir=daily,
+            on_phase_complete=on_phase,
+        ))
+
+    assert callback_args == [("non_financial", folder_date)]
+
+    boundary = events.index(("__callback__", "non_financial"))
+    before = {e for e in events[:boundary] if isinstance(e, str)}
+    after = {e for e in events[boundary + 1:] if isinstance(e, str)}
+
+    # Phase 2 is exactly the financial endpoints; phase 1 has none of them.
+    assert after == sd.FINANCIAL_ENDPOINTS
+    assert before.isdisjoint(sd.FINANCIAL_ENDPOINTS)
+    assert before  # phase 1 actually ran something
+
+
+def test_financials_run_last_even_without_callback(workdir: Path):
+    """The phase ordering holds independently of ``on_phase_complete``: every
+    financial dispatch comes strictly after every non-financial dispatch."""
+    folder_date = date(2026, 4, 17)
+    daily = workdir / "daily"
+    catalog = workdir / "catalog"
+    _write_yield_status(catalog, date(2026, 4, 14))
+
+    events: list = []
+    endpoint_map = _make_ordered_recording_map(events)
+
+    with _patch_resolve_marker(daily, folder_date), \
+         patch.object(sd, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(sd, "finalize_yield_status"), \
+         patch.object(sd, "fetch_earnings_calendar"), \
+         patch.object(sd, "ENDPOINT_MAP", endpoint_map):
+        _run(sd.run_daily_pull(catalog_dir=catalog, daily_dir=daily))
+
+    fin_idx = [i for i, e in enumerate(events) if e in sd.FINANCIAL_ENDPOINTS]
+    nonfin_idx = [i for i, e in enumerate(events) if e not in sd.FINANCIAL_ENDPOINTS]
+    assert fin_idx and nonfin_idx
+    assert min(fin_idx) > max(nonfin_idx)
 
 
 # ---------------------------------------------------------------------------

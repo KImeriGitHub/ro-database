@@ -8,8 +8,9 @@ wiring the monitoring report into both ``run_report_and_persist`` and the
 follow-up blob uploads. Those are what these tests pin.
 """
 
+import asyncio
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -138,6 +139,47 @@ def test_build_report_runs_and_uploads(tmp_path, gcs_prefixes, monkeypatch):
     blobs = {b for _, b in uploaded}
     assert f"daily/2026-06-01/{REPORT_FILENAME_JSON}" in blobs
     assert f"daily/2026-06-01/{REPORT_FILENAME_MD}" in blobs
+
+
+# ---------------------------------------------------------------------------
+# _run: phase-boundary partial upload (Option A)
+# ---------------------------------------------------------------------------
+
+def test_run_pushes_daily_folder_at_phase_boundary_and_at_end(tmp_path, gcs_prefixes, monkeypatch):
+    """``_run`` wires an ``on_phase_complete`` callback that pushes the partial
+    daily folder when the non-financial phase finishes, in addition to the
+    final push after the whole pull. So ``_push_daily_folder`` runs twice."""
+    workdir = tmp_path
+    (workdir / "daily").mkdir()
+    folder_date = date(2026, 6, 1)
+
+    monkeypatch.setattr(mod, "_pull_catalog", lambda wd, w: wd / "catalog")
+    monkeypatch.setattr(mod, "update_catalog_all", lambda c: None)
+    monkeypatch.setattr(mod, "_build_and_push_monitoring_report", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_push_catalog", lambda *a, **k: None)
+
+    pushes: list = []
+    monkeypatch.setattr(
+        mod, "_push_daily_folder",
+        lambda daily_local, fd, workers: pushes.append((Path(daily_local), fd, workers)),
+    )
+
+    async def fake_pull(*, on_phase_complete=None, **kwargs):
+        # Emulate the orchestrator firing the phase-1 callback mid-pull.
+        if on_phase_complete is not None:
+            await on_phase_complete("non_financial", folder_date)
+        return datetime(2026, 6, 1, 21, 0), folder_date
+
+    monkeypatch.setattr(mod, "run_daily_pull", fake_pull)
+
+    rc = asyncio.run(mod._run(workdir, api_tier="premium", workers=3))
+
+    assert rc == 0
+    # Partial push (from the callback) then the final push, same args both times.
+    assert pushes == [
+        (workdir / "daily", folder_date, 3),
+        (workdir / "daily", folder_date, 3),
+    ]
 
 
 def test_build_report_swallows_persist_failure(tmp_path, gcs_prefixes, monkeypatch):

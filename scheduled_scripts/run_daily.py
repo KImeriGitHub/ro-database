@@ -144,12 +144,35 @@ async def _run(workdir: Path, api_tier: str, workers: int) -> int:
         logger.exception("update_catalog_all failed")
         return 1
 
+    async def _upload_after_phase(phase: str, folder_date: date) -> None:
+        """Push whatever is on disk so far to GCS at a pull phase boundary.
+
+        Runs the blocking upload in a worker thread so the pull's event loop
+        keeps servicing in-flight endpoints. ``upload_tree`` skips blobs whose
+        MD5 already matches, so this partial push and the final full push at
+        the end of ``_run`` only ever move new or changed files. A failure here
+        is logged and swallowed; the financial phase keeps running and the
+        final upload retries the whole folder.
+        """
+        logger.info(f"Phase '{phase}' complete; pushing partial daily folder to GCS")
+        try:
+            await asyncio.to_thread(
+                _push_daily_folder, daily_local, folder_date, workers
+            )
+            logger.info(f"Phase '{phase}' partial upload to GCS complete")
+        except Exception:
+            logger.exception(
+                f"Partial upload after phase '{phase}' failed; "
+                f"final upload will retry"
+            )
+
     try:
         _, folder_date = await run_daily_pull(
             catalog_dir=catalog_local,
             daily_dir=daily_local,
             api_tier=api_tier,
             skip_empty_yield=True,
+            on_phase_complete=_upload_after_phase,
         )
     except Exception:
         logger.exception("run_daily_pull failed")

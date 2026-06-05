@@ -21,6 +21,7 @@ Usage:
 
 import asyncio
 import sys
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from pathlib import Path
 import logging
@@ -97,6 +98,18 @@ YIELD_SKIP_ENDPOINTS = {
     "earnings", "earnings_estimates",
 }
 
+# Financial (fundamental statement) endpoints run in a second phase, after
+# every other endpoint has finished. This lets the time-sensitive data
+# (prices, sentiment, ...) be fetched -- and, in run_daily, uploaded via the
+# phase-1 callback -- before the slower-to-change financials run, so a run
+# killed mid-financials still captures the priority data. The set happens to
+# match YIELD_SKIP_ENDPOINTS but is kept separate because it expresses a
+# different concept (run-order, not yield-skip).
+FINANCIAL_ENDPOINTS = {
+    "income_statement", "balance_sheet", "cash_flow",
+    "earnings", "earnings_estimates",
+}
+
 # Endpoints that honour ``active_only``: stock/ETF endpoints that filter the
 # catalog to ``status in {"Active", "Corrupted"}`` (i.e. exclude only
 # ``Delisted``) by default. Daily runs leave the flag at True so that
@@ -133,6 +146,7 @@ async def run_daily_pull(
     endpoints: list[str] | None = None,
     api_tier: str = "premium",
     skip_empty_yield: bool = False,
+    on_phase_complete: Callable[[str, date], Awaitable[None]] | None = None,
 ) -> tuple[datetime, date]:
     """Orchestrate the daily pull with cross-endpoint concurrency.
 
@@ -153,6 +167,13 @@ async def run_daily_pull(
     cell is False, and record an ``empty_content`` issue in its place so the
     finalize step keeps the cell False. Intended for weekday runs; weekend
     runs should leave the flag False to re-validate cold cells.
+
+    Endpoints run in two phases: every non-financial endpoint first, then the
+    fundamental statements in ``FINANCIAL_ENDPOINTS`` last. When given,
+    ``on_phase_complete`` is awaited once the non-financial phase finishes,
+    receiving ``("non_financial", folder_date)``; ``run_daily.py`` uses it to
+    push the partial day folder to GCS so a run killed during the financial
+    phase still lands the priority data.
     """
     project_root = Path(__file__).resolve().parent.parent
 
@@ -236,8 +257,7 @@ async def run_daily_pull(
 
     connector = aiohttp.TCPConnector(limit=len(plan))
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = []
-        for label, func, asset_type, ep_name in plan:
+        def build_task(label, func, asset_type, ep_name):
             def make_factory(f=func, at=asset_type, ep=ep_name):
                 async def _call():
                     extra: dict = {}
@@ -257,9 +277,34 @@ async def run_daily_pull(
                     )
                 return _call
 
-            tasks.append(_run_endpoint_task(label, make_factory()))
+            return _run_endpoint_task(label, make_factory())
 
-        await asyncio.gather(*tasks, return_exceptions=False)
+        # Phase 1: every non-financial endpoint. Phase 2: the fundamental
+        # statements. The phases run sequentially so the priority data is
+        # complete (and uploaded, via on_phase_complete) before financials
+        # start. Within a phase, tasks still run concurrently under the shared
+        # rate limiter, so total API throughput is unchanged.
+        phase_one = [p for p in plan if p[3] not in FINANCIAL_ENDPOINTS]
+        phase_two = [p for p in plan if p[3] in FINANCIAL_ENDPOINTS]
+
+        if phase_one:
+            logger.info(f"Phase 1 (non-financial): running {len(phase_one)} task(s)")
+            await asyncio.gather(
+                *(build_task(*p) for p in phase_one), return_exceptions=False
+            )
+            logger.info("Phase 1 (non-financial) complete")
+
+        if on_phase_complete is not None:
+            logger.info("Phase boundary: running on_phase_complete callback (upload)")
+            await on_phase_complete("non_financial", folder_date)
+            logger.info("Phase boundary: on_phase_complete callback finished")
+
+        if phase_two:
+            logger.info(f"Phase 2 (financial): running {len(phase_two)} task(s)")
+            await asyncio.gather(
+                *(build_task(*p) for p in phase_two), return_exceptions=False
+            )
+            logger.info("Phase 2 (financial) complete")
 
     report_path = day_root / "ingestion_report.parquet"
     issue_tracker.save(report_path)

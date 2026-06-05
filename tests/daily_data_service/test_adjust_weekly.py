@@ -628,6 +628,49 @@ def test_adjust_weekly_fundamentals_retry_with_skip_empty_yield_false(workdir: P
     assert calls[0]["skip_empty_yield"] is False
 
 
+def test_adjust_weekly_runs_financials_after_non_financials(workdir: Path):
+    """The weekend pass mirrors the daily two-phase ordering: financial
+    endpoints dispatch strictly after every non-financial one."""
+    daily = workdir / "daily"
+    _make_date_dirs(daily, ["2026-04-18"])
+    day_root = daily / "2026-04-18"
+    _write_report(day_root / "ingestion_report.parquet", [
+        {"symbol": "AAPL", "asset_type": "stocks", "endpoint": "prices_daily"},
+        {"symbol": "AAPL", "asset_type": "stocks", "endpoint": "income_statement"},
+        {"symbol": "AAPL", "asset_type": "stocks", "endpoint": "balance_sheet"},
+    ])
+
+    events: list[str] = []
+
+    def _ordered_stub(ep_name: str):
+        def _stub(**kwargs):
+            async def _go():
+                events.append(ep_name)
+            return _go()
+        return _stub
+
+    endpoint_map = {
+        "prices_daily": _ordered_stub("prices_daily"),
+        "income_statement": _ordered_stub("income_statement"),
+        "balance_sheet": _ordered_stub("balance_sheet"),
+    }
+
+    with patch.object(aw, "ENDPOINT_MAP", endpoint_map), \
+         patch.object(aw, "get_alpha_vantage_key", return_value="fake-key"), \
+         patch.object(aw, "fetch_earnings_calendar"), \
+         patch.object(aw, "finalize_yield_status"):
+        _run(aw.adjust_weekly(
+            catalog_dir=workdir / "catalog",
+            daily_dir=daily,
+            look_back_days=6,
+        ))
+
+    fin_idx = [i for i, e in enumerate(events) if e in aw.FINANCIAL_ENDPOINTS]
+    nonfin_idx = [i for i, e in enumerate(events) if e not in aw.FINANCIAL_ENDPOINTS]
+    assert fin_idx and nonfin_idx
+    assert min(fin_idx) > max(nonfin_idx)
+
+
 def test_adjust_weekly_no_report_is_noop(workdir: Path):
     """Missing or empty ingestion report: no dispatch, no finalize."""
     daily = workdir / "daily"

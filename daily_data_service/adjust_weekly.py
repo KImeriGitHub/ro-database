@@ -73,6 +73,7 @@ from daily_data_service.setup_daily import (
     ACTIVE_ONLY_ENDPOINTS,
     ASSET_ENDPOINTS,
     ENDPOINT_MAP,
+    FINANCIAL_ENDPOINTS,
     YIELD_SKIP_ENDPOINTS,
     _run_endpoint_task,
 )
@@ -399,8 +400,7 @@ async def adjust_weekly(
 
     connector = aiohttp.TCPConnector(limit=len(tasks_plan))
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = []
-        for label, func, asset_type, ep_name, symbols in tasks_plan:
+        def build_task(label, func, asset_type, ep_name, symbols):
             # sentinels / non-catalog rows like GLOBAL are silently dropped
             # by the endpoint's catalog.is_in filter.
             sym_filter: set[str] | None = symbols if symbols else None
@@ -429,9 +429,25 @@ async def adjust_weekly(
                     )
                 return _call
 
-            tasks.append(_run_endpoint_task(label, make_factory()))
+            return _run_endpoint_task(label, make_factory())
 
-        await asyncio.gather(*tasks, return_exceptions=False)
+        # Mirror the daily run's ordering: non-financial endpoints first, the
+        # fundamental statements (FINANCIAL_ENDPOINTS) last.
+        phase_one = [t for t in tasks_plan if t[3] not in FINANCIAL_ENDPOINTS]
+        phase_two = [t for t in tasks_plan if t[3] in FINANCIAL_ENDPOINTS]
+
+        if phase_one:
+            logger.info(f"Phase 1 (non-financial): running {len(phase_one)} task(s)")
+            await asyncio.gather(
+                *(build_task(*t) for t in phase_one), return_exceptions=False
+            )
+            logger.info("Phase 1 (non-financial) complete")
+        if phase_two:
+            logger.info(f"Phase 2 (financial): running {len(phase_two)} task(s)")
+            await asyncio.gather(
+                *(build_task(*t) for t in phase_two), return_exceptions=False
+            )
+            logger.info("Phase 2 (financial) complete")
 
     # Merge-in-place: drop every retried (symbol, asset_type, endpoint) row
     # from the original report, then append whatever the fresh pass logged.
