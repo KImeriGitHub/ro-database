@@ -37,6 +37,12 @@ from daily_data_service._common import price_window_lower
 
 logger = logging.getLogger(__name__)
 
+# Number of times a single pagination window is re-fetched before its empty /
+# error response is accepted as terminal. Alpha Vantage occasionally returns an
+# empty (or malformed) NEWS_SENTIMENT payload for a window that does have data;
+# retrying the same time_to a couple of times absorbs those transient blips.
+MAX_SENTIMENT_RETRIES = 2
+
 
 async def fetch_sentiment(
     catalog_dir: Path,
@@ -76,8 +82,10 @@ async def fetch_sentiment(
         time_to = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
         all_rows: list[dict] = []
         query_count = 0
+        retries = 0
+        pending_issue: tuple[str, str] | None = None
 
-        while time_to > time_from:
+        while time_to > time_from and retries <= MAX_SENTIMENT_RETRIES:
             url = (
                 f"{AV_BASE}/query?function=NEWS_SENTIMENT"
                 f"&time_from={time_from}&time_to={time_to}"
@@ -87,44 +95,66 @@ async def fetch_sentiment(
             try:
                 data = await fetch_av_json(url, session, rate_limiter)
             except AVResponseError as e:
-                issue_tracker.record(
-                    "GLOBAL", asset_type, "sentiment", "av_throttle", str(e),
+                retries += 1
+                pending_issue = ("av_throttle", str(e))
+                logger.warning(
+                    f"sentiment: fetch error at time_to={time_to} "
+                    f"(retry {retries}/{MAX_SENTIMENT_RETRIES})"
                 )
-                break
+                continue
             except Exception as e:
-                issue_tracker.record(
-                    "GLOBAL", asset_type, "sentiment",
-                    "structure_error", f"fetch failed: {e}",
+                retries += 1
+                pending_issue = ("structure_error", f"fetch failed: {e}")
+                logger.warning(
+                    f"sentiment: fetch failed at time_to={time_to} "
+                    f"(retry {retries}/{MAX_SENTIMENT_RETRIES})"
                 )
-                break
+                continue
 
             query_count += 1
 
             if "feed" not in data:
-                issue_tracker.record(
-                    "GLOBAL", asset_type, "sentiment",
+                retries += 1
+                pending_issue = (
                     "structure_error",
                     f"missing 'feed' key (time_to={time_to})",
                 )
+                logger.warning(
+                    f"sentiment: missing 'feed' key at time_to={time_to} "
+                    f"(retry {retries}/{MAX_SENTIMENT_RETRIES})"
+                )
                 del data
-                break
+                continue
 
             feed = data["feed"]
             items_str = data.get("items", "0")
             del data
 
             if not feed:
-                logger.info(f"sentiment: empty feed at time_to={time_to}, done")
-                break
+                retries += 1
+                pending_issue = None
+                logger.info(
+                    f"sentiment: empty feed at time_to={time_to} "
+                    f"(retry {retries}/{MAX_SENTIMENT_RETRIES})"
+                )
+                continue
 
             rows = _parse_feed(feed, issue_tracker)
             del feed
 
             if not rows:
+                retries += 1
+                pending_issue = None
                 logger.info(
-                    f"sentiment: no ticker rows at time_to={time_to}, done"
+                    f"sentiment: no ticker rows at time_to={time_to} "
+                    f"(retry {retries}/{MAX_SENTIMENT_RETRIES})"
                 )
-                break
+                continue
+
+            # A window returned usable rows: progress was made, so reset the
+            # retry budget and clear any pending issue from an earlier stall.
+            retries = 0
+            pending_issue = None
 
             all_rows.extend(rows)
 
@@ -153,6 +183,15 @@ async def fetch_sentiment(
                 ).strftime("%Y%m%dT%H%M")
 
             time_to = new_time_to
+
+        if pending_issue is not None:
+            # Retries were exhausted on a hard error (throttle / malformed
+            # response). Empty-feed and no-rows stalls clear pending_issue, so
+            # they exit quietly as a legitimate end-of-window.
+            issue_tracker.record(
+                "GLOBAL", asset_type, "sentiment",
+                pending_issue[0], pending_issue[1],
+            )
 
         if not all_rows:
             issue_tracker.record(
