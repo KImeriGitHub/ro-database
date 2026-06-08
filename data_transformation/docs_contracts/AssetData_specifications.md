@@ -255,6 +255,11 @@ re-reading every historical / daily sentiment file. Like the
 `_executive` / `_security_type` columns on `insider_df`, this is internal
 scaffolding rather than a modelling feature.
 
+**Recency caveat:** the most recent ~hour-plus of this frame is incomplete
+- AV's news feed backfills late, so the trailing edge of the latest
+snapshot is systematically under-populated. See
+`AssetData_design_choices.md` section 9.
+
 ### etf_profile: pl.DataFrame
  'Date'                       : pl.Date
  'information_technology'     : pl.Float32           sector weight 

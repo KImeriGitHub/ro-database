@@ -192,6 +192,13 @@ Consumers can rely on:
   per-symbol files already filter upstream, but this is not guaranteed).
 - Dedup key `(Datetime, url)`: two articles published in the same minute
   with different urls survive as distinct rows.
+- **The most recent ~hour-plus of `sentiment_df` is incomplete.** AV's news
+  feed lags and backfills: measured leading-edge freshness is ~36 min
+  median (p90 ~38 min), with older articles landing later still. Each
+  daily pull's tail is therefore under-populated; the 7-day overlap on
+  later runs fills it, but the dataset's trailing edge always lags. Treat a
+  sparse last hour (conservatively more) as "feed not yet complete", not
+  "no news". Historical rows past the overlap window are unaffected.
 
 ## 10. Financials: per-row PIT semantics
 
@@ -431,6 +438,9 @@ no-op cases described above and the `--skip-financials` CLI flag).
 - **No retroactive amendment tracking in `insider_df` or
   `sentiment_df`.** Most-recent-source-wins; offline raw replay if you
   need amendment history.
+- **No completeness in the most recent ~hour-plus of `sentiment_df`.** The
+  AV news feed backfills late; the trailing edge is systematically sparse
+  until a later run's 7-day overlap fills it. See section 9.
 - **No guarantee that `etf_profile` has a row on every trading date.**
   It's sparse.
 - **No `Volume` for forex / indices / commodities.** Column is null by
