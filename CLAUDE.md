@@ -52,6 +52,7 @@ tests/                        # Unified test directory (one subdir per service, 
 - The yield status can tell what tickers are pulled daily
 - No em dashes in log messages
 - SPEC.md gives specification for the code files in the folder and subfolders. For every bigger task, read the SPEC.md associated to the task.
+- 'rm' command suggestions must NOT be at the middle of the command text, only at the beginning.
 
 ## Alpha Vantage endpoints
 
