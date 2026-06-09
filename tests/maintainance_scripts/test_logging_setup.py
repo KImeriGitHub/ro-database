@@ -300,3 +300,18 @@ def test_configure_logging_file_handler_off_on_cloud_run(monkeypatch, tmp_path):
     assert len(handlers) == 1
     assert not any(isinstance(h, logging.FileHandler) for h in handlers)
     assert list(tmp_path.glob("*.log")) == []
+
+
+def test_configure_logging_file_handler_off_when_env_opts_out(monkeypatch, tmp_path):
+    """``RO_DB_NO_LOG_FILE`` forces the file handler off even off Cloud Run, so
+    the test suite stops dropping a ``logs/*.log`` file per ``main()`` call."""
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
+    monkeypatch.setenv("RO_DB_NO_LOG_FILE", "1")
+    buf = io.StringIO()
+    configure_logging(stream=buf, log_dir=tmp_path)  # log_to_file=None -> default
+
+    handlers = logging.getLogger().handlers
+    assert len(handlers) == 1
+    assert not any(isinstance(h, logging.FileHandler) for h in handlers)
+    assert list(tmp_path.glob("*.log")) == []

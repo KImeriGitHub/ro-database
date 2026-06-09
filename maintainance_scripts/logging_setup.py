@@ -83,8 +83,11 @@ def configure_logging(
     ``log_to_file`` defaults to ``not detect_cloud_run()``: locally we mirror
     each run to ``logs/<UTC-timestamp>_<script>.log`` so failed jobs leave a
     durable trail; on Cloud Run the stream is captured by Cloud Logging and a
-    file would just bloat the ephemeral container disk. ``log_dir`` defaults
-    to ``<PROJECT_ROOT>/logs`` (the folder is gitignored).
+    file would just bloat the ephemeral container disk. Setting
+    ``RO_DB_NO_LOG_FILE=1`` forces the file handler off regardless (the test
+    suite sets this so repeated ``main()`` invocations do not litter
+    ``logs/``; the env var also reaches subprocess-based tests). ``log_dir``
+    defaults to ``<PROJECT_ROOT>/logs`` (the folder is gitignored).
 
     Idempotent: repeat calls remove and close the previous handlers so tests
     and re-entries do not accumulate duplicates or leak file descriptors.
@@ -92,7 +95,7 @@ def configure_logging(
     if structured is None:
         structured = detect_cloud_run()
     if log_to_file is None:
-        log_to_file = not detect_cloud_run()
+        log_to_file = not detect_cloud_run() and not _log_file_disabled()
 
     root = logging.getLogger()
     for h in list(root.handlers):
@@ -127,6 +130,15 @@ def configure_logging(
         root.addHandler(file_handler)
 
     root.setLevel(level)
+
+
+def _log_file_disabled() -> bool:
+    """Return True when ``RO_DB_NO_LOG_FILE`` opts out of the file handler.
+
+    Lets the test suite suppress per-run ``logs/*.log`` files for both
+    in-process and subprocess invocations of entrypoints' ``main()``.
+    """
+    return os.environ.get("RO_DB_NO_LOG_FILE", "").lower() not in ("", "0", "false")
 
 
 def detect_cloud_run() -> bool:
