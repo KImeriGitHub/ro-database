@@ -14,6 +14,7 @@ Bias-aware market data infrastructure for algo trading research, backtesting, an
 
 - **GCP Cloud container** runs daily ingestion scripts, writes to a single GCS bucket (`gs://<project-id>-asset-database/`)
 - **Local sync script** mirrors GCS bucket contents for transformation and research
+- **Transformation** lives in the sibling `ro-datatrafo` project: it reads this project's `catalog/`, `historical/`, and `daily/` mirror and builds canonical `AssetData` instances. ro-database no longer transforms data itself.
 - All data stored as `.parquet` (both daily and historical)
 - Restatement detection via `deepdiff` comparing new data against previous day's data
 
@@ -30,7 +31,6 @@ config/                       # settings.py (paths, constants), gcp.py (GCP conf
 asset_catalog_service/        # Ticker/asset catalogs and API yield tracking code
 historical_data_setup/        # One-time historical data download (AV + optional FirstRate)
 daily_data_service/           # Daily incremental AV pull (setup_daily) + weekend retry pass (adjust_weekly)
-data_transformation/          # Transforms raw data into AssetData instances
 scheduled_scripts/            # Cloud Run entrypoints (run_daily.py, run_weekend.py)
 maintainance_scripts/         # Shared utility modules, GCS client, API key resolution
 monitoring_service/           # End-of-run database snapshot + delta-vs-previous report

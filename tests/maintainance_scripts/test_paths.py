@@ -35,7 +35,6 @@ def test_local_paths_default_to_project_root_when_root_omitted():
     assert paths.local_catalog_dir() == expected_root / "catalog"
     assert paths.local_historical_dir() == expected_root / "historical"
     assert paths.local_daily_dir() == expected_root / "daily"
-    assert paths.local_transformed_dir() == expected_root / "transformed"
 
 
 def test_local_paths_respect_custom_root(tmp_path):
@@ -45,7 +44,6 @@ def test_local_paths_respect_custom_root(tmp_path):
     assert paths.local_catalog_dir(tmp_path) == tmp_path / "catalog"
     assert paths.local_historical_dir(tmp_path) == tmp_path / "historical"
     assert paths.local_daily_dir(tmp_path) == tmp_path / "daily"
-    assert paths.local_transformed_dir(tmp_path) == tmp_path / "transformed"
 
 
 def test_local_daily_date_dir_isoformats_date(tmp_path):
@@ -58,43 +56,26 @@ def test_local_daily_date_dir_isoformats_date(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_configured_paths_fall_back_when_file_missing(monkeypatch, tmp_path):
-    """No ``dir_location.txt`` -> database defaults to PROJECT_ROOT and
-    the transformation dir defaults to ``<PROJECT_ROOT>/transformed/``."""
+def test_configured_database_dir_falls_back_when_file_missing(monkeypatch, tmp_path):
+    """No ``dir_location.txt`` -> database defaults to PROJECT_ROOT."""
     from config import settings
     monkeypatch.setattr(paths.settings, "DIR_LOCATION_FILE", tmp_path / "absent.txt")
     assert paths.configured_database_dir() == settings.PROJECT_ROOT
-    assert paths.configured_transformed_dir() == settings.PROJECT_ROOT / "transformed"
 
 
-def test_configured_paths_read_both_keys(monkeypatch, tmp_path):
+def test_configured_database_dir_reads_key(monkeypatch, tmp_path):
     db = tmp_path / "db"
-    tr = tmp_path / "tr"
     cfg = tmp_path / "dir_location.txt"
     cfg.write_text(
         "# user paths\n"
-        f"database_dir={db}\n"
-        f"transformation_dir={tr}\n",
+        f"database_dir={db}\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(paths.settings, "DIR_LOCATION_FILE", cfg)
     assert paths.configured_database_dir() == db
-    assert paths.configured_transformed_dir() == tr
 
 
-def test_configured_paths_partial_file_falls_back_per_key(monkeypatch, tmp_path):
-    """Only one key set -> that one is honored; the other falls back."""
-    from config import settings
-    db = tmp_path / "db"
-    cfg = tmp_path / "dir_location.txt"
-    cfg.write_text(f"database_dir={db}\n", encoding="utf-8")
-    monkeypatch.setattr(paths.settings, "DIR_LOCATION_FILE", cfg)
-    assert paths.configured_database_dir() == db
-    assert paths.configured_transformed_dir() == settings.PROJECT_ROOT / "transformed"
-
-
-def test_configured_paths_ignore_comments_blanks_and_unknown_keys(monkeypatch, tmp_path):
-    from config import settings
+def test_configured_database_dir_ignores_comments_blanks_and_unknown_keys(monkeypatch, tmp_path):
     db = tmp_path / "db"
     cfg = tmp_path / "dir_location.txt"
     cfg.write_text(
@@ -108,7 +89,6 @@ def test_configured_paths_ignore_comments_blanks_and_unknown_keys(monkeypatch, t
     )
     monkeypatch.setattr(paths.settings, "DIR_LOCATION_FILE", cfg)
     assert paths.configured_database_dir() == db
-    assert paths.configured_transformed_dir() == settings.PROJECT_ROOT / "transformed"
 
 
 # ---------------------------------------------------------------------------

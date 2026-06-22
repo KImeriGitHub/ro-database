@@ -64,21 +64,8 @@ tests/
 │   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
 │   ├── test_analyze_coverage.py   # SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ-holdings probes
 │   └── test_diff.py               # signed deltas vs previous monitoring_report.json
-├── data_transformation/               # Tests for data_transformation
-│   ├── test_asset_data_service.py     # AssetData dataclasses round-trip
-│   ├── test_common.py                 # source enumeration, sector lookup, schema cast, report
-│   ├── test_dedup.py                  # shared dedup-with-discrepancy-log helper
-│   ├── test_overview.py               # Phase 1: assets_overview.parquet
-│   ├── test_price_daily_simple.py     # Phase 2: forex/indices/crypto/commodities/economic
-│   ├── test_shareprice_daily.py       # Phase 3: stocks/etfs daily + AdjClose/AdjVolume math
-│   ├── test_shareprice_intraday.py    # Phase 4: intraday + factor-frame join + tz strip
-│   ├── test_etf_profile.py            # Phase 5: etf_profile + holdings List(Struct) round-trip
-│   ├── test_insider_df.py             # Phase 6a: insider_df concat/dedup, role rules, AcqDis filter
-│   ├── test_sentiment_df.py           # Phase 6b: sentiment_df rename/dedup, score discrepancies,
-│   │                                  # ticker filter, schema-exact drop of string source columns
-│   ├── test_financials.py             # Phase 6c: financials_q/annually PIT snapshots, report_table,
-│   │                                  # m_anchor walk, +/-10d fiscalDateEnding margin, CLI flags
-│   └── test_transform_cli.py          # End-to-end CLI via subprocess.run
+# NOTE: data_transformation tests (unit + the transform integration test) moved
+# to the sibling ro-datatrafo project along with the transformation code.
 ├── integration_tests/               # End-to-end smoke tests against a real, persistent database/
 │   ├── _helpers.py                  # MANDATORY_STOCKS/ETFS, reduce_catalogs, shared paths
 │   ├── int_test_init_catalog.py     # init_catalog -> analyze_catalog -> reduce_catalogs
@@ -86,12 +73,10 @@ tests/
 │   ├── int_test_historical_setup.py # setup_historical (FRD-backed prices) + monitor checks
 │   ├── int_test_run_daily.py        # setup_daily + monitor + prior-folder integrity check
 │   ├── int_test_adjust_weekly.py    # adjust_weekly + monitor (weekend mode)
-│   ├── int_test_transform.py        # transform.py + per-symbol output presence check
 │   ├── int_helper_reduce_catalog.py # standalone re-trim of database/catalog/
 │   ├── _helper_build_frd_test_dir.py # populate frd_dir/ from Alpha Vantage (FRD-shaped CSVs)
 │   ├── database/                    # populated by the scripts; persisted across runs
-│   ├── frd_dir/                     # FRD CSVs (pre-populated for FRD-covered subset)
-│   └── transformation/              # transform.py output
+│   └── frd_dir/                     # FRD CSVs (pre-populated for FRD-covered subset)
 └── call_speedtests/                       # Scripts that measure real API call performance
     ├── estimate_sentiment_calls.py        # NEWS_SENTIMENT backward pagination cost
     ├── estimate_prices_calls.py           # TIME_SERIES_INTRADAY monthly pagination
@@ -184,15 +169,12 @@ catalog or ingestion report needed). Tests cover:
 - `test_diff.py` -- signed deltas vs a previous monitoring_report.json,
   including malformed/missing previous reports.
 
-### data_transformation
+### data_transformation (moved out)
 
-Unit tests for the per-symbol transformation pipeline that builds `AssetData` instances from raw `historical/` and `daily/` parquets. Each test builds synthetic source files in `tmp_path` -- no real catalog or daily folder is touched.
-
-Phase 6 (insider / sentiment / financials) for stocks is covered by:
-
-- `test_insider_df.py` -- concat across historical + multiple daily folders, composite-key dedup with discrepancy logging, the `executive_title` -> `Executive_role` ordered rule list (including the regression-pinned priority cases), `AcqDis` filtering, null-`Shares` drop, sort order, schema exactness, `StockData` round-trip.
-- `test_sentiment_df.py` -- `time_published` rename, concat across historical + multiple daily folders, `(Datetime, url)` dedup with same-minute distinct-url preservation, discrepancy logging across the 18 Float32 score columns, the defensive ticker filter, source files without a ticker column, missing topic columns, schema exactness (drop of all string source columns), source-enumeration skip of `ALL_MESSAGES.parquet`.
-- `test_financials.py` -- per-row PIT snapshot resolution, the per-symbol report_table (past entries from union `earnings_q` + next-upcoming from `assets_overview` + further-future from extended estimates), `m_anchor` walk across reports, asymmetric `m=0` / `am=0` schemas, late-filer ordering, the `n` axis spanning `{-8..4}` / `{-2..1}`, the +/-10-day `fiscalDateEnding` margin against statements and estimates, annual estimate /4 synthesis, the all-snapshot `earnings_q` union with the `reportedDate` consistency check (and symmetric `fiscalDateEnding` drift logging), snapshot fallback, annual-no-quarterly-match drop, the `no_anchor` defensive null rule, `reportTime` normalisation, future-extension tail sort, `--skip-financials` and `--rebuild` CLI flags, `StockData` round-trip.
+The unit tests for the per-symbol transformation pipeline moved to the sibling
+`ro-datatrafo` project together with the transformation code. They now live in
+`ro-datatrafo/tests/data_transformation/`. ro-database no longer transforms raw
+parquet into `AssetData`.
 
 ### integration_tests
 
@@ -200,7 +182,7 @@ Standalone scripts (not pytest) that exercise each major pipeline against a real
 
 **Symbol subset.** Mandatory stocks: `AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, JPM, GS, BRK-B, IBM, T, NEE, SPG, O, TSM, F` plus 10 extras picked deterministically from the active stock catalog by SHA-256 ranking with a fixed seed (the ranking is stable across re-inits unless one of the picks disappears from AV's `LISTING_STATUS`). Mandatory ETFs: `QQQ, SPY, GLD, MDY, EWJ, EWU, DIA`. Trimming logic lives in `_helpers.reduce_catalogs`, which also propagates the trim to `yield_status.parquet` and `earnings_calendar.parquet`.
 
-**Persistence.** None of the scripts wipe `database/` between runs. They are designed for chained execution (`init -> historical -> daily -> weekly -> transform`) and for manual inspection of intermediate state. Pass `--wipe` to `int_test_init_catalog.py` to start the catalog from scratch.
+**Persistence.** None of the scripts wipe `database/` between runs. They are designed for chained execution (`init -> historical -> daily -> weekly`) and for manual inspection of intermediate state. Pass `--wipe` to `int_test_init_catalog.py` to start the catalog from scratch. The transform step that previously closed this chain now lives in the sibling `ro-datatrafo` project (`ro-datatrafo/tests/integration_tests/int_test_transform.py`), which reads a reduced mirror of this `database/` tree.
 
 **Opting out of catalog reduction.** `int_test_init_catalog.py`, `int_test_update_catalog.py`, `int_test_run_daily.py`, and `int_test_adjust_weekly.py` each accept `--no-reduce` to skip the post-run trim. To trim a catalog later (e.g. after a `--no-reduce` run, or after a daily/weekly finalize that appended new symbols), run `int_helper_reduce_catalog.py`, which only calls `_helpers.reduce_catalogs` against `database/catalog/`.
 
@@ -222,7 +204,9 @@ python tests/integration_tests/int_test_run_daily.py
 python tests/integration_tests/int_test_adjust_weekly.py [--look-back-days 7]
 
 # 5. Transform raw parquets into AssetData per-symbol folders
-python tests/integration_tests/int_test_transform.py
+#    (now in the sibling ro-datatrafo project; point its database/ fixture at
+#     a reduced mirror of this tree first)
+#    cd ../ro-datatrafo && python tests/integration_tests/int_test_transform.py
 ```
 
 **Per-script checks**
@@ -232,7 +216,6 @@ python tests/integration_tests/int_test_transform.py
 - `int_test_historical_setup.py` -- runs `historical_data_setup.setup_historical.run_historical_setup` with `frd_dir` for stock/ETF prices and `run_monitor=True`. Verifies every `historical/<subfolder>/` exists and that the ingestion + monitoring reports were written.
 - `int_test_run_daily.py` -- snapshots every pre-existing `daily/<date>/` file, runs `run_daily_pull`, then asserts (a) a new `daily/<folder-date>/` was created with the full subtree and at least one parquet per leaf, (b) the pre-existing folders are byte-for-byte unchanged, (c) the monitoring report was written for the new folder. The script writes the monitoring report itself; `setup_daily` does not. Re-reduces the catalog at the end.
 - `int_test_adjust_weekly.py` -- runs `adjust_weekly` against the most recent date folder, asserts the folder and its `ingestion_report.parquet` survived the run, writes a `weekend`-mode monitoring report, and re-reduces the catalog.
-- `int_test_transform.py` -- runs `data_transformation.transform.main` and asserts that every kept stock and ETF has a `data_<SYM>/` directory with at least one non-empty parquet, plus that the flat asset-type roots (`forex`, `indices`, `cryptocurrencies`, `commodities`, `economic`) each have at least one populated symbol folder.
 
 **Known caveat.** Running `int_test_init_catalog.py` again after the catalog has been reduced will rebuild it back to full size from AV `LISTING_STATUS` (init_catalog is idempotent on existing data but writes the full universe); the script trims again at the end of every run.
 

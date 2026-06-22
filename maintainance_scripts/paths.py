@@ -39,15 +39,11 @@ def local_daily_date_dir(folder_date: date, root: Path | None = None) -> Path:
     return local_daily_dir(root) / folder_date.isoformat()
 
 
-def local_transformed_dir(root: Path | None = None) -> Path:
-    return (root or settings.PROJECT_ROOT) / "transformed"
-
-
 # ---------------------------------------------------------------------------
 # User-configured local roots (secrets/dir_location.txt)
 # ---------------------------------------------------------------------------
 
-_DIR_LOCATION_KEYS = ("database_dir", "transformation_dir")
+_DIR_LOCATION_KEYS = ("database_dir",)
 
 
 def _read_dir_location() -> dict[str, Path]:
@@ -82,18 +78,6 @@ def configured_database_dir() -> Path:
     development checkouts keep working without any extra setup.
     """
     return _read_dir_location().get("database_dir", settings.PROJECT_ROOT)
-
-
-def configured_transformed_dir() -> Path:
-    """Destination for ``data_transformation`` output.
-
-    Read from ``secrets/dir_location.txt`` (``transformation_dir`` key).
-    Falls back to ``<PROJECT_ROOT>/transformed/`` when the file or key
-    is absent.
-    """
-    return _read_dir_location().get(
-        "transformation_dir", settings.PROJECT_ROOT / "transformed"
-    )
 
 
 # ---------------------------------------------------------------------------

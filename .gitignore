@@ -5,15 +5,14 @@ __pycache__/
 
 tmp/
 logs/
+TODO.md
 
 # Integration test data: ignore contents of these folders, keep the folders
 # themselves (committed via .gitkeep) so the int_test scripts have somewhere
 # to write.
 tests/integration_tests/database/*
 tests/integration_tests/frd_dir/*
-tests/integration_tests/transformation/*
 tests/integration_tests/logs/*
 !tests/integration_tests/database/.gitkeep
 !tests/integration_tests/frd_dir/.gitkeep
-!tests/integration_tests/transformation/.gitkeep
 !tests/integration_tests/logs/.gitkeep

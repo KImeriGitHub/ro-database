@@ -17,7 +17,7 @@ Daily data fetching runs in a **GCP Cloud container** (e.g., Cloud Run), not on 
 
 The one-time historical setup runs **locally** (it is a multi-hour job that benefits from local disk and easy restarts), and the resulting `historical/` and `catalog/` trees are pushed to the same GCS bucket once the setup finishes. After that initial upload, the container takes over for all ongoing daily work.
 
-A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research.
+A local sync script downloads data from the GCS bucket to a local mirror. This local data is then transformed into `AssetData` instances (a standardized schema defining what information each asset should contain) and processed into features for strategy research. The transformation step itself lives in the sibling `ro-datatrafo` project, which consumes this project's `catalog/`, `historical/`, and `daily/` mirror.
 
 
 ### API call management
@@ -116,14 +116,13 @@ Authentication is **Application Default Credentials (ADC)** on every host. On Cl
 
 ### Local path configuration
 
-By default the local database trees (`catalog/`, `historical/`, `daily/`) and the transformation output live under the repo root. To put either somewhere else (e.g. a fast SSD outside the checkout), create `secrets/dir_location.txt` with one or both keys:
+By default the local database trees (`catalog/`, `historical/`, `daily/`) live under the repo root. To put them somewhere else (e.g. a fast SSD outside the checkout), create `secrets/dir_location.txt` with the `database_dir` key:
 
 ```
 database_dir=/path/to/local/database
-transformation_dir=/path/to/local/transformation
 ```
 
-Same parser as `alpha_vantage_keys`: one `key=value` per line, `#` comments and blank lines ignored. `maintainance_scripts.paths.configured_database_dir()` / `configured_transformed_dir()` consume this file and are the default for `--root` in [data_transformation/transform.py](data_transformation/transform.py) and for `--local-root` in [scheduled_scripts/push_historical_to_gcs.py](scheduled_scripts/push_historical_to_gcs.py) / [scheduled_scripts/sync_gcs_to_local.py](scheduled_scripts/sync_gcs_to_local.py). A missing file or missing key falls back to `PROJECT_ROOT` (database) and `<PROJECT_ROOT>/transformed/` (transformation), so existing checkouts keep working with no extra setup.
+Same parser as `alpha_vantage_keys`: one `key=value` per line, `#` comments and blank lines ignored. `maintainance_scripts.paths.configured_database_dir()` consumes this file and is the default for `--local-root` in [scheduled_scripts/push_historical_to_gcs.py](scheduled_scripts/push_historical_to_gcs.py) / [scheduled_scripts/sync_gcs_to_local.py](scheduled_scripts/sync_gcs_to_local.py). A missing file or missing key falls back to `PROJECT_ROOT`, so existing checkouts keep working with no extra setup. (Transformation output paths are configured separately in the sibling `ro-datatrafo` project; ro-database no longer reads a `transformation_dir` key.)
 
 Both `gcs_client.download_tree` and `gcs_client.upload_tree` run their per-blob work in a `ThreadPoolExecutor` so per-request latency is amortised across many small parquet files. Concurrency is controlled by `--workers` on the user-facing entrypoints ([scheduled_scripts/sync_gcs_to_local.py](scheduled_scripts/sync_gcs_to_local.py), [scheduled_scripts/push_historical_to_gcs.py](scheduled_scripts/push_historical_to_gcs.py), [scheduled_scripts/run_daily.py](scheduled_scripts/run_daily.py), [scheduled_scripts/run_weekend.py](scheduled_scripts/run_weekend.py)). Listing remains single-threaded — only the per-blob MD5 check + download and the per-file upload run in parallel.
 
@@ -147,7 +146,7 @@ After a fresh deploy (new container, new project, new local machine), run `pytho
 secrets/                      # NOT IN GIT - optional locally; container pulls from Secret Manager
 ├── alpha_vantage_keys        # Alpha Vantage API keys (standard= / premium=)
 ├── gcs_credentials.json      # GCP config: project id, bucket, secret names (local dev only; container uses env). NOT a service-account key - auth is ADC on every host.
-└── dir_location.txt          # Optional local-path overrides (database_dir= / transformation_dir=)
+└── dir_location.txt          # Optional local-path override (database_dir=)
 
 config/
 ├── settings.py               # Local paths, AV rate-limit constants
@@ -166,7 +165,9 @@ daily_data_service/           # Daily incremental AV pull (mirrors historical_da
                               # at a truncated recent window, no FirstRate Data).
                               # Writes parquet under daily/YYYY-MM-DD/, finalizes yield_status.
 
-data_transformation/          # Transforms raw data into AssetData instances
+# NOTE: transformation of raw data into AssetData instances now lives in the
+# sibling ro-datatrafo project, which reads this project's catalog/, historical/,
+# and daily/ mirror. It is no longer part of ro-database.
 
 scheduled_scripts/            # Orchestration scripts for download runs and API budget tracking
 maintainance_scripts/         # common py files used throughout the repo

@@ -239,7 +239,6 @@ def kept_symbols(catalog_dir: Path) -> tuple[list[str], list[str]]:
 INT_TESTS_DIR = Path(__file__).resolve().parent
 DATABASE_DIR = INT_TESTS_DIR / "database"
 FRD_DIR = INT_TESTS_DIR / "frd_dir"
-TRANSFORMATION_DIR = INT_TESTS_DIR / "transformation"
 LOGS_DIR = INT_TESTS_DIR / "logs"
 CATALOG_DIR = DATABASE_DIR / "catalog"
 HISTORICAL_DIR = DATABASE_DIR / "historical"

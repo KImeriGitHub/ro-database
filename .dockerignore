@@ -8,7 +8,6 @@ tmp/
 logs/
 tests/
 consistency_tests/
-data_transformation/
 catalog/
 historical/
 daily/

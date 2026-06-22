@@ -42,7 +42,7 @@ We run two daily snapshot pipelines:
 2. Stores each API return. Clearly indicates the `observed_date`.
 3. Never overwrites previous values.
 
-After several years of collection, this produces a genuine PIT dataset for the covered period. The pipeline becomes productive once roughly 3 months of `daily/` snapshots have accumulated; before that the PIT layer is too sparse to use directly. See [data_transformation/SPEC.md](data_transformation/SPEC.md#lookahead-bias-on-the-historical-period).
+After several years of collection, this produces a genuine PIT dataset for the covered period. The pipeline becomes productive once roughly 3 months of `daily/` snapshots have accumulated; before that the PIT layer is too sparse to use directly. See the sibling `ro-datatrafo` project's [data_transformation/SPEC.md](../ro-datatrafo/data_transformation/SPEC.md#lookahead-bias-on-the-historical-period).
 
 ## Data sources and rationale
 
