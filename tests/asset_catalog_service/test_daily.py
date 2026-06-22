@@ -342,6 +342,134 @@ def test_daily_stocks_active_to_delisted(mock_fetch_text):
     assert bye["delistingDate"].to_list()[0] == date(2026, 5, 10)
 
 
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_etf_reissued_as_stock_delists_immediately(mock_fetch_text):
+    """A vanished ETF whose ticker is now an active stock is Delisted at once
+    (no 30-day Corrupted probation), because the disappearance is explained by
+    a cross-type reissue rather than a transient AV gap (SPCX-style)."""
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
+    ])
+    # SPCX exists as an Active ETF in the catalog; it has vanished from the
+    # fresh ETF list and now trades as an active stock.
+    _seed_etfs([
+        {"symbol": "SPY", "name": "SPDR S&P 500 ETF",
+         "ipoDate": date(1993, 1, 29), "delistingDate": None, "status": "Active"},
+        {"symbol": "SPCX", "name": "Old Space ETF",
+         "ipoDate": date(2021, 1, 1), "delistingDate": None, "status": "Active"},
+    ])
+
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "SPCX,SpaceX,NASDAQ,Stock,2026-06-01,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    etfs = pl.read_parquet(MOCK_DIR / "etfs.parquet")
+    spcx = etfs.filter(pl.col("symbol") == "SPCX")
+    assert spcx["status"].to_list()[0] == "Delisted"
+    assert spcx["delistingDate"].to_list()[0] == date.today()
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_corrupted_etf_reissued_as_stock_promotes_before_30_days(
+    mock_fetch_text,
+):
+    """A previously-Corrupted ETF (delistingDate < 30 days old) is promoted to
+    Delisted as soon as its ticker appears as an active stock, skipping the
+    remainder of the probation window."""
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
+    ])
+    recent = date.today() - timedelta(days=5)
+    _seed_etfs([
+        {"symbol": "SPY", "name": "SPDR S&P 500 ETF",
+         "ipoDate": date(1993, 1, 29), "delistingDate": None, "status": "Active"},
+        {"symbol": "SPCX", "name": "Old Space ETF",
+         "ipoDate": date(2021, 1, 1), "delistingDate": recent, "status": "Corrupted"},
+    ])
+
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "SPCX,SpaceX,NASDAQ,Stock,2026-06-01,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    etfs = pl.read_parquet(MOCK_DIR / "etfs.parquet")
+    spcx = etfs.filter(pl.col("symbol") == "SPCX")
+    assert spcx["status"].to_list()[0] == "Delisted"
+    # delistingDate preserved (not reset to today by promotion)
+    assert spcx["delistingDate"].to_list()[0] == recent
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_vanished_not_in_other_set_stays_corrupted(mock_fetch_text):
+    """A vanished symbol absent from the other-set stays in Corrupted probation
+    (the pre-existing behavior, unaffected by the cross-set fast-path)."""
+    _seed_stocks([
+        {"symbol": "AAPL", "name": "Apple Inc", "sector": "Technology",
+         "ipoDate": date(1980, 12, 12), "delistingDate": None, "status": "Active"},
+        {"symbol": "GONE", "name": "Gone Corp", "sector": "Technology",
+         "ipoDate": date(2010, 1, 1), "delistingDate": None, "status": "Active"},
+    ])
+    _seed_etfs(ETFS_SEED)
+
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, DAILY_DELISTED_CSV]
+    update_stocks_etfs("fake-key", MOCK_DIR)
+
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    gone = stocks.filter(pl.col("symbol") == "GONE")
+    assert gone["status"].to_list()[0] == "Corrupted"
+    assert gone["delistingDate"].to_list()[0] == date.today()
+
+
+@patch("asset_catalog_service.updates.stocks_etfs.logger")
+@patch("asset_catalog_service.updates.stocks_etfs.fetch_text")
+def test_daily_stock_etf_collision_warns_keeps_both(mock_fetch_text, mock_logger):
+    """A symbol classified as both stock and ETF this run is warned about but
+    retained in both catalogs (no removal)."""
+    _seed_stocks(STOCKS_SEED)
+    _seed_etfs(ETFS_SEED)
+
+    # DUAL appears as both an active Stock and an active ETF in one run.
+    active_csv = (
+        "symbol,name,exchange,assetType,ipoDate,delistingDate,status\n"
+        "AAPL,Apple Inc,NASDAQ,Stock,1980-12-12,null,Active\n"
+        "MSFT,Microsoft Corp,NASDAQ,Stock,1986-03-13,null,Active\n"
+        "DUAL,Dual Listco,NASDAQ,Stock,2020-01-01,null,Active\n"
+        "SPY,SPDR S&P 500 ETF,NYSE,ETF,1993-01-29,null,Active\n"
+        "DUAL,Dual Fund,NYSE,ETF,2020-01-01,null,Active\n"
+    )
+    mock_fetch_text.side_effect = [active_csv, DAILY_DELISTED_CSV]
+
+    with patch("asset_catalog_service.updates.stocks_etfs._fetch_sector",
+               return_value="Other"):
+        update_stocks_etfs("fake-key", MOCK_DIR)
+
+    # A collision warning was logged mentioning DUAL.
+    warn_msgs = [c.args[0] for c in mock_logger.warning.call_args_list]
+    assert any("DUAL" in m and "both" in m for m in warn_msgs)
+
+    # DUAL retained in both catalogs.
+    stocks = pl.read_parquet(MOCK_DIR / "stocks.parquet")
+    etfs = pl.read_parquet(MOCK_DIR / "etfs.parquet")
+    assert "DUAL" in set(stocks["symbol"].to_list())
+    assert "DUAL" in set(etfs["symbol"].to_list())
+
+
 # ── indices daily ─────────────────────────────────────────────────────
 
 

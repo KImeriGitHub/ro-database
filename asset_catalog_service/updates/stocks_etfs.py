@@ -477,8 +477,29 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
 
     av_stocks, av_etfs = _fetch_av_listings(api_key)
 
-    _update_listing("stocks", stocks_path, av_stocks, api_key)
-    _update_listing("etfs", etfs_path, av_etfs, None)
+    # AV sometimes classifies the same symbol as both a stock and an ETF in one
+    # run. We do not drop either side; just surface the collision for review.
+    stock_syms = set(av_stocks["symbol"].to_list())
+    etf_syms = set(av_etfs["symbol"].to_list())
+    collisions = sorted(stock_syms & etf_syms)
+    if collisions:
+        logger.warning(
+            f"stocks/etfs: {len(collisions)} symbols classified as both stock "
+            f"and ETF this run (kept in both catalogs): {collisions}"
+        )
+
+    # Active symbols on the opposite asset type, used by _update_listing to
+    # fast-path a vanished symbol to Delisted when it has been reissued under
+    # the other type (e.g. an old ETF whose ticker is now an active stock).
+    active_stock_syms = set(
+        av_stocks.filter(pl.col("status") == "Active")["symbol"].to_list()
+    )
+    active_etf_syms = set(
+        av_etfs.filter(pl.col("status") == "Active")["symbol"].to_list()
+    )
+
+    _update_listing("stocks", stocks_path, av_stocks, api_key, active_etf_syms)
+    _update_listing("etfs", etfs_path, av_etfs, None, active_stock_syms)
 
 
 def _update_listing(
@@ -486,6 +507,7 @@ def _update_listing(
     path: Path,
     fresh: pl.DataFrame,
     api_key: str | None,
+    other_active_syms: set[str],
 ) -> None:
     """Compare existing listing catalog with fresh data and apply changes."""
     existing = pl.read_parquet(path)
@@ -531,50 +553,77 @@ def _update_listing(
                 f"| ipo={row['ipoDate']} | status={row['status']}"
             )
 
-    # 2. Vanished symbols
+    # 2. Vanished symbols.
+    #
+    # The "other-set" (other_active_syms) is the set of symbols currently
+    # Active on the opposite asset type this run. Membership means the ticker
+    # has been reissued under the other type (e.g. an old ETF whose ticker now
+    # trades as an active stock), so the vanished side should delist
+    # immediately rather than sit in Corrupted probation.
     if vanished:
         vanished_rows = result.filter(pl.col("symbol").is_in(vanished))
 
-        # 2a. No delistingDate yet -> set today + Corrupted
-        no_delist = vanished_rows.filter(
-            pl.col("delistingDate").is_null()
-        )["symbol"].to_list()
+        # 2a. No delistingDate yet -> set today.
+        #     In other-set -> Delisted (reissue); else Corrupted (probation).
+        no_delist_rows = vanished_rows.filter(pl.col("delistingDate").is_null())
+        no_delist = no_delist_rows["symbol"].to_list()
+
+        new_delisted = sorted(
+            s for s in no_delist if s in other_active_syms
+        )
+        new_corrupted = sorted(
+            s for s in no_delist if s not in other_active_syms
+        )
 
         if no_delist:
             logger.info(
                 f"{label}: {len(no_delist)} vanished without delistingDate, "
-                f"setting delistingDate={today}, status=Corrupted:"
+                f"setting delistingDate={today}:"
             )
-            for s in sorted(no_delist):
-                logger.info(f"  ! {s}")
+            for s in new_corrupted:
+                logger.info(f"  ! {s} -> Corrupted")
+            for s in new_delisted:
+                logger.info(f"  x {s} -> Delisted (reissued under other type)")
             result = result.with_columns(
                 pl.when(pl.col("symbol").is_in(no_delist))
                 .then(pl.lit(today))
                 .otherwise(pl.col("delistingDate"))
                 .alias("delistingDate"),
-                pl.when(pl.col("symbol").is_in(no_delist))
+                pl.when(pl.col("symbol").is_in(new_delisted))
+                .then(pl.lit("Delisted"))
+                .when(pl.col("symbol").is_in(new_corrupted))
                 .then(pl.lit("Corrupted"))
                 .otherwise(pl.col("status"))
                 .alias("status"),
             )
 
-        # 2b. Has delistingDate older than 30 days -> Delisted
-        has_delist = vanished_rows.filter(pl.col("delistingDate").is_not_null())
-        if has_delist.height > 0:
-            old = has_delist.filter(pl.col("delistingDate") < one_month_ago)
-            if old.height > 0:
-                old_syms = old["symbol"].to_list()
+        # 2b. Has delistingDate and still Corrupted -> promote to Delisted when
+        #     either 30+ days have passed, or the symbol is in the other-set
+        #     (reissue fast-path). Already-Delisted rows are terminal; skip.
+        corrupted_dated = vanished_rows.filter(
+            pl.col("delistingDate").is_not_null()
+            & (pl.col("status") == "Corrupted")
+        )
+        if corrupted_dated.height > 0:
+            promote = corrupted_dated.filter(
+                (pl.col("delistingDate") < one_month_ago)
+                | pl.col("symbol").is_in(other_active_syms)
+            )
+            if promote.height > 0:
+                promote_syms = promote["symbol"].to_list()
                 logger.info(
-                    f"{label}: {len(old_syms)} vanished > 30 days, "
-                    f"marking Delisted:"
+                    f"{label}: {len(promote_syms)} Corrupted vanished promoted "
+                    f"to Delisted:"
                 )
-                for row in old.iter_rows(named=True):
-                    logger.info(
-                        f"  x {row['symbol']} "
-                        f"(delisted since {row['delistingDate']})"
+                for row in promote.iter_rows(named=True):
+                    reason = (
+                        "reissued under other type"
+                        if row["symbol"] in other_active_syms
+                        else f"delisted since {row['delistingDate']}"
                     )
+                    logger.info(f"  x {row['symbol']} ({reason})")
                 result = result.with_columns(
-                    pl.when(pl.col("symbol").is_in(old_syms))
+                    pl.when(pl.col("symbol").is_in(promote_syms))
                     .then(pl.lit("Delisted"))
                     .otherwise(pl.col("status"))
                     .alias("status")

@@ -59,9 +59,24 @@ update_all()
 **Update (`update_catalog.py`):**
 - No FirstRate Data incorporation.
 - New symbols: appended. `OVERVIEW` queried for the new symbol's sector. Logged with full row details.
-- Missing keys (in catalog but gone from API):
-  - If `delistingDate` is null: set `delistingDate` to today, `status` to `Corrupted`.
-  - If `delistingDate` is already set and older than 30 days: `status` promoted to `Delisted`.
+- Missing keys (in catalog but gone from API). The *other-set* is the set of
+  symbols currently `Active` in the sibling LISTING_STATUS this run (for
+  stocks, the active ETF symbols; for ETFs, the active stock symbols). Cross-set
+  membership detects a ticker that was reissued under the other asset type
+  (e.g. SPCX: was an ETF, now an active stock), which should delist
+  immediately rather than sit in `Corrupted` probation.
+  - If `delistingDate` is null: set `delistingDate` to today. Then if the
+    symbol is in the other-set -> `status` `Delisted`, otherwise `Corrupted`.
+  - If `delistingDate` is not null and `status` is `Corrupted`:
+    - `delistingDate` 30 days old or newer and symbol not in other-set: stays
+      `Corrupted`.
+    - `delistingDate` 30 days old or newer and symbol in other-set: `status`
+      promoted to `Delisted`.
+    - `delistingDate` older than 30 days: `status` promoted to `Delisted`.
+
+    (The 30-day boundary uses `delistingDate < today - 30 days`, matching the
+    indices/forex/crypto catalogs.)
+  - A symbol already `Delisted` is terminal and left untouched.
 - `ipoDate` changes for an existing symbol:
   - Moved earlier (both non-null, fresh < existing): `ipoDate` updated to the earlier value; `status` is left untouched. A later fresh `ipoDate` is ignored so the earliest known data window is preserved and the same row is not re-flagged on every run.
   - Filled (existing was null, fresh has a value): `ipoDate` updated.
@@ -85,7 +100,7 @@ update_all()
    - Log status disagreements for symbols present in both.
 
 **Update (`update_catalog.py`):**
-- Same update logic as stocks (new symbols, vanished symbols, date changes) but no `OVERVIEW` query needed (ETFs have no sector).
+- Same update logic as stocks (new symbols, vanished symbols, date changes) but no `OVERVIEW` query needed (ETFs have no sector). The vanished-key cross-set is the set of active stock symbols (the reverse of the stocks case).
 
 **API calls (stocks + ETFs combined):**
 
@@ -279,7 +294,8 @@ Single-fetch endpoints (LISTING_STATUS, OVERVIEW, INDEX_CATALOG, physical_curren
 - **Two scripts, two modes:** `init_catalog.py` is idempotent but expensive (especially without FirstRate Data). `update_catalog.py` is cheap and incremental. Separating them makes the cost explicit and prevents accidental re-initialization.
 - **FirstRate precedence:** When both sources provide data for the same symbol, FirstRate wins. This reflects that FirstRate Data is a curated, purchased dataset with better delisting coverage. Disagreements are logged for review.
 - **Sector via OVERVIEW:** The `LISTING_STATUS` endpoint does not return sector information. Sectors require a per-symbol `OVERVIEW` query. FirstRate Data provides sectors in bulk, avoiding thousands of API calls.
-- **Corrupted vs Delisted:** A missing symbol is first marked `Corrupted` (with today's date). Only after 30+ days of continuous absence does it become `Delisted`. This two-stage approach avoids prematurely marking symbols as delisted due to transient API issues.
+- **Corrupted vs Delisted:** A missing symbol is first marked `Corrupted` (with today's date). Only after 30+ days of continuous absence does it become `Delisted`. This two-stage approach avoids prematurely marking symbols as delisted due to transient API issues. The exception is a cross-type reissue: if a vanished symbol is currently `Active` in the sibling asset's LISTING_STATUS (stock symbol now an active ETF, or vice versa), it is delisted immediately, skipping the 30-day probation, because its disappearance is explained by the reissue rather than a transient gap.
+- **Stock/ETF collision logging:** AV occasionally classifies the same symbol as both a stock and an ETF in one run. `update_stocks_etfs` logs a warning listing such symbols but does not drop either side. The warning is informational; the symbol is retained in both catalogs.
 - **ipoDate moves earlier are absorbed silently:** If Alpha Vantage reports an earlier IPO date for a known symbol, the new earlier date is written to the catalog (so the change is not re-detected on every subsequent run) but `status` is left untouched. The catalog already tolerates re-issued tickers via the min-ipoDate fetch rule (below), so an earlier date is treated as new information rather than a data-integrity concern. A fresh ipoDate that is *later* than the stored value is ignored: any persisted earlier date is the truthful boundary, and a later AV value typically means a delisted-row contribution dropped out of the response.
 - **Re-issued tickers (active wins, earliest ipoDate kept):** AV's `LISTING_STATUS` can return the same `symbol` string twice when a ticker was reused: once in `state=delisted` for the original company (with its old `ipoDate` and a `delistingDate`) and once in `state=active` for the new company that now trades under it (with a newer `ipoDate` and null `delistingDate`). `_fetch_av_listings` deduplicates by symbol with the active row winning for `name`/`status`/`delistingDate`, but `ipoDate` is set to the minimum across the active and delisted rows. This keeps the catalog pointing at the currently-trading entity (so the yield-aware pipeline does not skip a live ticker) while preserving the earliest date for which any data may exist under the ticker, e.g. for survivorship-bias-aware queries against `historical/`. Note: `symbol` is treated as a primary key throughout the catalog, so representing both issuers as separate rows would require a richer key (e.g. `symbol + ipoDate`) and is out of scope.
 - **Static catalogs are immutable:** Commodities and economic indicators are fixed lists defined in code. They are created once and never touched again by the catalog script.
