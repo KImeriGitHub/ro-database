@@ -66,7 +66,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
-from config.settings import AV_RATE_LIMIT_PER_MIN
+from config.settings import AV_RATE_LIMIT_PER_MIN, DISABLED_ASSET_TYPES
 from daily_data_service._common import ET
 from daily_data_service.ensure_folders import ensure_daily_folders
 from daily_data_service.setup_daily import (
@@ -376,6 +376,11 @@ async def adjust_weekly(
 
     tasks_plan: list[tuple[str, object, str, str, set[str]]] = []
     for (asset_type, ep_name), symbols in plan.items():
+        # Reports written before the asset type was disabled still carry rows
+        # for it; drop them without the misleading ASSET_ENDPOINTS warning.
+        if asset_type in DISABLED_ASSET_TYPES:
+            logger.info(f"Skipping ({asset_type}, {ep_name}): asset type disabled")
+            continue
         applicable = ASSET_ENDPOINTS.get(asset_type, [])
         if ep_name not in applicable:
             logger.warning(

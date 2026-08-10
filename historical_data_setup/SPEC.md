@@ -79,7 +79,7 @@ python historical_data_setup/setup_historical.py --asset-types commodities
 # Economic indicators only
 python historical_data_setup/setup_historical.py --asset-types economic
 
-# Indices only
+# Indices only (currently a no-op: see DISABLED_ASSET_TYPES)
 python historical_data_setup/setup_historical.py --asset-types indices
 
 # With standard API tier (default is premium)
@@ -623,6 +623,8 @@ One file per indicator. Unit metadata is not stored.
 ## Indices
 
 ### indices (INDEX_DATA)
+
+> **Disabled.** `indices` is listed in `DISABLED_ASSET_TYPES` ([config/settings.py](../config/settings.py)): `INDEX_DATA` requires AV's 150+ requests/min plans and our key gets `"You are not yet entitled to index data access"` for every symbol. `ASSET_ENDPOINTS` / `ENDPOINT_MAP` drop it at import time, so `--asset-types indices` is a no-op and no `historical/indices/` folder is created. Existing files there are left alone. This section documents the behaviour that returns when the flag is cleared.
 
 Per symbol, fetches the full daily index price history in a single API call. The indices catalog contains ~400+ symbols (e.g. SPX, DJI, IXIC). Many symbols may not have data; the ingestion report captures which ones failed. The `INDEX_DATA` endpoint does not support `outputsize` -- the API returns all available history by default. The response has no `"Meta Data"` key; the top-level structure is `{symbol, name, interval, data}` where `data` is a flat list of OHLC records.
 

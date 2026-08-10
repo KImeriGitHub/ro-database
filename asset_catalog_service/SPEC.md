@@ -112,6 +112,8 @@ update_all()
 
 ### indices.parquet
 
+> Still maintained (1 call/day) even though the `indices` data pull is disabled: `INDEX_CATALOG` is not gated, only `INDEX_DATA`. See `DISABLED_ASSET_TYPES` in [config/settings.py](../config/settings.py). Index symbols keep their `yield_status` rows with all columns null.
+
 **Source:** Alpha Vantage `INDEX_CATALOG` (JSON, key = symbol, value = name).
 
 **Schema:** `symbol, name, ipoDate (Date), delistingDate (Date), status (Utf8)`.

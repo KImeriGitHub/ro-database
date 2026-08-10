@@ -33,7 +33,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
-from config.settings import AV_RATE_LIMIT_PER_MIN
+from config.settings import AV_RATE_LIMIT_PER_MIN, DISABLED_ASSET_TYPES
 from daily_data_service._common import (
     read_previous_date,
     resolve_start_marker,
@@ -88,6 +88,18 @@ ASSET_ENDPOINTS = {
     "commodities": ["commodities"],
     "economic": ["economic"],
     "indices": ["indices"],
+}
+# Drop disabled asset types before anything can dispatch them; adjust_weekly
+# reads both dicts, so the weekend pass is covered too. An endpoint survives
+# as long as one enabled asset type still uses it (prices: stocks + etfs).
+ASSET_ENDPOINTS = {
+    at: eps for at, eps in ASSET_ENDPOINTS.items()
+    if at not in DISABLED_ASSET_TYPES
+}
+_ENABLED_ENDPOINTS = {ep for eps in ASSET_ENDPOINTS.values() for ep in eps}
+ENDPOINT_MAP = {
+    ep: func for ep, func in ENDPOINT_MAP.items()
+    if ep in _ENABLED_ENDPOINTS
 }
 
 # Endpoints that honour ``skip_empty_yield`` (fundamental endpoints with

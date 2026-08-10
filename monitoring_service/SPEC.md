@@ -70,6 +70,9 @@ written. Expected count is the catalog size, narrowed by `yield_status`
 (True cells only) for endpoints with a per-symbol yield column. The ratio
 `written / expected` makes a silently broken endpoint task obvious.
 Fundamental endpoints (two files per symbol) count distinct symbols.
+Asset types in `DISABLED_ASSET_TYPES` (`config\settings.py`) are excluded --
+they write no files by design, so a ratio would always read 0.000. Their
+catalog rollup above is unaffected.
 
 ### Storage size (`monitoring_service/analyze_files.py:analyze_storage`)
 

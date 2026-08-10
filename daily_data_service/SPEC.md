@@ -111,6 +111,8 @@ If `previous-date == folder-date`, the day's pull has already been finalized; th
 | `economic` (non-daily indicators: REAL_GDP, CPI, ...) | economic | (default interval per indicator) | `Date >= folder-date - 5 years` |
 | `indices` | indices | `INDEX_DATA`, `interval=daily` | `Date` in `(min(previous-date, folder-date - 7d), folder-date]` |
 
+> **`indices` is disabled.** It is listed in `DISABLED_ASSET_TYPES` ([config/settings.py](../config/settings.py)) because `INDEX_DATA` requires AV's 150+ requests/min plans, so `ASSET_ENDPOINTS` / `ENDPOINT_MAP` drop it at import time and no `daily/<date>/indices/` folder is created. The row above documents the behaviour that returns when the flag is cleared. `catalog/indices.parquet` is still refreshed (`INDEX_CATALOG` is not gated) and index symbols keep null `direct` cells in `yield_status`.
+
 ### Notes on specific endpoints
 
 - **prices (intraday)**: the `month` parameter is intentionally **omitted**. With `outputsize=full`, Alpha Vantage returns the trailing 30 days of 1-min bars regardless of month boundary, which cleanly covers any reasonable window including cross-month rollovers.

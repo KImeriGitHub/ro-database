@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 
 from asset_catalog_service.updates._common import YIELD_ENDPOINTS
+from config.settings import DISABLED_ASSET_TYPES
 from historical_data_setup._common import symbol_parquet_name
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,12 @@ ASSET_TYPE_COLUMNS: dict[str, tuple[str, ...]] = {
     "cryptocurrencies": ("direct",),
     "commodities": ("direct",),
     "economic": ("direct",),
+}
+# Disabled types keep their catalog rows but no applicable column, so their
+# cells finalize to null instead of False (which adjust_weekly would retry).
+ASSET_TYPE_COLUMNS = {
+    at: cols for at, cols in ASSET_TYPE_COLUMNS.items()
+    if at not in DISABLED_ASSET_TYPES
 }
 
 # Fundamental endpoints split into annual/quarterly files; partial save is OK.

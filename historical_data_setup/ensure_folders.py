@@ -6,6 +6,8 @@ Usage:
 
 from pathlib import Path
 
+from config.settings import DISABLED_ASSET_TYPES
+
 
 HISTORICAL_TREE = [
     "stocks/prices",
@@ -25,6 +27,11 @@ HISTORICAL_TREE = [
     "cryptocurrencies",
     "commodities",
     "economic",
+]
+# Disabled types get no folder; existing ones are left in place.
+HISTORICAL_TREE = [
+    leaf for leaf in HISTORICAL_TREE
+    if leaf.split("/")[0] not in DISABLED_ASSET_TYPES
 ]
 
 

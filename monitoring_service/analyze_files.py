@@ -17,6 +17,8 @@ from pathlib import Path
 
 import polars as pl
 
+from config.settings import DISABLED_ASSET_TYPES
+
 logger = logging.getLogger(__name__)
 
 # Same mapping used by the orchestrators. Repeated here to avoid pulling
@@ -32,6 +34,12 @@ _ASSET_ENDPOINTS: dict[str, tuple[str, ...]] = {
     "cryptocurrencies": ("cryptocurrencies",),
     "commodities": ("commodities",),
     "economic": ("economic",),
+}
+# Disabled types write no files, so counting them would report a 0.000 ratio
+# every run. Their catalog rollup in analyze_catalog is unaffected.
+_ASSET_ENDPOINTS = {
+    at: eps for at, eps in _ASSET_ENDPOINTS.items()
+    if at not in DISABLED_ASSET_TYPES
 }
 
 # Endpoints with a per-symbol yield column. Other endpoints are full-catalog.

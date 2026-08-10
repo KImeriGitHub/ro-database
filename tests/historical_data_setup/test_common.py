@@ -27,6 +27,7 @@ from historical_data_setup import _common as hc
 from historical_data_setup._common import (
     AV_THROTTLE_BACKOFF_SEC,
     AV_TRANSIENT_BACKOFF_SEC,
+    AVEntitlementError,
     AVResponseError,
     IssueTracker,
     RateLimiter,
@@ -681,6 +682,42 @@ def test_fetch_av_json_information_key_also_treated_as_throttle():
 
     assert out == {"Time Series (Daily)": {}}
     assert len(sess.requests) == 2
+
+
+def test_fetch_av_json_entitlement_note_fails_fast_without_retry():
+    """A plan-entitlement refusal arrives in the same ``Note`` field as a
+    throttle, but retrying can never clear it. It must raise on the first
+    attempt instead of burning max_retries calls and 4 minutes of backoff."""
+    reset_av_call_count()
+    sess = _ScriptedSession([{
+        "Note": (
+            "You are not yet entitled to index data access. Please subscribe "
+            "to any of our 150, 300, 600, or 1200 requests per minute premium "
+            "plans at https://www.alphavantage.co/premium/ ..."
+        )
+    }])
+    rl = RateLimiter(calls_per_minute=1000, window=1.0, min_gap=0.0)
+
+    slept: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(seconds):
+        slept.append(seconds)
+        await real_sleep(0)
+
+    with patch("historical_data_setup._common.asyncio.sleep", side_effect=fast_sleep):
+        with pytest.raises(AVEntitlementError, match="entitlement refused"):
+            _run(fetch_av_json("https://fake", sess, rl))
+
+    assert len(sess.requests) == 1
+    assert get_av_call_count() == 1
+    assert slept == []
+
+
+def test_av_entitlement_error_is_an_av_response_error():
+    """Endpoints catch ``AVResponseError`` to record an av_throttle issue;
+    entitlement refusals must keep flowing through that handler."""
+    assert issubclass(AVEntitlementError, AVResponseError)
 
 
 # ---------------------------------------------------------------------------

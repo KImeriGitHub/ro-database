@@ -50,3 +50,37 @@ def test_rate_limit_under_hard_cap():
     the catalog-side sweeps and the daily run will collide and 429."""
     assert settings.AV_RATE_LIMIT_PER_MIN < settings.AV_HARD_CAP_PER_MIN
     assert settings.AV_HARD_CAP_PER_MIN == 75  # AV's documented premium cap
+
+
+def test_indices_disabled():
+    """INDEX_DATA is gated behind AV's 150+ requests/min plans. Until the plan
+    changes, indices must stay disabled -- see the propagation test below for
+    what that switches off."""
+    assert "indices" in settings.DISABLED_ASSET_TYPES
+
+
+def test_disabled_asset_types_reach_every_ingestion_registry():
+    """The flag is only useful if every plan-building registry honours it. A
+    registry that keeps a disabled asset type would silently resume calling a
+    gated endpoint for every symbol in its catalog."""
+    from asset_catalog_service.updates.yield_status import ASSET_TYPE_COLUMNS
+    from daily_data_service.ensure_folders import DAILY_TREE
+    from daily_data_service.setup_daily import ASSET_ENDPOINTS as DAILY_ASSETS
+    from daily_data_service.setup_daily import ENDPOINT_MAP as DAILY_ENDPOINTS
+    from historical_data_setup.ensure_folders import HISTORICAL_TREE
+    from historical_data_setup.setup_historical import ASSET_ENDPOINTS as HIST_ASSETS
+    from historical_data_setup.setup_historical import ENDPOINT_MAP as HIST_ENDPOINTS
+    from monitoring_service.analyze_files import _ASSET_ENDPOINTS as MONITOR_ASSETS
+
+    for disabled in settings.DISABLED_ASSET_TYPES:
+        assert disabled not in DAILY_ASSETS
+        assert disabled not in HIST_ASSETS
+        assert disabled not in DAILY_ENDPOINTS
+        assert disabled not in HIST_ENDPOINTS
+        assert disabled not in ASSET_TYPE_COLUMNS
+        assert disabled not in MONITOR_ASSETS
+        assert not [l for l in DAILY_TREE if l.split("/")[0] == disabled]
+        assert not [l for l in HISTORICAL_TREE if l.split("/")[0] == disabled]
+
+    # Endpoints shared with a still-enabled asset type must survive the filter.
+    assert "prices" in DAILY_ENDPOINTS and "prices" in HIST_ENDPOINTS

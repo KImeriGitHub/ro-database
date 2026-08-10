@@ -6,6 +6,11 @@ Unified test directory for the ro-database project.
 
 ```
 tests/
+├── config/                        # Tests for config
+│   ├── test_settings.py           # PROJECT_ROOT / secrets-path contract, AV budget under
+│   │                              # the hard cap, DISABLED_ASSET_TYPES reaching every registry
+│   └── test_gcp.py                # env-first / JSON-fallback identifier resolution,
+│                                  # no hard-coded defaults, USE_SECRET_MANAGER flag parsing
 ├── asset_catalog_service/         # Tests for asset_catalog_service
 │   ├── mock_catalog/              # Temp catalog dir used by tests (created/cleaned per test)
 │   ├── test_init.py               # Tests initial catalog creation (no parquets exist)
@@ -42,7 +47,8 @@ tests/
 │   ├── test_cross_endpoint.py     # Cross-endpoint concurrency + shared rate limit
 │   ├── test_common.py             # _common helpers (generate_months, IssueTracker,
 │   │                              # symbol_parquet_name, frd_csv_path,
-│   │                              # validate_meta_data, fetch_av_json throttle/retry,
+│   │                              # validate_meta_data, fetch_av_json throttle/retry
+│   │                              # and entitlement fast-fail,
 │   │                              # AV call counter, ensure_historical_folders)
 │   ├── test_setup_historical.py   # run_historical_setup orchestrator: plan composition,
 │   │                              # FRD-dir routing, ingestion-report write, finalize on full runs
@@ -64,6 +70,15 @@ tests/
 │   ├── test_analyze_ingestion.py  # ingestion_report.parquet rollups
 │   ├── test_analyze_coverage.py   # SPY/MDY/EWJ/EWU/DIA/QQQ + QQQ-holdings probes
 │   └── test_diff.py               # signed deltas vs previous monitoring_report.json
+├── scheduled_scripts/             # Tests for the Cloud Run entrypoints and GCS transfer scripts
+│   ├── test_run_daily.py          # phase-boundary + end-of-run folder pushes, previous-report
+│   │                              # discovery, report build/upload, persist-failure isolation
+│   ├── test_run_weekend.py        # date discovery from GCS prefixes, local folder stubbing,
+│   │                              # pull/push of the dated folder, pre-weekend report as previous
+│   ├── test_push_historical_to_gcs.py # missing-dir raise, --skip-catalog, size-mismatch guard
+│   │                                  # and --force override, missing catalog warns not raises
+│   └── test_sync_gcs_to_local.py  # --from-date parsing and the daily-only cutoff filter,
+│                                  # per-tree dispatch and subsetting
 # NOTE: data_transformation tests (unit + the transform integration test) moved
 # to the sibling ro-datatrafo project along with the transformation code.
 ├── integration_tests/               # End-to-end smoke tests against a real, persistent database/
@@ -106,6 +121,13 @@ pytest tests/asset_catalog_service/test_init.py
 
 ## Subfolders
 
+### config
+
+Unit tests pinning the two config modules. Pure -- no filesystem writes, no network. `test_gcp.py` reloads `config.gcp` after patching the environment and restores it via a teardown fixture, and repoints `GCS_CREDENTIALS_FILE` at a scratch path so a developer's real local config never leaks in.
+
+- `test_settings.py` -- `PROJECT_ROOT` resolves to the repo top and is absolute, secrets paths stay under `secrets/`, `AV_RATE_LIMIT_PER_MIN` stays below `AV_HARD_CAP_PER_MIN`, and `DISABLED_ASSET_TYPES` is honoured by every ingestion registry (daily/historical `ASSET_ENDPOINTS` and `ENDPOINT_MAP`, `ASSET_TYPE_COLUMNS`, the monitoring file-count map, both folder trees) while endpoints shared with an enabled asset type survive the filter.
+- `test_gcp.py` -- every deployment identifier is `None` when neither env nor `secrets/gcs_credentials.json` supplies it (no fabricated defaults), env wins over JSON, malformed JSON is ignored rather than fatal, the GCS data-layout prefixes are fixed, and `USE_SECRET_MANAGER_FOR_AV_KEYS` parses only the documented truthy spellings, defaulting to False.
+
 ### asset_catalog_service
 
 Unit tests for initial catalog creation and daily update logic. Uses mocked Alpha Vantage API responses (no real API calls). The `mock_catalog/` directory is created and cleaned up automatically by each test via a pytest fixture.
@@ -141,7 +163,7 @@ Unit tests covering the historical setup pipeline. Pure asyncio tests -- no real
 
 - `test_rate_limiter.py` -- verifies `RateLimiter` respects `calls_per_minute`, `window`, and `min_gap`; that concurrent waiters share the budget; and that the window slides forward as timestamps age out.
 - `test_cross_endpoint.py` -- uses a hand-rolled mock `aiohttp.ClientSession` to confirm two endpoint coroutines interleave, never exceed the shared rate limit, and that a slow endpoint does not starve a fast one.
-- `test_common.py` -- pure-helper coverage in `_common`: `generate_months` clamping/year-rollover, `IssueTracker` parquet round-trip and append-on-rerun, `symbol_parquet_name` Windows reserved-name protection, `frd_csv_path` lookup, `validate_meta_data` timezone branches, the `fetch_av_json` throttle-and-retry path (`Note` / `Information` keys, exhaustion -> `AVResponseError`), `get_av_call_count`/`reset_av_call_count`, and `ensure_historical_folders` idempotency.
+- `test_common.py` -- pure-helper coverage in `_common`: `generate_months` clamping/year-rollover, `IssueTracker` parquet round-trip and append-on-rerun, `symbol_parquet_name` Windows reserved-name protection, `frd_csv_path` lookup, `validate_meta_data` timezone branches, the `fetch_av_json` throttle-and-retry path (`Note` / `Information` keys, exhaustion -> `AVResponseError`), the entitlement fast-fail (a `"not yet entitled"` `Note` raises `AVEntitlementError` on the first attempt with no backoff, instead of costing 5 calls and 4 minutes per symbol), `get_av_call_count`/`reset_av_call_count`, and `ensure_historical_folders` idempotency.
 - `test_setup_historical.py` -- `run_historical_setup` orchestrator smoke. Every endpoint coroutine is patched to a recording stub so the assertions focus on plan composition (every applicable `(asset_type, endpoint)` pair scheduled concurrently against the shared rate limiter and aiohttp session), FRD-dir routing, ingestion-report write, and the finalize-yield_status step running on full runs only.
 - `test_earnings_calendar.py` -- `fetch_earnings_calendar` covers two pieces beyond the HTTP-bound full fetch: `str.to_date(exact=False, strict=False)` tolerates trailing timezone offsets while still nulling genuinely malformed strings via the existing `cast_issues` column, and the skip-if-exists guard makes no HTTP call when `earnings_calendar.parquet` is already present.
 - `test_endpoint_prices_daily.py` -- the FRD CSV path (derives `DividendAmount` and `SplitCoefficient` from three CSVs, never hits the network) and the AV path (single `TIME_SERIES_DAILY_ADJUSTED` JSON, mocked through a scripted session) exercised independently.
@@ -168,6 +190,15 @@ catalog or ingestion report needed). Tests cover:
   present.
 - `test_diff.py` -- signed deltas vs a previous monitoring_report.json,
   including malformed/missing previous reports.
+
+### scheduled_scripts
+
+Unit tests for the Cloud Run entrypoints and the GCS transfer scripts. No real GCP -- the GCS client and tree helpers are stubbed, so the assertions cover orchestration order, prefix construction, and guard conditions.
+
+- `test_run_daily.py` -- the day folder is pushed at the phase-1/phase-2 boundary *and* at the end (a run killed during financials still lands the priority data), skipped when absent; previous-report discovery picks the greatest prior date and tolerates a missing blob; a report persist failure is swallowed.
+- `test_run_weekend.py` -- date discovery from GCS prefixes (dedup, sort, non-date entries ignored), local folder stubbing, pull/push of the dated folder, pre-weekend report as the delta baseline.
+- `test_push_historical_to_gcs.py` -- missing `historical/` raises, `--skip-catalog` uploads only historical, the size-mismatch guard blocks without `--force`, a missing catalog dir warns rather than raises.
+- `test_sync_gcs_to_local.py` -- `--from-date` parsing and its cutoff filter, which applies to `daily/` only; per-tree dispatch and subsetting.
 
 ### data_transformation (moved out)
 

@@ -95,6 +95,18 @@ class AVResponseError(Exception):
     """Raised when Alpha Vantage returns an unrecoverable error."""
 
 
+class AVEntitlementError(AVResponseError):
+    """AV refused the endpoint for the current plan. Subclasses
+    ``AVResponseError`` so existing handlers still record an av_throttle
+    issue, with the refusal text in the detail column."""
+
+
+# AV sends plan-entitlement refusals through the same "Note" field as
+# rate-limit throttling. Retrying cannot clear one, so it must skip the
+# throttle backoff (5 attempts x 60s per symbol).
+_ENTITLEMENT_MARKERS = ("not yet entitled",)
+
+
 # Backoff (seconds) between retries inside ``fetch_av_json``.
 # Throttle responses surface AV's per-minute budget, so they need a full minute
 # to clear; transient 5xx / network failures clear far quicker, hence a short
@@ -135,7 +147,9 @@ async def fetch_av_json(
       ``AV_TRANSIENT_BACKOFF_SEC``
 
     Raises ``AVResponseError`` on retry exhaustion or any non-retryable HTTP
-    response. Error messages NEVER include the request URL because the URL
+    response, and ``AVEntitlementError`` (a subclass) immediately, without
+    retrying, when the message is a plan-entitlement refusal.
+    Error messages NEVER include the request URL because the URL
     carries the API key as a query parameter; ``aiohttp``'s native exception
     strings would otherwise leak it into logs.
     """
@@ -166,6 +180,11 @@ async def fetch_av_json(
             throttle_msg = data.get("Note") or data.get("Information")
             if not throttle_msg:
                 return data
+            low = throttle_msg.lower()
+            if any(m in low for m in _ENTITLEMENT_MARKERS):
+                raise AVEntitlementError(
+                    f"AV plan entitlement refused: {throttle_msg[:200]}"
+                )
 
         retry_in = AV_THROTTLE_BACKOFF_SEC if throttle_msg else AV_TRANSIENT_BACKOFF_SEC
         log_reason = f"throttle: {throttle_msg[:120]}" if throttle_msg else retry_reason

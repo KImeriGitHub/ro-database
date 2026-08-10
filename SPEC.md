@@ -32,6 +32,10 @@ Full financial statements (income statement, balance sheet, cash flow) are saved
 
 This applies uniformly to financial statements, insider transactions, and news sentiment. The yield status metadata lives in the asset catalog alongside ticker lifecycle information (active/delisted, start/end dates).
 
+**Disabled asset types.** `DISABLED_ASSET_TYPES` in [config/settings.py](config/settings.py) lists asset types whose AV data endpoint our plan cannot reach. Every registry filters against it at import time (daily/historical `ASSET_ENDPOINTS` and `ENDPOINT_MAP`, the folder trees, `yield_status` applicable columns, monitoring file-count expectations), so they issue no calls, create no folders, and raise no coverage warnings; catalog rows and data already on disk are kept. **`indices` is currently disabled**: `INDEX_DATA` now requires AV's 150+ requests/min plans. `INDEX_CATALOG` is not gated, so `catalog/indices.parquet` stays current and re-enabling means emptying the set.
+
+AV returns entitlement refusals in the same top-level `Note` field as throttling, so `fetch_av_json` matches the refusal text and raises `AVEntitlementError` (an `AVResponseError` subclass) on the first attempt. Without that guard a gated endpoint costs 5 calls and 4 minutes of backoff per symbol.
+
 **Restatement detection:** When daily data is transformed into `AssetData`, the new data is compared against the previous day's data using `deepdiff`. If values changed for a previously-recorded fiscal period, the change is flagged and incorporated into `AssetData`.
 
 ```

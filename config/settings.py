@@ -19,3 +19,9 @@ DIR_LOCATION_FILE = SECRETS_DIR / "dir_location.txt"
 # catalog-side sweeps running in parallel.
 AV_RATE_LIMIT_PER_MIN = 70
 AV_HARD_CAP_PER_MIN = 75
+
+# Asset types dropped from every ingestion plan at import time: their AV data
+# endpoint is not available on the plan we hold. INDEX_DATA moved behind AV's
+# 150+ requests/min plans (verified 2026-08-10). INDEX_CATALOG is not gated,
+# so the catalog updater still keeps catalog/indices.parquet current.
+DISABLED_ASSET_TYPES: frozenset[str] = frozenset({"indices"})

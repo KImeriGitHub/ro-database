@@ -7,6 +7,7 @@ Usage:
 from datetime import date, datetime
 from pathlib import Path
 
+from config.settings import DISABLED_ASSET_TYPES
 from daily_data_service._common import compute_folder_date, ET
 
 DAILY_TREE = [
@@ -27,6 +28,11 @@ DAILY_TREE = [
     "cryptocurrencies",
     "commodities",
     "economic",
+]
+# Disabled types get no folder; existing ones are left in place.
+DAILY_TREE = [
+    leaf for leaf in DAILY_TREE
+    if leaf.split("/")[0] not in DISABLED_ASSET_TYPES
 ]
 
 

@@ -30,7 +30,7 @@ from maintainance_scripts.get_api_key import get_alpha_vantage_key
 from maintainance_scripts.logging_setup import configure_logging
 
 from asset_catalog_service.updates import finalize_yield_status
-from config.settings import AV_RATE_LIMIT_PER_MIN
+from config.settings import AV_RATE_LIMIT_PER_MIN, DISABLED_ASSET_TYPES
 from historical_data_setup.earnings_calendar import fetch_earnings_calendar
 from historical_data_setup.ensure_folders import ensure_historical_folders
 from historical_data_setup._common import (
@@ -88,6 +88,19 @@ ASSET_ENDPOINTS = {
     "economic": ["economic"],
     "indices": ["indices"],
 }
+# Drop disabled asset types before anything can dispatch them. An endpoint
+# survives as long as one enabled asset type still uses it (prices: stocks
+# + etfs).
+ASSET_ENDPOINTS = {
+    at: eps for at, eps in ASSET_ENDPOINTS.items()
+    if at not in DISABLED_ASSET_TYPES
+}
+_ENABLED_ENDPOINTS = {ep for eps in ASSET_ENDPOINTS.values() for ep in eps}
+ENDPOINT_MAP = {
+    ep: func for ep, func in ENDPOINT_MAP.items()
+    if ep in _ENABLED_ENDPOINTS
+}
+
 
 async def _run_endpoint_task(
     label: str,
