@@ -477,26 +477,20 @@ def update_stocks_etfs(api_key: str, catalog_dir: Path) -> None:
 
     av_stocks, av_etfs = _fetch_av_listings(api_key)
 
-    # AV sometimes classifies the same symbol as both a stock and an ETF in one
-    # run. We do not drop either side; just surface the collision for review.
-    stock_syms = set(av_stocks["symbol"].to_list())
-    etf_syms = set(av_etfs["symbol"].to_list())
-    collisions = sorted(stock_syms & etf_syms)
-    if collisions:
-        logger.warning(
-            f"stocks/etfs: {len(collisions)} symbols classified as both stock "
-            f"and ETF this run (kept in both catalogs): {collisions}"
-        )
-
-    # Active symbols on the opposite asset type, used by _update_listing to
-    # fast-path a vanished symbol to Delisted when it has been reissued under
-    # the other type (e.g. an old ETF whose ticker is now an active stock).
     active_stock_syms = set(
         av_stocks.filter(pl.col("status") == "Active")["symbol"].to_list()
     )
     active_etf_syms = set(
         av_etfs.filter(pl.col("status") == "Active")["symbol"].to_list()
     )
+
+    collisions = sorted(active_stock_syms & active_etf_syms)
+    if collisions:
+        logger.warning(
+            f"stocks/etfs: {len(collisions)} symbols classified as both an "
+            f"active stock and an active ETF this run (kept in both "
+            f"catalogs): {collisions}"
+        )
 
     _update_listing("stocks", stocks_path, av_stocks, api_key, active_etf_syms)
     _update_listing("etfs", etfs_path, av_etfs, None, active_stock_syms)
